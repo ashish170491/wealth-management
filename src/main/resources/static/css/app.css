@@ -1,0 +1,460 @@
+/*
+ * Dashboard design tokens + components (SPEC section 27.3).
+ *
+ * Colours and spacing are PORTED VERBATIM from EmailTemplateService.getCommonStyles(),
+ * which is this app's de-facto design system. The class names below deliberately match the
+ * ones used in the emails (.section, .summary-card, .badge, .alert, .info-box, .score-bar,
+ * .data-table) so the dashboard and the daily emails read as one product.
+ *
+ * This is a port, not a refactor: the Java class is untouched. If you change a colour here,
+ * change it there too, or the two surfaces drift apart.
+ */
+
+:root {
+  /* Brand — email header gradient */
+  --navy: #1a237e;
+  --navy-light: #3949ab;
+  --navy-tint: #e8eaf6;
+
+  /* Semantic — profit/loss/warning, same values the emails use */
+  --profit: #2e7d32;
+  --profit-bg: #e8f5e9;
+  --profit-deep: #1b5e20;
+  --loss: #c62828;
+  --loss-bg: #ffebee;
+  --loss-deep: #b71c1c;
+  --warn: #f57c00;
+  --warn-bg: #fff3e0;
+  --warn-deep: #e65100;
+  --info: #1976d2;
+  --info-bg: #e3f2fd;
+  --info-deep: #0d47a1;
+
+  /* Neutrals */
+  --page: #f5f5f5;
+  --surface: #ffffff;
+  --surface-alt: #f8f9fa;
+  --rule: #e0e0e0;
+  --ink: #333333;
+  --ink-muted: #666666;
+  --ink-faint: #9e9e9e;
+
+  /* Rhythm — 30px section spacing matches the email body */
+  --gap: 16px;
+  --section-gap: 30px;
+  --radius: 8px;
+  /* One page width for every band (topbar, freshness, banner, main) so they stay aligned.
+     Tables are the widest thing on the site; this is the single knob for giving them room. */
+  --page-max: 1700px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'SF Mono', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--page);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.topbar {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+  color: #fff;
+  padding: 18px 28px 0;
+}
+.topbar-inner { max-width: var(--page-max); margin: 0 auto; }
+.topbar h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.2px; }
+.topbar .tagline { font-size: 13px; opacity: 0.85; margin-top: 2px; }
+
+.nav { display: flex; gap: 4px; margin-top: 16px; flex-wrap: wrap; }
+.nav a {
+  color: #fff;
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 9px 15px;
+  border-radius: 6px 6px 0 0;
+  opacity: 0.8;
+  transition: background 0.12s, opacity 0.12s;
+}
+.nav a:hover { background: rgba(255, 255, 255, 0.14); opacity: 1; }
+.nav a[aria-current='page'] { background: var(--page); color: var(--navy); opacity: 1; font-weight: 600; }
+
+/* Freshness strip — always visible, because "the server is up" and "the data is
+   current" are different questions (SPEC section 27.7). */
+.freshness {
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  padding: 7px 28px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.freshness-inner { max-width: var(--page-max); margin: 0 auto; display: flex; gap: 22px; flex-wrap: wrap; align-items: center; }
+.freshness b { color: var(--ink); font-weight: 600; }
+.freshness .stale { color: var(--warn-deep); font-weight: 600; }
+
+/* Refresh control, at the right-hand end of the freshness strip.
+   It sits with the timestamps rather than looking like a run button because that is what it
+   does: re-read what is stored, then say whether any of those timestamps moved. Nothing here
+   re-runs an analysis (SPEC 27.4). */
+.refresh-wrap { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+button.refresh-btn {
+  font: inherit; font-size: 12px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--rule); color: var(--navy);
+  padding: 3px 10px; border-radius: 4px; white-space: nowrap;
+}
+button.refresh-btn:hover { background: var(--navy-tint); }
+button.refresh-btn:disabled { color: var(--ink-faint); cursor: progress; }
+.refresh-status { font-size: 12px; }
+.refresh-status .refresh-new { color: var(--profit); font-weight: 600; }
+.refresh-status a { color: var(--navy); }
+
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+.dot.live { background: var(--profit); }
+.dot.closed { background: var(--ink-faint); }
+.dot.down { background: var(--loss); }
+
+.banner {
+  padding: 12px 28px;
+  font-size: 13.5px;
+  border-bottom: 1px solid;
+  display: none;
+}
+.banner.show { display: block; }
+.banner-inner { max-width: var(--page-max); margin: 0 auto; }
+.banner.offline { background: var(--warn-bg); border-color: var(--warn); color: var(--warn-deep); }
+.banner.shutdown { background: var(--info-bg); border-color: var(--info); color: var(--info-deep); }
+.banner button {
+  margin-left: 10px; font: inherit; font-size: 12.5px; cursor: pointer;
+  background: var(--surface); border: 1px solid currentColor; color: inherit;
+  padding: 3px 10px; border-radius: 4px;
+}
+
+main { max-width: var(--page-max); margin: 0 auto; padding: var(--section-gap) 28px 60px; }
+
+/* --------------------------------------------------------------- sections */
+
+.section { margin-bottom: var(--section-gap); }
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--navy);
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--navy-tint);
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title .count {
+  font-size: 12px; font-weight: 600; color: var(--ink-muted);
+  background: var(--navy-tint); border-radius: 10px; padding: 1px 9px;
+}
+
+/* "What this means" box — SPEC section 21 rule 1 requires one per section. */
+.info-box {
+  background: var(--info-bg);
+  border-left: 4px solid var(--info);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 11px 15px;
+  margin-bottom: 15px;
+  font-size: 13.5px;
+  color: var(--info-deep);
+}
+.info-box b { font-weight: 600; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+.grid { display: grid; gap: var(--gap); }
+.grid.kpis { grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+.grid.three { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+/* KPI card — the email's summaryCard() */
+.summary-card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--navy-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 15px 17px;
+}
+.summary-card .label {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--ink-muted); font-weight: 600;
+}
+.summary-card .value { font-size: 25px; font-weight: 600; margin-top: 5px; line-height: 1.2; }
+.summary-card .sub { font-size: 12.5px; color: var(--ink-muted); margin-top: 3px; }
+.summary-card.positive { border-left-color: var(--profit); }
+.summary-card.positive .value { color: var(--profit); }
+.summary-card.negative { border-left-color: var(--loss); }
+.summary-card.negative .value { color: var(--loss); }
+.summary-card.warning { border-left-color: var(--warn); }
+.summary-card.warning .value { color: var(--warn-deep); }
+.summary-card.unmeasured .value { color: var(--ink-faint); font-size: 17px; font-weight: 500; }
+
+/* ---------------------------------------------------------------- atoms */
+
+.badge {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  padding: 2px 8px; border-radius: 11px; letter-spacing: 0.3px; white-space: nowrap;
+}
+.badge.success { background: var(--profit-bg); color: var(--profit-deep); }
+.badge.danger { background: var(--loss-bg); color: var(--loss-deep); }
+.badge.warning { background: var(--warn-bg); color: var(--warn-deep); }
+.badge.info { background: var(--info-bg); color: var(--info-deep); }
+.badge.neutral { background: #eeeeee; color: #555555; }
+/* "We could not measure this" — visually distinct from any real value, on purpose.
+   SPEC section 21 rule 7: never let an unmeasured field look like a reading. */
+.badge.unmeasured { background: repeating-linear-gradient(45deg,#f0f0f0,#f0f0f0 4px,#e4e4e4 4px,#e4e4e4 8px); color: #757575; font-weight: 600; }
+
+.alert { padding: 12px 15px; border-radius: var(--radius); margin-bottom: 11px; border-left: 4px solid; font-size: 13.5px; }
+.alert .alert-title { font-weight: 600; margin-bottom: 2px; }
+.alert.urgent { background: var(--loss-bg); border-color: var(--loss); color: var(--loss-deep); }
+.alert.warning { background: var(--warn-bg); border-color: var(--warn); color: var(--warn-deep); }
+.alert.info { background: var(--info-bg); border-color: var(--info); color: var(--info-deep); }
+.alert.success { background: var(--profit-bg); border-color: var(--profit); color: var(--profit-deep); }
+.alert .meta { font-size: 12px; opacity: 0.85; margin-top: 3px; }
+
+/* Floor kept below the narrowest width any caller asks for (44px on the screener), or it
+   silently overrides the inline width and every dimension column is wider than intended. */
+.score-bar { background: var(--rule); border-radius: 5px; height: 9px; overflow: hidden; min-width: 36px; }
+.score-bar > span { display: block; height: 100%; border-radius: 5px; }
+.score-bar > span.high { background: var(--profit); }
+.score-bar > span.mid { background: var(--warn); }
+.score-bar > span.low { background: var(--loss); }
+
+.pos { color: var(--profit); font-weight: 600; }
+.neg { color: var(--loss); font-weight: 600; }
+.muted { color: var(--ink-muted); }
+.faint { color: var(--ink-faint); }
+.num { font-variant-numeric: tabular-nums; }
+.gloss { border-bottom: 1px dotted var(--ink-faint); cursor: help; }
+
+/* ---------------------------------------------------------------- tables */
+
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: var(--shadow); }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.35; }
+.data-table th {
+  background: var(--navy); color: #fff; text-align: left;
+  padding: 8px 8px; font-weight: 600; font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  /* Headers wrap. A label like "Still good time to buy?" held on one line was setting the
+     width of a column whose data is a short badge — the header, not the data, was what made
+     these tables scroll sideways. Bottom-aligned so labels of 1 and 3 lines share a baseline. */
+  white-space: normal; overflow-wrap: break-word; vertical-align: bottom;
+}
+.data-table th.sortable { cursor: pointer; user-select: none; }
+.data-table th.sortable:hover { background: var(--navy-light); }
+.data-table th .arrow { opacity: 0.45; font-size: 9px; margin-left: 3px; }
+.data-table th[aria-sort] .arrow { opacity: 1; }
+.data-table td {
+  padding: 7px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: top;
+  /* Long text wraps onto a second line instead of widening the table.
+     `anywhere` rather than `break-word` deliberately: only `anywhere` lowers the cell's
+     MIN-content width, and a table's minimum width is the sum of its columns' minimums. With
+     `break-word` a single long word ("Pharmaceuticals") is an unbreakable floor, and on a
+     23-column table those floors added up to 1794px — wider than the screen, so it scrolled
+     however the columns were arranged. Prose is therefore squeezable as a last resort; the
+     browser still breaks at spaces first and only splits a word when there is no room. */
+  white-space: normal; overflow-wrap: anywhere;
+  /* No single prose column (industry, a reason, a note) may dominate the row. */
+  max-width: 280px;
+}
+
+/* Three things must never be split mid-character, so they keep an ordinary floor: a ticker
+   ("NAVINFLUO / R" is not a stock), a pill, and a number. These are short — a handful of
+   honest floors still leaves the table able to fit. */
+.data-table td a, .data-table td .badge { overflow-wrap: break-word; }
+/* The striped "not measured" marker appears in every nullable column at once, so it was the
+   single widest floor in the table. It is trimmed rather than broken: a smaller pill with no
+   letter-spacing, breaking at the space into "not / measured" and no further. Letting it break
+   mid-character shredded it into a vertical stack of letters, which the reader then has to
+   decode - worse than the column being a little wider. */
+.data-table td .badge.unmeasured { font-size: 10px; letter-spacing: 0; padding: 2px 6px; }
+
+/* Numbers must not wrap: "Rs 1,234.56" broken after the space reads as two figures, and a
+   right-aligned column is this codebase's convention for a number (align: 'r'). Sub-labels
+   rendered underneath one — the entry basis, a unit — are prose and still wrap. */
+.data-table td.r { white-space: nowrap; }
+.data-table td.r .muted, .data-table td.r .faint { white-space: normal; }
+.data-table td .muted, .data-table td .faint { overflow-wrap: break-word; }
+
+/* A pill stays on one line everywhere else on the site, but in a table it is the cell's whole
+   content and a long verdict ("Potential multibagger", "Wait - running hot") was setting the
+   column width on its own. Two short lines inside the pill is the smaller cost. */
+.data-table .badge { white-space: normal; line-height: 1.3; }
+.data-table tbody tr:nth-child(even) { background: var(--surface-alt); }
+.data-table tbody tr:hover { background: var(--navy-tint); }
+.data-table td.r, .data-table th.r { text-align: right; }
+.data-table a { color: var(--navy-light); text-decoration: none; font-weight: 600; }
+.data-table a:hover { text-decoration: underline; }
+
+/* ------------------------------------------------- resizable / reorderable columns (§27.9) */
+
+.table-block { display: block; }
+
+/* The handle is positioned against the header cell, so the cell must be a containing block. */
+.data-table th { position: relative; }
+
+.data-table th .col-resize {
+  position: absolute; top: 0; right: 0; width: 9px; height: 100%;
+  cursor: col-resize; touch-action: none; opacity: 0;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.55));
+}
+.data-table th:hover .col-resize { opacity: 1; }
+
+/* While dragging, nothing should select or highlight — a text selection dragged across the
+   header reads as a broken control even when the resize itself worked. */
+.data-table.cols-dragging { user-select: none; cursor: col-resize; }
+.data-table.cols-dragging th.sortable:hover { background: var(--navy); }
+
+/* Fixed layout is what makes a width binding rather than advisory; it is switched on only once
+   the reader actually drags something. Cells then wrap within the chosen width instead of
+   pushing their neighbours wider. */
+.data-table.cols-fixed {
+  table-layout: fixed;
+  /* Size to the sum of the chosen widths rather than to the container, so a width the reader set
+     is honoured exactly and the surrounding .table-wrap scrolls. Left at width:100% the browser
+     redistributes leftover space and quietly overrides the drag. */
+  width: max-content;
+  min-width: 100%;
+}
+.data-table.cols-fixed td,
+.data-table.cols-fixed th { overflow: hidden; white-space: normal; overflow-wrap: break-word; }
+/* A width the reader set is honoured even for a number: they chose it. */
+.data-table.cols-fixed td.r { white-space: normal; }
+
+.data-table th.col-dragging { opacity: 0.55; }
+.data-table th.drop-before { box-shadow: inset 3px 0 0 0 var(--profit); }
+.data-table th.drop-after { box-shadow: inset -3px 0 0 0 var(--profit); }
+
+/* A block someone was linked straight to, briefly marked so arriving mid-page reads as an
+   arrival rather than a mis-scroll (SPEC 27.16). */
+.jump-target {
+  animation: jump-flash 2.4s ease-out;
+  scroll-margin-top: 16px;
+}
+@keyframes jump-flash {
+  0%, 55% { background: var(--info-bg); box-shadow: 0 0 0 8px var(--info-bg); }
+  100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
+}
+
+/* Collapsible sections (SPEC 27.15). The heading becomes the control; the count pill stays in
+   it when folded, because a collapsed section with no count hides its own findings. */
+.section-title.collapsible { cursor: pointer; user-select: none; }
+.section-title.collapsible:hover { color: var(--navy-light); }
+.section-title.collapsible:focus-visible { outline: 2px solid var(--navy-light); outline-offset: 3px; }
+.section-title .caret {
+  display: inline-block; width: 15px; color: var(--ink-faint); font-size: 12px;
+  vertical-align: middle;
+}
+
+/* The count under a chip bar, with its Clear control (SPEC 27.13). */
+.filter-count { font-size: 12.5px; color: var(--ink-muted); margin: 2px 0 10px; }
+
+/* Per-table text filter (SPEC 27.13). Sits above the scroll container, not inside it. */
+.table-filter-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 9px;
+}
+input.field.table-filter { min-width: 260px; font-size: 12.5px; padding: 6px 10px; }
+.table-filter-note { font-size: 12px; color: var(--ink-muted); }
+.table-filter-note span { margin-right: 0; }
+
+.table-layout-note {
+  font-size: 11.5px; color: var(--ink-muted); padding: 6px 2px 0; text-align: right;
+}
+.linkish {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--navy-light);
+  font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+.linkish:hover { color: var(--navy); }
+
+/* ---------------------------------------------------------------- states */
+
+.empty {
+  background: var(--surface); border: 1px dashed var(--rule); border-radius: var(--radius);
+  padding: 30px 22px; text-align: center; color: var(--ink-muted); font-size: 13.5px;
+}
+.empty .empty-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; font-size: 14.5px; }
+
+.skeleton { background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%); background-size: 200% 100%; animation: shimmer 1.3s infinite; border-radius: 4px; height: 15px; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skeleton-card { height: 92px; border-radius: var(--radius); }
+
+/* Cached/stale content is dimmed so it can never be mistaken for live data. */
+.stale-content { opacity: 0.62; filter: grayscale(0.28); }
+
+button.action {
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: var(--navy); color: #fff; border: none;
+  padding: 8px 15px; border-radius: 6px;
+}
+button.action:hover { background: var(--navy-light); }
+button.action:disabled { background: var(--ink-faint); cursor: progress; }
+button.action.secondary { background: var(--surface); color: var(--navy); border: 1px solid var(--rule); }
+button.action.secondary:hover { background: var(--navy-tint); }
+.cost-note { font-size: 12px; color: var(--warn-deep); background: var(--warn-bg); padding: 8px 12px; border-radius: 6px; margin-bottom: 11px; }
+
+.chart { width: 100%; display: block; }
+.chart-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-muted); margin-top: 8px; }
+.chart-legend .key { display: inline-block; width: 11px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+.row { display: flex; align-items: center; gap: 10px; }
+.row.between { justify-content: space-between; }
+.wrap { flex-wrap: wrap; }
+.filters { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 14px; }
+/* A figure with a short sub-label under it (SPEC 27.10 rule 5): the screener's score, promoter
+   and growth cells. The sub-line is prose and wraps; the figure above it keeps a number's floor. */
+.cell-main { font-weight: 600; }
+.cell-sub { display: block; font-size: 10.5px; color: var(--ink-muted); font-weight: 400; white-space: normal; line-height: 1.3; }
+.chip {
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--rule); color: var(--ink-muted);
+  padding: 5px 12px; border-radius: 14px;
+}
+.chip[aria-pressed='true'] { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; }
+
+/* Watchlist add form (SPEC 37) — the first UI write surface. */
+.form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+input.field {
+  font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
+  background: var(--surface); color: inherit; min-width: 220px;
+}
+input.field.wide { flex: 1 1 320px; }
+input.field:disabled { background: var(--navy-tint); color: var(--ink-muted); }
+/* The thesis editor and dividend log (SPEC 46.7) reuse the same field look for selects and
+   multi-line text, so a form built from el() reads as one form. */
+select.field, textarea.field {
+  font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
+  background: var(--surface); color: inherit; min-width: 220px;
+}
+textarea.field.wide { flex: 1 1 100%; min-height: 64px; resize: vertical; }
+select.field:disabled, textarea.field:disabled { background: var(--navy-tint); color: var(--ink-muted); }
+label.muted input.field { min-width: 70px; width: 80px; margin-left: 4px; }
+
+/* Compact action buttons inside table cells (watchlist actions, "+ Watch"). */
+button.action.compact { padding: 4px 9px; font-size: 12px; white-space: nowrap; }
+/* Inside a table the watch button is a whole column, and "+ Watch" held on one line was setting
+   that column's width. It may wrap. Scoped to .watch-cell deliberately: the watchlist's action
+   buttons are icons ("Q" for a quality refresh) and splitting one across two lines makes a
+   single control look like two. */
+.data-table .watch-cell button.action.compact { white-space: normal; overflow-wrap: normal; word-break: keep-all; } /* may break at the space, never inside "Watch" (SPEC 27.10: a pill keeps an ordinary floor) */
+.actions-cell { display: flex; gap: 4px; flex-wrap: nowrap; }
+.watch-cell { display: inline-block; }
+.watch-cell a.watching { font-size: 12px; font-weight: 600; color: var(--profit-deep); white-space: nowrap; }
+.watch-error { font-size: 11px; color: var(--loss-deep); max-width: 240px; white-space: normal; margin-top: 3px; }
+/* Keep the stock name visible while a wide table scrolls. */
+.data-table td.sticky, .data-table th.sticky { position: sticky; left: 0; background: var(--surface); z-index: 1; }

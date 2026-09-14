@@ -1,0 +1,81 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Secrets ###
+# Real credentials live in config/application.yml, which Spring Boot loads at a higher
+# precedence than the packaged classpath:/application.yml. The tracked file has only
+# ${VAR:} placeholders. config/application.yml.example is the tracked template.
+config/*
+!config/application.yml.example
+application-local.yml
+application-secrets.yml
+.env
+.env.*
+!.env.example
+*.bak
+*.pem
+*.key
+*.p12
+*.jks
+*.pfx
+id_rsa*
+
+### Personal financial data -- never publish ###
+# Zerodha tradebook exports: real trades, ISINs, order ids, account number in the filename.
+# The app ingests these through POST /api/portfolio/tax-lots/import-zerodha-csv, not from the repo.
+tradebook-*.csv
+holdings-*.csv
+*-tradebook*.csv
+
+### Runtime / crash / scratch artefacts (local-only repo, added 2026-09-03) ###
+logs/
+hs_err_pid*.log
+replay_pid*.log
+compile.log
+*.class
+nul
+backtest-*.json
+screener-*.h
+TempParse.java
+
+### Claude Code local (machine-specific permission allowlist) ###
+.claude/settings.local.json
+
+### Scratch / scraped / session artefacts (not source) ###
+# nsec.txt is a libcurl Netscape cookie jar holding live NSE session cookies -- a credential store.
+nsec.txt
+cookies.txt
+*.cookies
+temp_*.txt
+tmpclaude-*
+screener-*.html

@@ -1,0 +1,253 @@
+# Macro exposure map (SPEC 48.3) - which businesses each macro factor helps or hurts, and why.
+#
+# THIS FILE IS THE FEATURE. The language model that reads the news never names a company and never
+# decides a direction for one; it extracts what happened, and these rules decide who is affected.
+#
+# factor    - a MacroFactor enum name. MacroFactor.risesMeans() defines which way "up" is.
+# scope     - SYMBOL | INDUSTRY | SECTOR. Precedence on read is SYMBOL > INDUSTRY > SECTOR,
+#             first match per factor. A sector is often the wrong unit: ENERGY holds both a company
+#             that sells crude and one that buys it, so where the sector is wrong, name the symbol.
+# key       - a bare NSE trading symbol, an NSE industry spelling, or a SectorMapping bucket.
+#             Validated at boot: a key nothing can produce is a startup error, not a silent no-match.
+# onRise    - HELPED | HURT | MIXED. What a RISE in the factor does to this business.
+#             MIXED is never netted off: two real opposing effects must not become a small number.
+# strength  - HIGH | MEDIUM | LOW. How much of the business the channel touches. A label for the
+#             reader, never a multiplier - nothing here is arithmetic.
+# channel   - two or three words naming how the factor reaches the profit and loss. No commas.
+# rationale - one sentence a non-expert can check the rule against. May contain commas.
+#
+# Two things this map deliberately does NOT do. It never infers a second-order factor: a war does
+# not imply a crude rise here, because inferring one would manufacture an event nobody reported.
+# And it never says buy or sell - the vocabulary downstream has no such word in it.
+factor,scope,key,onRise,strength,channel,rationale
+
+# ============================================================================ CRUDE_OIL
+# Rises = the price of Brent crude goes up. India imports roughly 85% of the oil it uses.
+CRUDE_OIL,SYMBOL,ONGC,HELPED,HIGH,realisation,Sells the crude it produces, so a higher price is straightforwardly more revenue on the same barrels.
+CRUDE_OIL,SYMBOL,OIL,HELPED,HIGH,realisation,An oil and gas producer whose selling price is the factor itself.
+CRUDE_OIL,SYMBOL,RELIANCE,MIXED,MEDIUM,both ends,Produces oil and also refines it, so a rise helps one half of the company and squeezes the other - the two are not netted off here because they are genuinely different businesses.
+CRUDE_OIL,SYMBOL,HINDPETRO,HURT,MEDIUM,marketing margin,A state refiner that buys crude and sells petrol and diesel at prices the government watches, so the squeeze lands on its own margin.
+CRUDE_OIL,SYMBOL,BPCL,HURT,MEDIUM,marketing margin,Same as the other state refiners: the crude bill rises immediately and the pump price does not.
+CRUDE_OIL,SYMBOL,IOC,HURT,MEDIUM,marketing margin,India's largest fuel retailer, and the one most exposed when pump prices are held while crude rises.
+CRUDE_OIL,SYMBOL,ASIANPAINT,HURT,HIGH,input cost,Crude derivatives are more than half the raw material in a tin of paint, so this reaches the gross margin within a quarter.
+CRUDE_OIL,SYMBOL,BERGEPAINT,HURT,HIGH,input cost,Same chemistry and the same exposure as every other paint maker.
+CRUDE_OIL,SYMBOL,KANSAINER,HURT,HIGH,input cost,Paint raw materials are largely crude derivatives.
+CRUDE_OIL,SYMBOL,INDIGOPNTS,HURT,HIGH,input cost,A smaller paint maker with the same input basket and less room to absorb a rise.
+CRUDE_OIL,SYMBOL,INDIGO,HURT,HIGH,fuel bill,Jet fuel is the single largest line in an airline's costs and it tracks crude almost directly.
+CRUDE_OIL,SYMBOL,SPICEJET,HURT,HIGH,fuel bill,Fuel dominates the cost base and a weaker balance sheet leaves less room to absorb it.
+CRUDE_OIL,SYMBOL,MRF,HURT,MEDIUM,input cost,Synthetic rubber and carbon black are crude derivatives.
+CRUDE_OIL,SYMBOL,APOLLOTYRE,HURT,MEDIUM,input cost,Tyre raw materials move with crude.
+CRUDE_OIL,SYMBOL,CEATLTD,HURT,MEDIUM,input cost,Tyre raw materials move with crude.
+CRUDE_OIL,SYMBOL,BALKRISIND,HURT,MEDIUM,input cost,Off-highway tyres, same crude-linked raw material basket.
+CRUDE_OIL,SECTOR,CHEMICALS,HURT,MEDIUM,feedstock,Much of the industry starts from petrochemical feedstock whose price follows crude.
+CRUDE_OIL,SECTOR,LOGISTICS,HURT,MEDIUM,fuel bill,Diesel is the running cost of a fleet, and contracts usually reprice with a lag.
+CRUDE_OIL,SECTOR,FMCG,HURT,LOW,packaging,Plastic packaging and freight are crude-linked, but they are a small share of the cost of a packet.
+CRUDE_OIL,INDUSTRY,Construction Materials,HURT,LOW,fuel,Cement kilns burn petroleum coke, so a crude rise reaches the cost per tonne modestly.
+
+# ============================================================================ INTEREST_RATES
+# Rises = the RBI repo rate goes up.
+INTEREST_RATES,SECTOR,BANKING,HELPED,LOW,lending margin,Bank loans are largely linked to the repo rate and reprice at once while deposits reprice with a lag, so a rise widens the margin for a while - the effect is real but it fades, and it turns into slower loan growth if rates stay high.
+INTEREST_RATES,INDUSTRY,Financial Services,HURT,HIGH,funding cost,A non-bank lender borrows wholesale to lend, so a rate rise reaches its own cost of funds immediately with no deposit base to cushion it.
+INTEREST_RATES,SECTOR,REALTY,HURT,HIGH,buyer affordability,A home is bought with a loan, and the monthly payment is what the buyer actually decides on.
+INTEREST_RATES,SECTOR,AUTO,HURT,MEDIUM,buyer affordability,Most cars and two-wheelers in India are financed, so dearer credit thins the queue.
+INTEREST_RATES,SECTOR,CONSUMER_DURABLES,HURT,MEDIUM,buyer affordability,Large appliances are frequently bought on easy-EMI schemes that get less easy.
+INTEREST_RATES,INDUSTRY,Construction,HURT,MEDIUM,interest bill,Builders carry heavy debt against work in progress, so the interest line moves before the order book does.
+INTEREST_RATES,SYMBOL,LICHSGFIN,HURT,HIGH,funding cost,A housing financier is squeezed at both ends: dearer borrowing and a buyer who can afford less.
+INTEREST_RATES,SYMBOL,PNBHOUSING,HURT,HIGH,funding cost,Same squeeze as every other housing financier.
+INTEREST_RATES,SYMBOL,CANFINHOME,HURT,HIGH,funding cost,Same squeeze as every other housing financier.
+INTEREST_RATES,SYMBOL,AAVAS,HURT,HIGH,funding cost,Affordable housing lending, where the borrower is the most rate-sensitive of all.
+INTEREST_RATES,SYMBOL,HOMEFIRST,HURT,HIGH,funding cost,Affordable housing lending, where the borrower is the most rate-sensitive of all.
+
+# ============================================================================ USDINR
+# Rises = the rupee weakens against the dollar.
+USDINR,SECTOR,IT,HELPED,HIGH,translation gain,Bills clients in dollars and pays its staff in rupees, so a weaker rupee widens the margin without anyone doing anything.
+USDINR,SECTOR,PHARMA,HELPED,MEDIUM,export realisation,A large share of revenue is earned in dollars in the US market.
+USDINR,SECTOR,TEXTILES,HELPED,MEDIUM,export realisation,An export industry competing on price, where a weaker rupee is a discount it did not have to fund.
+USDINR,SECTOR,CHEMICALS,MIXED,LOW,both ends,Exports in dollars but imports a lot of its feedstock in dollars too, so the two mostly offset and the balance differs company by company.
+USDINR,SYMBOL,ONGC,HELPED,MEDIUM,realisation,Crude sells in dollars, so the same barrel fetches more rupees.
+USDINR,SYMBOL,INDIGO,HURT,HIGH,dollar costs,Aircraft leases, maintenance and fuel are all priced in dollars while nearly every ticket is sold in rupees.
+USDINR,SYMBOL,SPICEJET,HURT,HIGH,dollar costs,Same dollar cost base as every Indian airline, with less balance sheet behind it.
+USDINR,SYMBOL,HINDPETRO,HURT,MEDIUM,import bill,Crude is bought in dollars and fuel is sold in rupees at watched prices.
+USDINR,SYMBOL,BPCL,HURT,MEDIUM,import bill,Crude is bought in dollars and fuel is sold in rupees at watched prices.
+USDINR,SYMBOL,IOC,HURT,MEDIUM,import bill,Crude is bought in dollars and fuel is sold in rupees at watched prices.
+USDINR,SYMBOL,COROMANDEL,HURT,MEDIUM,import bill,Phosphatic fertiliser raw material is imported and paid for in dollars.
+USDINR,SYMBOL,CHAMBLFERT,HURT,MEDIUM,import bill,Fertiliser inputs are imported and dollar-priced.
+USDINR,SYMBOL,GNFC,HURT,MEDIUM,import bill,Imported inputs are dollar-priced.
+USDINR,SECTOR,CONSUMER_DURABLES,HURT,MEDIUM,import bill,Compressors, panels and electronic components are largely imported.
+
+# ============================================================================ US_TARIFFS
+# Rises = the United States raises tariffs on Indian goods.
+US_TARIFFS,SECTOR,TEXTILES,HURT,HIGH,export demand,Garments compete on price in a crowded market, so a tariff comes straight out of somebody's margin.
+US_TARIFFS,SECTOR,PHARMA,HURT,MEDIUM,export demand,The US is the largest export market for Indian generics.
+US_TARIFFS,SECTOR,CHEMICALS,HURT,MEDIUM,export demand,Specialty chemical exports to US customers become dearer overnight.
+US_TARIFFS,SECTOR,IT,HURT,LOW,indirect,Services are rarely tariffed directly, but visa and outsourcing rules usually move in the same political weather.
+US_TARIFFS,SYMBOL,RAJESHEXPO,HURT,HIGH,export demand,Jewellery exports to the US are a large share of the business.
+US_TARIFFS,SYMBOL,BHARATFORG,HURT,MEDIUM,export demand,A large share of forgings goes to US truck makers.
+US_TARIFFS,SYMBOL,MOTHERSON,HURT,MEDIUM,export demand,Supplies global carmakers, so trade barriers reach the order book.
+US_TARIFFS,SYMBOL,SONACOMS,HURT,MEDIUM,export demand,Exports driveline components to North American customers.
+US_TARIFFS,SYMBOL,BALKRISIND,HURT,MEDIUM,export demand,Sells most of its tyres outside India.
+
+# ============================================================================ TRADE_BARRIERS_CHINA
+# Rises = cheap Chinese imports rise, or a safeguard duty is removed. A duty IMPOSED is a fall.
+TRADE_BARRIERS_CHINA,SYMBOL,JSWSTEEL,HURT,HIGH,price realisation,Cheap imported steel sets the domestic price whatever the mill's own cost is.
+TRADE_BARRIERS_CHINA,SYMBOL,TATASTEEL,HURT,HIGH,price realisation,Import parity pricing means the cheapest ship in the harbour sets the price.
+TRADE_BARRIERS_CHINA,SYMBOL,SAIL,HURT,HIGH,price realisation,A domestic mill with no export cushion when imports undercut it.
+TRADE_BARRIERS_CHINA,SYMBOL,JINDALSTEL,HURT,HIGH,price realisation,Same import parity exposure as every Indian steel maker.
+TRADE_BARRIERS_CHINA,SYMBOL,HINDALCO,HURT,MEDIUM,price realisation,Aluminium prices are set globally and Chinese supply is the swing factor.
+TRADE_BARRIERS_CHINA,SYMBOL,NATIONALUM,HURT,MEDIUM,price realisation,A pure aluminium producer with no downstream business to cushion the price.
+TRADE_BARRIERS_CHINA,SECTOR,CHEMICALS,HURT,MEDIUM,price realisation,Chinese overcapacity in bulk chemicals has repeatedly collapsed Indian prices.
+TRADE_BARRIERS_CHINA,SECTOR,METALS,HURT,MEDIUM,price realisation,Metal prices are global and Chinese supply is usually what moves them.
+
+# ============================================================================ MONSOON_DEFICIT
+# Rises = monsoon rainfall runs below the long-period average.
+MONSOON_DEFICIT,SYMBOL,M&M,HURT,HIGH,rural demand,The largest tractor maker in the country, and tractor sales follow the rains with about one season's lag.
+MONSOON_DEFICIT,SYMBOL,ESCORTS,HURT,HIGH,rural demand,Tractors are the core of the business and the farmer buys them out of the harvest.
+MONSOON_DEFICIT,SYMBOL,VSTTILLERS,HURT,HIGH,rural demand,Farm equipment bought directly out of farm income.
+MONSOON_DEFICIT,SYMBOL,UPL,HURT,HIGH,acreage,Crop protection is bought per acre sown, and a weak monsoon means fewer acres.
+MONSOON_DEFICIT,SYMBOL,PIIDUSTRY,HURT,HIGH,acreage,Agrochemical demand tracks the sown area.
+MONSOON_DEFICIT,SYMBOL,COROMANDEL,HURT,MEDIUM,acreage,Fertiliser volumes follow the sowing season.
+MONSOON_DEFICIT,SYMBOL,CHAMBLFERT,HURT,MEDIUM,acreage,Fertiliser volumes follow the sowing season.
+MONSOON_DEFICIT,SECTOR,FMCG,HURT,MEDIUM,rural demand,Roughly a third of packaged goods volume is rural, and it is the first spending to be postponed.
+MONSOON_DEFICIT,SYMBOL,HEROMOTOCO,HURT,MEDIUM,rural demand,Entry-level motorcycles are largely a rural purchase.
+MONSOON_DEFICIT,SYMBOL,TVSMOTOR,HURT,MEDIUM,rural demand,A meaningful share of two-wheeler volume comes from rural buyers.
+MONSOON_DEFICIT,SYMBOL,BAJAJ-AUTO,HURT,MEDIUM,rural demand,Domestic motorcycle demand has a large rural component.
+MONSOON_DEFICIT,SYMBOL,MUTHOOTFIN,HURT,LOW,collections,Gold loans are often repaid out of farm income, though a weak season can also raise demand for them.
+MONSOON_DEFICIT,SYMBOL,MANAPPURAM,HURT,LOW,collections,Same rural repayment exposure as any gold lender.
+MONSOON_DEFICIT,INDUSTRY,Construction Materials,HURT,LOW,rural demand,Rural house building is a real share of cement volume.
+
+# ============================================================================ GOVT_CAPEX
+# Rises = the government raises capital spending or announces orders.
+GOVT_CAPEX,INDUSTRY,Construction,HELPED,HIGH,order book,Roads, bridges and public works are what these companies are contracted to build.
+GOVT_CAPEX,SYMBOL,LT,HELPED,HIGH,order book,The country's largest contractor, and the one most exposed to what the state decides to build.
+GOVT_CAPEX,SYMBOL,RVNL,HELPED,HIGH,order book,Railway construction commissioned almost entirely by the state.
+GOVT_CAPEX,SYMBOL,IRFC,HELPED,HIGH,order book,Finances railway capital spending, so the book grows with the programme.
+GOVT_CAPEX,SYMBOL,TITAGARH,HELPED,HIGH,order book,Builds wagons and coaches against public orders.
+GOVT_CAPEX,SYMBOL,RAILTEL,HELPED,MEDIUM,order book,Railway telecom projects follow the same budget line.
+GOVT_CAPEX,INDUSTRY,Construction Materials,HELPED,MEDIUM,volume,Public building is a large and steady share of cement demand.
+GOVT_CAPEX,INDUSTRY,Capital Goods,HELPED,MEDIUM,order book,Public projects buy equipment, and the order flow arrives before the revenue does.
+GOVT_CAPEX,SECTOR,METALS,HELPED,MEDIUM,volume,Infrastructure is where steel is consumed.
+
+# ============================================================================ DEFENCE_SPEND
+# Rises = the defence budget or order flow rises.
+DEFENCE_SPEND,SECTOR,DEFENSE,HELPED,HIGH,order book,A small set of listed manufacturers builds nearly all of what the country orders.
+DEFENCE_SPEND,SYMBOL,BEL,HELPED,HIGH,order book,Defence electronics ordered almost entirely by the armed forces.
+DEFENCE_SPEND,SYMBOL,HAL,HELPED,HIGH,order book,Aircraft and helicopters for a single customer.
+DEFENCE_SPEND,SYMBOL,BDL,HELPED,HIGH,order book,Missiles and ordnance for a single customer.
+DEFENCE_SPEND,SYMBOL,MAZDOCK,HELPED,HIGH,order book,Warships and submarines built to naval order.
+DEFENCE_SPEND,SYMBOL,COCHINSHIP,HELPED,HIGH,order book,Naval shipbuilding and repair.
+DEFENCE_SPEND,SYMBOL,DATAPATTNS,HELPED,HIGH,order book,Defence electronics with the same single customer.
+
+# ============================================================================ GEOPOLITICAL_CONFLICT_REGIONAL
+# Rises = tension on India's borders escalates.
+GEOPOLITICAL_CONFLICT_REGIONAL,SECTOR,DEFENSE,HELPED,MEDIUM,order book,Procurement is pulled forward when the need becomes urgent, though orders arrive over years rather than weeks.
+GEOPOLITICAL_CONFLICT_REGIONAL,SYMBOL,INDIGO,HURT,HIGH,route economics,Closed airspace means longer routes, more fuel and cancelled flights.
+GEOPOLITICAL_CONFLICT_REGIONAL,SYMBOL,SPICEJET,HURT,HIGH,route economics,Airspace closures reach the cost of every westbound flight.
+GEOPOLITICAL_CONFLICT_REGIONAL,SECTOR,CONSUMER_SERVICES,HURT,MEDIUM,discretionary demand,Hotels, travel and eating out are the first things people stop doing when the news is frightening.
+GEOPOLITICAL_CONFLICT_REGIONAL,SECTOR,REALTY,HURT,LOW,buyer confidence,A house is the largest decision a household postpones when it feels uncertain.
+
+# ============================================================================ GEOPOLITICAL_CONFLICT_GLOBAL
+# Rises = a major conflict escalates outside the region.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,GESHIP,HELPED,MEDIUM,freight rates,Disrupted sea lanes lengthen voyages and lift freight rates for whoever owns the ships.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,SCI,HELPED,MEDIUM,freight rates,Shipping rates rise when routes become longer or riskier.
+GEOPOLITICAL_CONFLICT_GLOBAL,SECTOR,DEFENSE,HELPED,LOW,order book,Global rearmament reaches Indian manufacturers slowly and mostly through exports.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,INDIGO,HURT,MEDIUM,route economics,Re-routing around a conflict zone costs fuel and hours.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,SPICEJET,HURT,MEDIUM,route economics,Re-routing around a conflict zone costs fuel and hours.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,COROMANDEL,HURT,MEDIUM,import bill,Fertiliser raw material comes from exactly the regions that tend to be disrupted.
+GEOPOLITICAL_CONFLICT_GLOBAL,SYMBOL,CHAMBLFERT,HURT,MEDIUM,import bill,Urea and phosphate supply chains run through contested regions.
+GEOPOLITICAL_CONFLICT_GLOBAL,SECTOR,IT,HURT,LOW,client spending,Clients defer discretionary technology projects when the world looks unstable.
+
+# ============================================================================ METALS_PRICES
+# Rises = base metal prices on the LME go up.
+METALS_PRICES,SECTOR,METALS,HELPED,HIGH,realisation,The selling price is the factor itself.
+METALS_PRICES,SECTOR,AUTO,HURT,MEDIUM,input cost,Steel and aluminium are the bulk of a vehicle by weight.
+METALS_PRICES,SECTOR,CONSUMER_DURABLES,HURT,MEDIUM,input cost,Metal is a large share of the cost of an appliance.
+METALS_PRICES,SYMBOL,POLYCAB,HURT,HIGH,input cost,Copper and aluminium are most of what a cable actually is.
+METALS_PRICES,SYMBOL,KEI,HURT,HIGH,input cost,Copper is the dominant raw material in cables and wires.
+METALS_PRICES,SYMBOL,HAVELLS,HURT,MEDIUM,input cost,Copper and steel run through most of the product range.
+METALS_PRICES,INDUSTRY,Capital Goods,HURT,LOW,input cost,Fixed-price contracts signed before a metal rally absorb the difference.
+
+# ============================================================================ GOLD
+# Rises = the gold price goes up.
+GOLD,SYMBOL,MUTHOOTFIN,HELPED,HIGH,collateral value,Every gram pledged is worth more, so the same customer can borrow more against it and the loan book is better covered.
+GOLD,SYMBOL,MANAPPURAM,HELPED,HIGH,collateral value,Same mechanism as any gold lender: dearer collateral means a larger and safer book.
+GOLD,SYMBOL,TITAN,MIXED,MEDIUM,both ends,Existing stock is worth more while shoppers buy fewer grams - the two pull in opposite directions and are not netted off here.
+GOLD,SYMBOL,KALYANKJIL,MIXED,MEDIUM,both ends,An inventory gain and a demand problem arrive together for every jeweller.
+GOLD,SYMBOL,SENCO,MIXED,MEDIUM,both ends,Inventory revalues upward while volumes soften.
+GOLD,SYMBOL,PNGJL,MIXED,MEDIUM,both ends,Inventory revalues upward while volumes soften.
+
+# ============================================================================ US_RATES
+# Rises = the US Fed raises rates or turns hawkish. LOW everywhere ON PURPOSE - this is weather.
+US_RATES,SECTOR,BANKING,HURT,LOW,foreign flows,Foreign money leaves index-heavy financials first when US rates rise, which moves the price rather than the business.
+US_RATES,SECTOR,FINANCIALS,HURT,LOW,foreign flows,Foreign ownership is high here, so flows move the price more than the earnings.
+US_RATES,SECTOR,IT,HURT,LOW,client spending,Dearer money in the US eventually trims client technology budgets, over quarters rather than weeks.
+
+# ============================================================================ GLOBAL_DEMAND_SLOWDOWN
+# Rises = recession risk in the US and Europe rises.
+GLOBAL_DEMAND_SLOWDOWN,SECTOR,IT,HURT,HIGH,client spending,Discretionary project spending is the first budget a struggling Western client cuts.
+GLOBAL_DEMAND_SLOWDOWN,SECTOR,TEXTILES,HURT,MEDIUM,export demand,Clothing orders fall when Western shoppers stop spending.
+GLOBAL_DEMAND_SLOWDOWN,SECTOR,CHEMICALS,HURT,MEDIUM,export demand,Industrial customers destock first and reorder last.
+GLOBAL_DEMAND_SLOWDOWN,SECTOR,METALS,HURT,MEDIUM,price realisation,Global demand sets the global price.
+GLOBAL_DEMAND_SLOWDOWN,SYMBOL,BHARATFORG,HURT,MEDIUM,export demand,Heavy truck orders in the US and Europe are the classic early casualty of a slowdown.
+GLOBAL_DEMAND_SLOWDOWN,SYMBOL,MOTHERSON,HURT,MEDIUM,export demand,Global car production volumes are the revenue line.
+GLOBAL_DEMAND_SLOWDOWN,SYMBOL,SONACOMS,HURT,MEDIUM,export demand,Exports depend on Western vehicle build rates.
+
+# ============================================================================ FOOD_INFLATION
+# Rises = food prices in the CPI basket go up.
+FOOD_INFLATION,SECTOR,FMCG,HURT,MEDIUM,input cost,Wheat, edible oil, milk and sugar are the products, and raising prices costs volume.
+FOOD_INFLATION,SECTOR,CONSUMER_SERVICES,HURT,MEDIUM,input cost,A restaurant buys the same basket and cannot reprice a menu every month.
+FOOD_INFLATION,SYMBOL,JUBLFOOD,HURT,MEDIUM,input cost,Cheese, wheat and oil are the cost base of the menu.
+FOOD_INFLATION,SYMBOL,DEVYANI,HURT,MEDIUM,input cost,Chicken and oil prices reach the store margin directly.
+FOOD_INFLATION,SYMBOL,SAPPHIRE,HURT,MEDIUM,input cost,Restaurant input costs move with the food basket.
+FOOD_INFLATION,SYMBOL,WESTLIFE,HURT,MEDIUM,input cost,Restaurant input costs move with the food basket.
+FOOD_INFLATION,SYMBOL,COROMANDEL,HELPED,LOW,farm income,Better crop prices leave the farmer with more to spend on the next season's inputs.
+FOOD_INFLATION,SYMBOL,UPL,HELPED,LOW,farm income,Higher crop prices make protecting the crop worth more.
+
+# ============================================================================ COAL_POWER_PRICES
+# Rises = imported coal or merchant power tariffs go up.
+COAL_POWER_PRICES,SYMBOL,COALINDIA,HELPED,HIGH,realisation,Sells coal, so a dearer imported alternative lifts what its own output is worth.
+COAL_POWER_PRICES,SYMBOL,ADANIPOWER,HELPED,MEDIUM,merchant tariff,Sells a share of its output on the open market where the tariff is the price.
+COAL_POWER_PRICES,SYMBOL,TATAPOWER,MIXED,MEDIUM,both ends,Buys imported coal for some plants and sells merchant power from others, so the two effects run in opposite directions.
+COAL_POWER_PRICES,SYMBOL,NTPC,HURT,LOW,fuel cost,Fuel is largely passed through to the buyer under regulated tariffs, so the effect on profit is small.
+COAL_POWER_PRICES,SYMBOL,HINDALCO,HURT,HIGH,power cost,Smelting aluminium is roughly two-fifths power cost, which is why smelters are built next to coal.
+COAL_POWER_PRICES,SYMBOL,NATIONALUM,HURT,HIGH,power cost,An aluminium smelter's economics are a bet on the price of power.
+COAL_POWER_PRICES,SYMBOL,VEDL,HURT,HIGH,power cost,Aluminium and zinc smelting are both power-hungry.
+COAL_POWER_PRICES,INDUSTRY,Construction Materials,HURT,MEDIUM,fuel and power,Cement is made with heat and ground with electricity, and both come from coal.
+
+# ============================================================================ REGULATORY_TELECOM
+# Rises = a rule or dues demand goes against the operators. A tariff hike is this factor FALLING.
+REGULATORY_TELECOM,SECTOR,TELECOM,HURT,HIGH,regulated economics,One regulator sets spectrum charges, dues and pricing freedom for a three-company industry.
+
+# ============================================================================ REGULATORY_CAPITAL_MARKETS
+# Rises = SEBI tightens trading rules or transaction taxes rise.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,BSE,HURT,HIGH,transaction volume,Earns a fee per trade, so any rule that means fewer trades is directly less revenue.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,MCX,HURT,HIGH,transaction volume,Commodity exchange revenue is transaction fees.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,CDSL,HURT,HIGH,transaction volume,Depository income follows account activity and new accounts.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,ANGELONE,HURT,HIGH,brokerage volume,A discount broker's revenue is retail derivative activity, which is exactly what curbs target.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,MOTILALOFS,HURT,MEDIUM,brokerage volume,Broking is a meaningful part of a diversified financial business.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,NUVAMA,HURT,MEDIUM,brokerage volume,Capital markets activity drives a large share of revenue.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,CAMS,HURT,MEDIUM,transaction volume,Registrar revenue follows fund flows and folio activity.
+REGULATORY_CAPITAL_MARKETS,SYMBOL,KFINTECH,HURT,MEDIUM,transaction volume,Registrar revenue follows fund flows and folio activity.
+
+# ============================================================================ REGULATORY_NBFC
+# Rises = the RBI tightens risk weights or provisioning.
+REGULATORY_NBFC,INDUSTRY,Financial Services,HURT,HIGH,capital requirement,More capital held against the same loans means slower growth and a lower return on equity.
+REGULATORY_NBFC,SECTOR,BANKING,HURT,MEDIUM,capital requirement,Banks are hit through their unsecured and lender-facing books rather than the whole balance sheet.
+REGULATORY_NBFC,SYMBOL,BAJFINANCE,HURT,HIGH,capital requirement,A large unsecured consumer book is what tightening usually targets.
+
+# ============================================================================ REGULATORY_SIN_GOODS
+# Rises = excise or GST on tobacco and alcohol goes up.
+REGULATORY_SIN_GOODS,SYMBOL,ITC,HURT,HIGH,tax pass-through,Cigarettes carry most of the profit, and a tax rise must either be absorbed or passed to a price-sensitive smoker.
+REGULATORY_SIN_GOODS,SYMBOL,GODFRYPHLP,HURT,HIGH,tax pass-through,A pure cigarette business with nothing else to cushion a tax rise.
+REGULATORY_SIN_GOODS,SYMBOL,UBL,HURT,HIGH,tax pass-through,State excise decides both the price of beer and where it may be sold.
+REGULATORY_SIN_GOODS,SYMBOL,UNITDSPR,HURT,HIGH,tax pass-through,Spirits pricing is set state by state and excise is the largest component.
+REGULATORY_SIN_GOODS,SYMBOL,RADICO,HURT,HIGH,tax pass-through,Excise changes reach the shelf price directly.
+
+# ============================================================================ REGULATORY_PHARMA_USFDA
+# Rises = the USFDA acts against a plant, or price controls tighten.
+REGULATORY_PHARMA_USFDA,SECTOR,PHARMA,HURT,MEDIUM,plant approval,A single plant can carry a large share of a company's US revenue, and an import alert stops it at once.
+REGULATORY_PHARMA_USFDA,SYMBOL,SUNPHARMA,HURT,MEDIUM,plant approval,The US is the largest market and plant clearance is the licence to serve it.
+REGULATORY_PHARMA_USFDA,SYMBOL,DRREDDY,HURT,MEDIUM,plant approval,US generics are the core of the business.
+REGULATORY_PHARMA_USFDA,SYMBOL,CIPLA,HURT,MEDIUM,plant approval,A large and growing share of profit comes from the US market.
+REGULATORY_PHARMA_USFDA,SYMBOL,LUPIN,HURT,MEDIUM,plant approval,US generics dominate the revenue mix.
+REGULATORY_PHARMA_USFDA,SYMBOL,AUROPHARMA,HURT,MEDIUM,plant approval,Many plants serve the US market and each is separately inspected.
+REGULATORY_PHARMA_USFDA,SYMBOL,ZYDUSLIFE,HURT,MEDIUM,plant approval,US generics are a large part of the business.

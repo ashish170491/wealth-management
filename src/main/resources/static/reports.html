@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Makes "no CDN" structural rather than a promise (SPEC 27.3): every source list is
+     'self', so the dashboard cannot silently gain an external dependency.
+     style-src carries 'unsafe-inline' because ui.js sets element styles via the style
+     attribute. Without it Chrome blocks EVERY inline style (style-src-attr) and the
+     failure is silent and plausible-looking: score bars rendered 100% full for every
+     score, so a 45 and a 99 drew identically (B-070). It does NOT permit an external
+     stylesheet - that is still governed by 'self' - and markup injection is already
+     impossible because el() refuses raw html and every value goes through textContent. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self'">
+<title>Reports &middot; Portfolio Dashboard</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main id="view"></main>
+<script type="module" src="js/page-reports.js"></script>
+</body>
+</html>

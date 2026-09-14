@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find / -name \"probe_nse.py\" 2>/dev/null | head -3)",
+      "Read(//c//**)",
+      "Bash(timeout 600 bash -c 'until grep -q \"Multibagger Screening: Completed\" \"c:/spring-boot-tutorial/intraday-app/logs/trading-app.log\" 2>/dev/null; do sleep 5; done')",
+      "Bash(tail -3 \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--spring-boot-tutorial-intraday-app\\\\\\\\4c61fa89-ef71-42d4-a4dd-745adef0bdf0\\\\\\\\tasks\\\\\\\\bli2jz09h.output\")",
+      "Bash(tail -3 \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--spring-boot-tutorial-intraday-app\\\\\\\\4c61fa89-ef71-42d4-a4dd-745adef0bdf0\\\\\\\\tasks\\\\\\\\by03ikckw.output\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\check_guards.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\apply_guards.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\probe_indices.py\")",
+      "Bash(curl -s \"https://api.kite.trade/instruments\" -o /tmp/kite_instruments.csv 2>&1; wc -l /tmp/kite_instruments.csv 2>&1)",
+      "Read(//tmp/**)",
+      "Bash(tail -20 \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--spring-boot-tutorial-intraday-app\\\\\\\\4c61fa89-ef71-42d4-a4dd-745adef0bdf0\\\\\\\\tasks\\\\\\\\b7f4uxwii.output\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\probe_deals.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\probe_bank.py\")",
+      "WebFetch(domain:www.google.com)",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\probe_pledge.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\probe_pledge2.py\")",
+      "Bash(tail -3 \"C:\\\\\\\\Users\\\\\\\\Ashish\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--spring-boot-tutorial-intraday-app\\\\\\\\4c61fa89-ef71-42d4-a4dd-745adef0bdf0\\\\\\\\tasks\\\\\\\\b9rix7sc6.output\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Ashish\\AppData\\Local\\Temp"
+    ]
+  }
+}

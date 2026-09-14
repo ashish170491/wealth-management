@@ -1,0 +1,33 @@
+# Template for your credentials file. It does NOT live in this repository.
+#
+# Copy it to a directory outside the working tree and fill it in:
+#
+#   Windows:  copy config\application.yml.example %USERPROFILE%\.intraday\application.yml
+#   macOS/Linux:  cp config/application.yml.example ~/.intraday/application.yml
+#
+# Then tell Spring Boot where to look, once:
+#
+#   SPRING_CONFIG_ADDITIONAL_LOCATION=file:///<absolute path>/.intraday/
+#
+# start-app.bat sets that variable automatically from %USERPROFILE%.
+#
+# Keeping the real file outside the working tree means no .gitignore rule is load-bearing:
+# no `git add`, forced or accidental, can reach it. Values here override the matching
+# ${VAR:} placeholder in src/main/resources/application.yml. Each one can equally be
+# supplied as the environment variable named in that placeholder.
+spring:
+  datasource:
+    username: root                  # ${DB_USERNAME}   -- PostgreSQL user for tradingdb
+    password: CHANGE_ME             # ${DB_PASSWORD}
+  mail:
+    username: you@example.com       # ${MAIL_USERNAME} -- Gmail account; ALSO the report recipient
+    password: CHANGE_ME             # ${MAIL_PASSWORD} -- Gmail *app password*, not the login password
+
+broker:
+  kite:
+    api-key: CHANGE_ME              # ${KITE_API_KEY}     -- Zerodha Kite Connect app
+    api-secret: CHANGE_ME           # ${KITE_API_SECRET}
+    user-id: CHANGE_ME              # ${KITE_USER_ID}     -- Zerodha client id, e.g. AB1234
+    password: CHANGE_ME             # ${KITE_PASSWORD}    -- Zerodha login password
+    totp-secret: CHANGE_ME          # ${KITE_TOTP_SECRET} -- BASE32 seed from Zerodha's
+                                    #    "Can't scan?" link, NOT the 6-digit code (CLAUDE.md gotcha 3)

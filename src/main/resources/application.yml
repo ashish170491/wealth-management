@@ -1,0 +1,678 @@
+spring:
+  profiles:
+    active: default
+  application:
+    name: intraday-app
+  mvc:
+    servlet:
+      # B-086. Spring registers the DispatcherServlet lazily by default, so the whole MVC
+      # stack is built on the FIRST HTTP request rather than at startup. Measured on
+      # 2026-09-07: the app started at 09:03, nobody opened the dashboard until 11:44, and
+      # that first request spent 12,396 ms in "Completed initialization". The browser client
+      # times out at 8 s, aborted, and told the investor "the app is not running" - while the
+      # app was up and its schedulers had been running for two and a half hours.
+      #
+      # This is not a one-off: a Windows scheduled task restarts the app every weekday at
+      # 09:00, so the first person to open the dashboard each day paid this. Initialising
+      # eagerly moves the cost into startup, where it is unattended and nobody is waiting.
+      load-on-startup: 1
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tradingdb?sslmode=disable
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  # Dashboard UI static resources (SPEC §27).
+  # The `file:` location MUST come first: start-app.bat runs `mvn clean compile` then
+  # `mvn spring-boot:run`, so classpath:/static/ resolves to target/classes/static/ —
+  # meaning every HTML/CSS/JS edit would otherwise need a full rebuild + restart.
+  # Spring skips missing locations silently, so a packaged JAR still works.
+  web:
+    resources:
+      static-locations: file:./src/main/resources/static/,classpath:/static/
+      cache:
+        period: 0
+  # ===== Spring AI (SPEC 48) - macro event extraction, model-agnostic =====
+  # Used by ONE thing: MacroEventExtractor, which reads news headlines and returns structured
+  # events. It never scores a stock and never names one - the exposure map does that (SPEC 48.4).
+  # The older hand-rolled `ai:` block further down is a separate, untouched stack.
+  #
+  # `chat: none` is the default and it is load-bearing. Both provider starters are on the
+  # classpath, each auto-configuration is match-if-missing, so leaving this unset creates TWO
+  # ChatModel beans and injection becomes ambiguous at startup. `none` creates none at all, the
+  # extractor finds no bean, and it falls back to its keyword rules and says so on every event it
+  # writes. A provider bean also fails at construction when its key is blank, so `none` is the
+  # only valid state without a key.
+  #
+  # To turn the model on: set the provider's key in the environment, then chat: openai | anthropic.
+  ai:
+    model:
+      chat: ${SPRING_AI_CHAT:none}        # openai | anthropic | none
+      embedding: none                     # nothing here uses these; off so no bean is built
+      image: none
+      moderation: none
+      audio:
+        transcription: none
+        speech: none
+    chat:
+      client:
+        enabled: false                    # MacroEventExtractor builds its own ChatClient from the model
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}   # any OpenAI-compatible endpoint
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          temperature: 0.1                # extraction, not prose - near-deterministic
+          max-tokens: 2000
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        options:
+          model: ${ANTHROPIC_CHAT_MODEL:claude-haiku-4-5-20251001}
+          temperature: 0.1
+          max-tokens: 2000
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+broker:
+  kite:
+    api-key: ${KITE_API_KEY:}
+    api-secret: ${KITE_API_SECRET:}
+    access-token: ${KITE_ACCESS_TOKEN:placeholder_token}
+    user-id: ${KITE_USER_ID:}
+    password: ${KITE_PASSWORD:}
+    totp-secret: ${KITE_TOTP_SECRET:}
+    base-url: https://api.kite.trade
+
+trading:
+  # === Master Switch for Intraday Trading Loop ===
+  # Application pivoted to long-term portfolio investing (see SPEC.md).
+  # false = TradingScheduler / PositionMonitoringService / PositionSyncService short-circuit.
+  # true  = Legacy intraday mode for simulator/backtest only (pair with paper-trading-mode: true).
+  loop:
+    enabled: false
+
+  # Test Mode - Trade only specific stocks for ML strategy testing
+  test-mode:
+    enabled: false                       # Disabled - using dynamic watchlist for stock selection
+    test-stocks:
+      # Sector-based selection for Jan 2026 (Trending Sectors)
+      # METALS - Hot sector, rally leader
+      - NSE:JSWSTEEL      # Backtest: +24.55%, 51% win - Steel leader
+      # Removed JINDALSTEL - Not moving as expected, poor performance
+      - NSE:VEDL          # Backtest: +5.82%, 40% win - Non-ferrous metals
+      # PSU BANKS - Rate cut beneficiary
+      - NSE:SBIN          # Largest PSU bank, rate cut play
+      # POWER - GST benefits, EV theme
+      - NSE:TATAPOWER     # Backtest: -2.54%, EV charging infra
+      # IT - Large caps with good liquidity (₹1500-4000 range)
+      - NSE:INFY          # Infosys - High liquidity, low volatility, good for range strategies
+      - NSE:TCS           # TCS - Largest IT, institutional favorite, clean charts
+      # AUTO - High beta stocks with good intraday movement
+      - NSE:M&M           # M&M - ₹2800-3000, good trend follower
+      # BANKING - Private banks for diversification
+      - NSE:HDFCBANK      # HDFC Bank - ₹1700-1800, stable, good RSI signals
+      # ENERGY - Different sector exposure
+      - NSE:RELIANCE      # Reliance - ₹1200-1300, index heavyweight, high liquidity
+  execution:
+    paper-trading-mode: true  # Trading disabled - paper mode only
+    instrument-type: OPTIONS   # EQUITY or OPTIONS
+    # Limit order settings for better price execution
+    use-limit-orders: true                # Use LIMIT instead of MARKET orders
+    limit-order-offset-percent: 0.001     # 0.1% offset (BUY lower, SELL higher)
+    tick-size: 0.05                       # NSE equity tick size for price rounding
+    # Stop loss exit order settings
+    use-limit-for-sl-exit: true           # Use LIMIT orders for stop loss exits (reduces slippage)
+    sl-limit-offset-percent: 0.001        # 0.1% offset for SL LIMIT order (price slightly better than market)
+    sl-limit-timeout-seconds: 30          # Timeout before falling back to MARKET order
+    sl-limit-check-interval-ms: 5000      # Check order status every 5 seconds
+    # REGIME-AWARE TARGET ADJUSTMENT (Hard-coded in TradingScheduler)
+    # RANGING market: 1.0% target (choppy, smaller moves)
+    # TRENDING/HIGH_VOLATILITY: 1.5% target (normal conditions)
+    # Stop loss remains 0.5% across all regimes
+  risk:
+    max-open-positions: 5          # Reduced from 8 - fewer but higher quality trades
+    max-daily-loss-percent: 1.5    # Reduced from 2.0% - tighter daily loss limit
+    per-trade-risk-percent: 0.5    # Reduced from 1.0% - halve risk per trade to limit losses
+    initial-capital: 50000.0       # Base capital for risk-based position sizing (NOT actual broker balance)
+    # Fund validation settings (enable for live trading)
+    enable-fund-validation: true  # Set to true for live trading to check actual broker balance
+    margin-multiplier: 0.2         # 0.2 = 20% margin for MIS (5x leverage from Zerodha)
+    minimum-quantity: 1            # Minimum quantity to place a valid trade
+    # Position size caps to prevent over-exposure
+    max-position-value: 15000.0    # Reduced from ₹25,000 to ₹15,000 - smaller positions
+    max-loss-per-trade: 75.0       # NEW: Cap max loss at ₹75 per trade regardless of position size
+    # Quantity caps per price tier (restricts quantity based on stock price)
+    max-quantity-tier1: 200         # For stocks below ₹100
+    max-quantity-tier2: 100        # For stocks ₹100-500
+    max-quantity-tier3: 50         # For stocks ₹500-1000
+    max-quantity-tier4: 25         # For stocks ₹1000-2000
+    max-quantity-tier5: 10         # For stocks ₹2000-5000
+    max-quantity-tier6: 5          # For stocks above ₹5000
+  costs:
+    brokerage-percent: 0.002     # Zerodha: ₹20 flat per trade (~0.002% on ₹10k position)
+    stt-percent: 0.025           # 0.025% on sell side only (actual)
+    exchange-fees-percent: 0.00325  # NSE transaction charges (actual)
+    gst-percent: 18.0            # GST on brokerage + transaction charges (actual)
+    sebi-charges-percent: 0.0001 # SEBI turnover charges (actual)
+    stamp-duty-percent: 0.003    # 0.003% on buy side (actual)
+    slippage-percent: 0.01       # 0.01% realistic slippage (reduced from 0.05%)
+  filters:
+    enable-volatility-filter: true
+    max-vix-level: 25.0          # Pause trading if VIX > 25
+    enable-trend-filter: false    # Disabled by default
+    trend-indicator: "EMA20"
+    enable-volume-filter: true
+    min-volume-multiplier: 0.5   # Reduced from 0.7x to 0.5x for better signal capture
+    rsi-volume-multiplier: 0.3   # Lower threshold for RSI Mean Reversion (trades on price extremes)
+    enable-time-filter: true     # Avoid first/last 15 mins
+    first-trade-start-time: "09:30"  # Start trading from 9:30 AM IST (full day paper test)
+    last-trade-cutoff-time: "14:30"  # No new trades after 2:30 PM IST (existing positions continue monitoring)
+  # Position Management - Trailing Stop, Breakeven, Time-Based Exit
+  position-management:
+    # Time-based exit for stagnant positions
+    enable-time-based-exit: true
+    max-hold-duration-minutes: 360        # Exit if held > 360 mins with < threshold profit
+    stagnant-threshold-percent: 0.005    # 0.5% - exit if profit below this after max duration
+    # Breakeven stop - move SL to entry after reaching profit (AGGRESSIVE)
+    enable-breakeven-stop: true
+    breakeven-trigger-percent: 0.010     # 1.0% profit triggers breakeven (raised from 0.4% to avoid noise shakeouts)
+    breakeven-buffer-percent: 0.002      # 0.2% buffer above entry for costs + breathing room
+    # Trailing stop - SL follows price after reaching profit (AGGRESSIVE)
+    enable-trailing-stop: true
+    trailing-stop-trigger-percent: 0.005 # 0.5% profit activates trailing (was 0.8% - earlier activation)
+    trailing-stop-distance-percent: 0.004 # 0.4% trail distance from peak (was 0.7% - tighter lock)
+    # Early loss exit (optional)
+    enable-early-loss-exit: false
+    early-loss-check-minutes: 30
+    early-loss-threshold-percent: 0.003
+    # Trend reversal exit - exit when trend reverses against position
+    enable-trend-reversal-exit: true
+    trend-exit-ema-period: 20           # Exit BUY if price < EMA20, exit SELL if price > EMA20
+    trend-exit-ema-buffer-percent: 0.002  # 0.2% buffer - price must be this far beyond EMA to trigger exit
+    rsi-overbought-exit: 75.0           # Exit BUY positions when RSI >= 75
+    rsi-oversold-exit: 25.0             # Exit SELL positions when RSI <= 25
+    trend-exit-min-hold-minutes: 15     # Minimum hold time before trend exit kicks in
+    # Minimum profit booking - capture quick profits (AGGRESSIVE)
+    enable-min-profit-booking: true
+    min-profit-booking-percent: 0.007   # 0.7% profit target (was 1% - faster booking)
+    min-profit-hold-minutes: 5          # Hold at least 5 mins (was 30 - no waiting for quick moves)
+    profit-booking-requires-trend-weakness: false  # Book profit regardless of trend (capture quick gains)
+    # PARTIAL PROFIT BOOKING - New feature to lock gains while staying in trade
+    enable-partial-profit-booking: true  # NEW: Take partial profit at first target
+    partial-profit-percent: 0.005       # 0.5% profit triggers partial exit
+    partial-exit-quantity-percent: 0.50  # Exit 50% of position at first target
+    second-target-percent: 0.01         # 1.0% profit for remaining 50%
+    move-sl-after-partial: true         # Move SL to breakeven after partial booking
+  # Signal Confirmation - Avoid trapped trades
+  signal-confirmation:
+    # Pullback Entry - Wait for price to retrace before entering
+    enable-pullback-entry: true
+    pullback-percent: 0.0015          # 0.15% pullback required (reduced from 0.2% for faster entry)
+    pullback-timeout-minutes: 30      # Signal expires if no pullback within 30 mins
+    # Confirmation Candles - Wait for momentum confirmation
+    enable-confirmation-candles: true
+    confirmation-candle-count: 1      # Wait for 1 candle after signal (reduced from 2 for faster execution)
+    require-directional-candles: true # Candles must close in signal direction
+    # Stricter Volume Filter - Require higher volume for entry
+    enable-strict-volume-filter: true
+    strict-volume-multiplier: 1.2     # Volume must be 1.2x average (reduced from 1.5x for less restrictive entry)
+    volume-average-period: 20         # Use 20-candle average for volume
+    # Fade Trapped Signals (Contrarian) - Reverse signals that get trapped
+    enable-fade-trapped-signals: true
+    fade-threshold-percent: 0.003     # 0.3% move against signal = trapped
+    fade-min-wait-minutes: 2          # Wait 2 mins before considering fade
+    # ML-Based Immediate Fade - Generate contrarian signal when ML detects trap
+    enable-ml-immediate-fade: true    # Enable immediate fade on ML trap detection
+    ml-fade-trap-threshold: 0.95      # 95%+ trap probability triggers fade (increased from 0.90 to reduce false fades)
+    ml-fade-confidence-multiplier: 0.70  # Fade confidence = trap_prob * 0.70 (reduced from 0.85 for conservative fading)
+
+  # Order Monitoring - Track pending LIMIT orders
+  order-monitoring:
+    enabled: true                        # Enable order monitoring
+    order-timeout-minutes: 30             # Cancel orders not filled within 30 minutes
+    max-price-drift-percent: 0.01        # Cancel if price drifts >1% from order price
+    enable-order-modification: false     # Don't chase price (safer to cancel and re-evaluate)
+    modify-after-minutes: 2              # If enabled, modify order after 2 minutes
+    max-modify-attempts: 2               # Maximum order modifications before cancelling
+    cancel-at-market-close: true         # Cancel all pending orders before market close
+    cancel-before-close-minutes: 5       # Cancel 5 minutes before close
+
+  # Multibagger Screening & Scoring Module
+  # Identifies potential multibagger stocks using 7-dimension scoring
+  multibagger:
+    enabled: true                          # Enable/disable multibagger screening
+    email-enabled: true                    # Send weekly screening report email
+    # Scoring weights — MUST sum to 1.0 across all EIGHT dimensions.
+    # These override the @ConfigurationProperties defaults in MultibaggerConfig, so any
+    # dimension omitted here silently keeps its Java default. That is exactly what went
+    # wrong (B-019): this block listed only the seven pre-2026-04 dimensions summing to
+    # 1.00, while financial-quality-weight kept its 0.15 default — making the effective
+    # sum 1.15 and inflating every composite by 15%. A threshold of 60 was really 52.
+    # Values below match the SPEC §12.5 rebalance. MultibaggerConfig validates the sum
+    # at startup and refuses to boot if it drifts again.
+    # SEVEN dimensions since 2026-09-03 (sector-tailwind removed, its 0.08 redistributed
+    # in proportion). All seven keys must be present -- an omitted key keeps its Java
+    # default rather than being disabled, which is exactly how B-019 happened.
+    technical-momentum-weight: 0.20        # Weekly/monthly EMA trend, RSI
+    volume-accumulation-weight: 0.13       # Smart money accumulation patterns
+    relative-strength-weight: 0.13         # Outperformance vs Nifty 50
+    price-structure-weight: 0.13           # Base building, higher lows, 52W high
+    valuation-weight: 0.14                 # PE vs sector PE, DCF expectation gap
+    institutional-interest-weight: 0.11    # Per-stock FII/DII holding trend
+    financial-quality-weight: 0.16         # Balance-sheet / cash-flow quality
+    # Thresholds
+    min-score-for-candidate: 60            # Minimum composite score to be a candidate
+    min-score-for-strong-candidate: 75     # Score for "Strong Multibagger" verdict
+    top-candidates-in-report: 20           # Max candidates in email report
+    under-radar-min-score: 60              # Under-discovery score for the "Under the Radar" section (SPEC §12.10)
+    # Insider Pulse (SPEC §28) — daily SEBI PIT open-market promoter/KMP trades.
+    # SHADOW MODE: the verdict is computed, persisted and IC-measured, but adds ZERO points
+    # to the composite. Do not flip this to true until the INSIDER_PULSE dimension has IC
+    # over >=100 matured outcomes that is stable across two consecutive weekly runs
+    # (SPEC §25.5). The engine's own edge is not yet statistically established — adding
+    # unvalidated free parameters to the score is how a good quarter gets fitted as skill.
+    insider-pulse-actionable: false
+    insider-pulse-strong-bonus: 8          # Applied only when insider-pulse-actionable: true
+    insider-pulse-moderate-bonus: 4
+    # Capex Cycle (SPEC §31) — capital work-in-progress / capex-to-depreciation from the
+    # annual XBRL. SHADOW MODE for the same reason as insider-pulse. This one is the most
+    # tempting signal in the system because it genuinely leads the P&L, which is precisely
+    # why it must be measured before it is trusted: a leading indicator that leads in the
+    # wrong direction is worse than a lagging one.
+    capex-actionable: false
+    capex-expansion-bonus: 8               # Applied only when capex-actionable: true
+    capex-investing-bonus: 4
+    capex-harvesting-penalty: 3            # Only when earnings are also stagnant/declining
+    # Turnaround detector (SPEC §32.3). SHADOW MODE. Turnarounds are the category most
+    # prone to hindsight bias — the ones that worked are famous, the ones that kept failing
+    # are forgotten, and these criteria were written by reading about the former.
+    turnaround-actionable: false
+    turnaround-bonus: 6                    # Applied only when turnaround-actionable: true
+    # Forensic red flags (SPEC §32.4). ARMED BY DEFAULT — deliberately unlike the three
+    # above. Those are claims that a stock will go UP, and an unvalidated one steers the
+    # portfolio on a guess. These are risk controls: being wrong about a bonus costs a
+    # missed opportunity, being wrong about serial dilution or an auditor resignation costs
+    # capital. Set false only to isolate their effect while diagnosing a scoring change.
+    forensic-actionable: true
+    # Macro & geopolitical event exposure (SPEC 48). SHADOW MODE, and it stays that way for a
+    # while: the reading is a claim about direction, and Gotcha 30 governs those. It contributes
+    # ZERO points here and is not an input to BuyTimingVerdict. It is measured like everything
+    # else -- MACRO_EVENT picks at 30/90/180/365d, per-factor IC -- and the promotion gate
+    # (SPEC 38.10) is what would argue for flipping it, not a good-looking quarter.
+    macro-exposure-actionable: false
+    # Analyst price targets (SPEC 49). SHADOW MODE, permanently in this phase, and note there is
+    # deliberately NO companion bonus key to switch on: an analyst target is a third party's
+    # opinion arriving through a news headline, which is the exact input shape of the two engines
+    # deleted on 2026-09-03 for never having produced a measured hit rate (SPEC 39.3). The ledger
+    # exists to produce that evidence. Choosing how many points a brokerage upgrade is worth
+    # before the measurement has established it even has a sign is Gotcha 30 in miniature.
+    analyst-target-actionable: false
+
+  # Annual-history backfill across the screening universe (SPEC §32.6).
+  # Every long-horizon judgement — return on capital over a decade, what management did with
+  # retained earnings, whether margins survived a cycle — is computed from annual_fundamentals,
+  # and that table held multi-year history for ~19 of 288 screened stocks. This works through
+  # the universe on small weekday batches until it converges (~13 runs), after which the cost
+  # is ~zero: the screening run maintains the newest year by itself (Gotcha 49).
+  #
+  # ENABLED BY DEFAULT, unlike a new scoring signal. Gotcha 30's shadow rule governs things that
+  # re-rank picks; this changes no score and emits no verdict, it fetches filings the company
+  # already published. It does have a real second-order effect and SPEC §32.6 states it: as depth
+  # arrives, forensic checks needing 3-4 years start reporting — adding true flags AND removing
+  # false DILUTION:HIGH ones as the B-066 discriminator finally gets its four years.
+  fundamentals:
+    backfill:
+      enabled: true
+      batch-size: 30                 # ~330 NSE requests, ~6.5 min at the pacing below
+      pace-ms: 1200                  # Process-wide spacing. Cautious, not measured — see SPEC §32.6
+      max-years: 10
+      max-attempts: 3                # A permanently broken symbol stops consuming the budget
+      retry-after-days: 7
+      # Stops issuing requests at this time, checked INSIDE the loop rather than only at start.
+      # The 14:00 screening and 14:45 insider capture are both NSE-heavy, and a guard that only
+      # asks permission to begin does not prevent the contention it exists to prevent (defect 7.2).
+      stop-after: "13:30"
+
+  # Analyst target ledger (SPEC §49) — who said what, and whether they were right.
+  #
+  # Records price targets that named a brokerage AND a rupee figure in a news headline, then
+  # measures against daily candles whether the price ever got there, how long it took, and what
+  # the stock did against the Nifty 50 over exactly the same dates. It produces NO verdict on any
+  # stock and adds ZERO points to any score (trading.multibagger.analyst-target-actionable above).
+  #
+  # Cheap because both feeds are already being fetched: the 15-minute market headline scan
+  # (§48.4) and the per-stock brokerage scan the screener runs for the §24 signal — where the
+  # rupee target was previously extracted, counted and then thrown away.
+  analyst-targets:
+    enabled: true
+    # The Indian sell-side convention is a twelve-month target. Applied as a convention and
+    # RECORDED as one (horizonStated=false on the row), so nothing can later read the assumption
+    # as something an analyst actually said — B-057 and B-097 were both that mistake.
+    default-horizon-days: 365
+    dedup-window-days: 7             # Same house, same stock, same figure this close = one call
+    headline-lookback-days: 7        # Headlines older than this are not mined
+    # Each measurement is a paced broker call on a cold cache, against the one ~2.9 req/s gate
+    # that has twice starved the afternoon schedulers (B-014, B-049). Least-recently-measured
+    # first, so a bounded run rotates the whole open book instead of re-reading its head (B-074).
+    max-measurements-per-run: 120
+    # A record of two-from-two is not a record. Below this many RESOLVED calls a house reports
+    # TOO_EARLY and no hit rate at all — the same refusal as the concall credibility gate.
+    min-resolved-for-track-record: 5
+    track-record-lookback-days: 1095
+    stop-after: "13:50"              # The 14:00 screening owns the broker budget from there
+
+    # --- Structured broker-research feed (SPEC §49.11) -------------------------------------
+    # The primary capture path since 2026-09-12. Every field the headline parser has to infer
+    # (house, target, rating, both dates, the prior target) is PUBLISHED here as a field, which
+    # removes B-109/B-110/B-111 outright and lifts coverage from 291 companies to 416 in a
+    # comparable sample. The headline parser stays as the fallback for notes this feed misses.
+    # It contributes ZERO points to any score; nothing below changes that.
+    feed-enabled: true
+    feed-base-url: "https://api.moneycontrol.com/mcapi/v1/broker-research"
+    price-feed-url: "https://priceapi.moneycontrol.com/pricefeed/nse/equitycash"
+    feed-source-name: "Moneycontrol broker research"
+    # A third party's public endpoint, read for one investor's own portfolio. The courteous rate
+    # IS the licence to use it - so this pace is deliberate, not a tuning knob to minimise.
+    feed-pace-ms: 400
+    feed-timeout-seconds: 30
+    feed-page-size: 100              # The feed does not honour a larger page
+    # The daily pass normally stops after one page because the rest is already on file. The cap
+    # stops a feed change that breaks dedup from silently turning the daily job into a backfill.
+    feed-daily-max-pages: 4
+    feed-user-agent: "intraday-app/1.0 (personal portfolio research; single user; contact via app owner)"
+    feed-referer: "https://www.moneycontrol.com/markets/stock-ideas"
+
+  # Dynamic universe expansion (SPEC §30) — find stocks outside the curated ~361 names.
+  universe:
+    dynamic-expansion:
+      # OBSERVATION MODE. Symbols are discovered, queued, deep-scored and recorded, but do
+      # NOT enter the screening universe until this is true. Watch the funnel for a few
+      # weeks first: an expanded universe is full of thin, lightly-covered names, and the
+      # promotion rules have no track record yet.
+      enabled: false
+      scan-enabled: true              # Saturday coarse scan still runs while in observation mode
+      max-active-symbols: 100         # Hard cap on promoted symbols
+      coarse-scan-top-n: 40           # Survivors kept per weekly scan
+      deep-score-per-day: 10          # Queued symbols deep-scored per weekday run
+      min-adv20d: 5000000             # Rs 50 lakh/day floor — matches the MODERATE liquidity tier
+      min-months-since-listing: 6     # Newer listings are the IPO tracker's job, not the scan's
+      promotion-min-composite: 60
+      retirement-composite: 45
+      retirement-consecutive-runs: 8  # Weak for 8 straight weekly runs before being dropped
+      recent-ipo-months: 36
+    # Technical parameters
+    weekly-ema-short: 12                   # Weekly EMA short period
+    weekly-ema-long: 26                    # Weekly EMA long period
+    monthly-rsi-period: 14                 # RSI calculation period
+    min-rsi-for-uptrend: 50.0             # RSI above = uptrend zone
+    max-rsi-for-entry: 75.0               # RSI above = overbought
+    # Volume
+    volume-lookback-weeks: 12             # Weeks for volume accumulation check
+    volume-surge-multiplier: 1.5          # Volume > 1.5x avg = accumulation
+    # Price structure
+    near-high-percent: 10.0               # Within 10% of 52W high = strong
+    base-building-min-weeks: 8            # Min weeks of consolidation
+    # Valuation
+    undervalued-pe-threshold: -15.0       # PE deviation < -15% = undervalued bonus
+    overvalued-pe-penalty: 30.0           # PE deviation > 30% = penalty
+    # Market cap (in crores)
+    small-cap-max: 10000.0                # < 10K Cr = small cap (highest potential)
+    mid-cap-max: 50000.0                  # < 50K Cr = mid cap
+    # Screening
+    max-stocks-to-screen: 1000            # Maximum stocks per run (raised for full-universe tier)
+    history-days: 365                     # Days of price history to analyze
+
+    # Market-cap tier selection (SPEC §12.5)
+    screening-tier: LARGE_MID_SMALL       # LARGE_ONLY | LARGE_MID | LARGE_MID_SMALL | ALL
+    smallcap-min-score: 55                # Stricter min score for SMALL_CAP (reduces noise)
+    microcap-min-score: 60                # Even stricter for MICRO_CAP
+    require-smallcap-quality-filters: true
+    smallcap-min-price: 20.0              # Avoid penny stocks
+    smallcap-max-pledge-percent: 30.0     # Reject if promoter pledge > 30%
+    smallcap-require-positive-earnings: true  # Reject DECLINING earnings verdict
+
+# Holdings Analysis Configuration
+# Server runs only 9:15 AM - 3:20 PM on weekdays
+holdings:
+  scheduler:
+    enabled: true                  # Enable/disable all holdings schedulers
+    sync-cron: "0 20 9 * * MON-FRI"           # Sync holdings at 9:20 AM (after market opens)
+    analysis-cron: "0 15 15 * * MON-FRI"      # Analyze at 3:15 PM (before server stops)
+    report-cron: "0 18 15 * * MON-FRI"        # Send daily report at 3:18 PM
+    hourly-refresh-cron: "0 0 10,11,12,13,14 * * MON-FRI"  # Hourly refresh during market hours
+  analysis:
+    min-history-days: 250          # Minimum days of history for 200 EMA
+    strong-score-threshold: 70     # Score >= 70 is considered strong
+    weak-score-threshold: 40       # Score < 40 is considered weak
+
+# Watchlist Configuration
+# Track stocks you're interested in for potential entry opportunities
+watchlist:
+  enabled: true                      # Enable/disable watchlist feature
+  # SEED LIST, READ ONCE (SPEC §37.5). The `watchlist` table is the source of truth: add and
+  # remove stocks from the dashboard (watchlist.html / "+ Watch" on Screener and Discovery) or
+  # POST /api/watchlist/items. A symbol listed here is inserted on boot if it has no row;
+  # removing it here does nothing, and a stock you removed in the UI is never resurrected.
+  # Emptied 2026-08-27: the original 14 example stocks were removed from the watchlist (they
+  # had no add price, so no return could ever be measured). Add stocks from the dashboard.
+  symbols: []
+  scheduler:
+    enabled: true                    # Enable/disable scheduler
+    analysis-cron: "0 0 11,13,15 * * MON-FRI"  # Run at 11 AM, 1 PM, 3 PM
+    timezone: "Asia/Kolkata"
+  analysis:
+    min-history-days: 100            # Minimum days of historical data required
+    rsi-oversold: 30.0               # RSI below this = potential buy
+    rsi-overbought: 70.0             # RSI above this = risky entry
+    strong-buy-threshold: 75         # Score >= 75 = Strong Buy
+    buy-threshold: 60                # Score >= 60 = Buy
+    sell-threshold: 40               # Score < 40 = Avoid
+  # "Still a good time to buy?" verdict thresholds (SPEC §37.3). Every key present (B-019 rule).
+  verdict:
+    quality-min-buy: 65              # composite >= 65 with a technical entry = BUY_NOW
+    quality-min-hold: 50             # composite < 50 = AVOID regardless of the chart
+    rsi-overbought: 70.0             # RSI above this = WAIT_FOR_PULLBACK
+    runaway-return-pct: 15.0         # up this much since added AND RSI > runaway-rsi = WAIT_FOR_PULLBACK
+    runaway-rsi: 60.0
+    stretch-above-ema50-pct: 10.0    # price this far above EMA50 = stretched
+  snapshot-retention-days: 730       # watchlist_daily_snapshot rows (one per symbol per day)
+
+# Stock Blacklist Configuration
+# Stocks to exclude from trading due to poor backtest performance or high volatility
+stock-filter:
+  enabled: true
+  blacklist:
+    - RBLBANK      # Poor backtest: -7.54% return, 36% win rate, high volatility
+    - YESBANK      # High volatility, penny stock behavior
+    - IDEA         # High volatility, speculative
+    - ZEEL         # Corporate governance issues
+    - JINDALSTEL   # Poor intraday movement, not meeting expectations (Jan 2026)
+  # Minimum price filter - avoid penny stocks
+  min-price: 50.0
+  # Maximum price filter - avoid illiquid high-priced stocks
+  max-price: 50000.0
+  # Minimum average daily volume (in lakhs)
+  min-avg-volume-lakhs: 10.0
+
+  # Data Cleanup Configuration - Automated old record deletion
+  cleanup:
+    enabled: true                           # Enable/disable automated cleanup
+    trades-retention-days: 90               # Keep completed trades for 90 days (3 months)
+    strategy-logs-retention-days: 30        # Keep strategy logs for 30 days
+    sector-reversal-retention-days: 60      # Frozen history: the engine was removed 2026-09-03,
+                                            # this only prunes what it already wrote.
+    holdings-history-retention-days: 1095   # Keep holdings history for 1095 days (3 years).
+                                            # Raised from 180 on 2026-08-24: this table is the
+                                            # dashboard's portfolio-value time series (SPEC §27).
+                                            # At 180 days the cleanup job was permanently deleting
+                                            # one more chartable day every night, capping every
+                                            # chart at 6 months. One small row per symbol per day.
+    historical-candles-retention-days: 365  # Keep historical candles for 365 days (1 year)
+    market-impact-news-retention-days: 30   # Headlines. Declared here since 2026 and pruned by
+                                            # NOTHING until 2026-09-10 (B-103) - the config key
+                                            # existed, the cleanup arm did not, and the table grew
+                                            # without limit. A retention setting with no deleter is
+                                            # a comment, not a policy.
+    macro-events-retention-days: 730        # Extracted macro events (SPEC 48). Two years, because
+                                            # an event is the RECORD its own measurement is checked
+                                            # against and outcomes run to 365 days.
+    deletion-batch-size: 1000               # Batch size for deletion operations
+    log-detailed-stats: true                # Log detailed cleanup statistics
+
+  # Headline capture for the macro event ledger (SPEC 48.2).
+  #
+  # B-102: this block used to carry six keys - check-interval-minutes, max-news-age-hours,
+  # send-critical-alerts, send-high-alerts, daily-summary-enabled - and NOTHING read any of them.
+  # There was no @ConfigurationProperties class; the interval was hard-coded in a cron, the window
+  # hard-coded at 2 hours, and the two alert switches could not turn off emails that went out every
+  # 15 minutes. Both alert emails are gone now (B-101) and the two keys below are bound and read by
+  # MarketImpactNewsConfig. Do not add a key here without a field to receive it.
+  market-impact-news:
+    enabled: true                           # false stops the 15-minute RSS scan entirely
+    max-lookback-hours: 36                  # Cap on the catch-up window when the table is stale.
+                                            # The scan normally fetches since the newest stored
+                                            # headline; this bounds a first run or a long gap.
+                                            # It replaced a hard-coded 2 hours, which silently made
+                                            # every overnight story invisible: the first scan of the
+                                            # day fires at 09:15 and could not see 15:30 to 07:15.
+
+  # FII/DII Activity Tracking
+  fiidii:
+    enabled: true                           # Enable FII/DII tracking
+    nse-base-url: https://www.nseindia.com  # NSE API base URL
+    heavy-selling-threshold: 3000.0         # Alert if FII selling > ₹3000 Cr
+    heavy-buying-threshold: 3000.0          # Alert if FII buying > ₹3000 Cr
+    significant-deal-threshold: 50.0        # Show deals > ₹50 Cr in report
+    trend-analysis-days: 5                  # Analyze last 5 days trend
+    send-alerts: true                       # Send email alerts
+    fetch-cron: "0 45 9 * * MON-FRI"        # Fetch data at 9:45 AM
+    report-cron: "0 0 10 * * MON-FRI"       # Send report at 10:00 AM
+
+# ===== Portfolio Goals & Allocation (SPEC §5) =====
+portfolio:
+  enabled: true
+  default-tolerance-pp: 5.0          # ±5 percentage points absolute triggers drift alert
+  default-relative-tolerance: 0.25   # ±25% relative triggers drift alert
+  small-cap-max: 10000.0             # ₹ crores — below = SMALL_CAP
+  mid-cap-max: 50000.0               # ₹ crores — below (and ≥ small-cap-max) = MID_CAP
+  seed-on-startup: true              # create default profile on first boot
+  default-profile-name: "Default Portfolio"
+
+  # ===== Core Holding Classifier (SPEC §35) =====
+  # Answers "which stock should I never sell". Every key below is listed here on purpose:
+  # these are @ConfigurationProperties, so a key omitted from this file keeps its Java default
+  # instead of being disabled — the failure that inflated every composite for four months (B-019).
+  core:
+    enabled: true
+    # THE one behavioural switch, and it ships OFF. Suppressing an exit alert removes a risk
+    # control; risk controls ship armed and new signals ship shadowed (Gotcha 42). For the first
+    # quarter the alerts still fire and the classifier merely records which of them landed on a
+    # core holding — that record is what the decision to flip this is argued from. Review: 2026-11-30.
+    suppress-technical-exits: false
+    min-measured-gates: 5               # of 7, counting REAL evidence only; a no-data pass does not count
+    hysteresis-runs: 2                  # weekly (Friday) anchors for promotion / soft demotion;
+                                        # a forensic flag, HIGH_RISK or BROKEN demotes the same day
+    durability-min-components: 3        # below this the durability score is null, not a number
+    roce-core-threshold-percent: 15
+    financial-roe-threshold-percent: 14
+    financial-roa-threshold-percent: 1.0
+    consistency-min: 60
+    drawdown-threshold-percent: 15      # D5: what counts as a "hiccup" rather than noise
+    closed-episode-min-age-months: 18   # D5: only episodes that closed this long ago are scored,
+                                        # so the drawdown a holding is in TODAY can never lower it
+    fast-recovery-months: 12            # D5: +5 when the prior high was regained within this
+    slow-recovery-months: 24            # D5: +3 when the prior high was regained within this
+    price-history-years: 5
+
+  # ===== Scheduled Report Cadences (SPEC §14) =====
+  # All cadences fire within market hours (09:15-15:30 MON-FRI) per SPEC §15.
+  reports:
+    daily-enabled: true                   # Daily snapshot 09:30 MON-FRI
+    monthly-enabled: true                 # First Friday of month 15:25
+    quarterly-enabled: true               # First Friday of Jan/Apr/Jul/Oct 15:26
+    accumulation-reminder-enabled: true   # Daily 10:00 MON-FRI, only emails if a tranche is due today
+
+  # ===== Tax-Lot Tracking (SPEC §9) =====
+  tax:
+    stcg-rate-percent: 20.0           # FY26: STCG on equity (Budget 2024)
+    ltcg-rate-percent: 12.5           # FY26: LTCG on equity
+    ltcg-cutoff-days: 365             # Days held > this = LONG_TERM
+    ltcg-exemption-per-year: 125000.0 # ₹1.25L annual LTCG exemption (FY26)
+    default-matching-method: FIFO     # FIFO | LIFO | HIFO
+    approaching-cutoff-window-days: 30
+
+  # ===== Diversification Risk (SPEC §7) =====
+  risk:
+    hhi-concentrated-threshold: 2500.0
+    hhi-dangerous-threshold: 4000.0
+    sector-max-percent: 30.0
+    stock-max-percent: 15.0
+    correlation-cluster-threshold: 0.7    # pairwise correlation ≥ this = cluster link (not yet wired)
+    correlation-cluster-max-percent: 20.0
+    correlation-lookback-days: 90
+
+  # ===== Conviction & Thesis Tracking (SPEC §6) =====
+  conviction:
+    yellow-drift-threshold: 15.0   # score drop ≥ this = UNDER_REVIEW
+    red-drift-threshold: 25.0      # score drop ≥ this = BROKEN
+
+# ===== Macro & Geopolitical Event Exposure (SPEC 48) =====
+# Which events change the ground a business stands on, and which of your stocks they touch.
+# A risk-pillar reading over quarters. It is not a market-direction call, it never says buy or
+# sell, and it adds zero points to any score (see trading.multibagger.macro-exposure-actionable).
+macro:
+  window-days: 14                 # How far back an event still counts against a stock
+  calendar-days: 30               # Look-ahead for the "coming up" calendar
+  dedup-window-days: 3            # Two reports of the same factor+direction this close are one event
+  ingest:
+    # NO SCHEDULER EXISTS for extraction in this phase, and this flag does not create one. It is
+    # bound and logged at boot so the intent is on the record: adding a cron needs a SPEC 15 row
+    # and a slot argument (09:16 / 12:40 / 14:20 are the candidates - all inside 09:15-15:30).
+    # Extraction runs only from POST /api/macro/ingest, i.e. the button on the Events page.
+    scheduled: false
+    headline-lookback-hours: 36   # Headlines older than this are not offered to the extractor
+    max-headlines: 120            # Per ingest. Bounds both the token bill and the wall clock.
+    refuse-from: "14:00"          # Live-call guard: the 14:00 screening onwards is spoken for
+
+# AI Service Configuration (provider-agnostic: openai, claude, or none)
+#
+# B-100: a live-looking OpenAI key used to sit here as the default of ${AI_API_KEY:...}, so it was
+# committed to the repository and shipped in every build. There is no default now: with no
+# AI_API_KEY in the environment the key is blank, isAvailable() returns false and every report
+# section that uses AI degrades to empty (SPEC §18). Never inline a secret as a yaml default -- a
+# default is not a placeholder, it is the value the app runs with when nobody sets one.
+ai:
+  enabled: false
+  provider: openai                          # openai, claude, none
+  api-key: ${AI_API_KEY:}
+  model: gpt-4o-mini                        # Cost-effective for report enrichment
+  timeout-seconds: 30
+  max-tokens: 1024
+  temperature: 0.3                          # Low temp for consistent, auditable financial analysis
+
+logging:
+  file:
+    name: logs/trading-app.log
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      total-size-cap: 100MB
+      max-history: 5
+  level:
+    com.example.trading: DEBUG
+    org.springframework.web.reactive.function.client.ExchangeFunctions: TRACE

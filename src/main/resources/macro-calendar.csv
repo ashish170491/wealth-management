@@ -1,0 +1,57 @@
+# Macro calendar (SPEC 48.5) - dated events that are known in advance.
+#
+# THIS IS A CALENDAR, NOT A FORECAST. Every row says when something happens and which factor it
+# belongs to. No row says which way it will go, and there is deliberately no column in which to
+# record a guess: an expected-direction field would be a short-term price prediction with a date
+# attached, which SPEC 19 bars.
+#
+# Nothing fetches this file. The dates come from the RBI release calendar, the Budget convention,
+# the US Federal Reserve's published schedule and the statistics ministry's release dates. Edit it
+# by hand when a new year's dates are published; a row whose date has passed is simply not returned.
+#
+# date       - yyyy-MM-dd. For a repeating row this is the FIRST occurrence and its day-of-month
+#              (MONTHLY) or month-and-day (ANNUAL) is what repeats.
+# factor     - a MacroFactor enum name.
+# kind       - SCHEDULED for anything on a published calendar. SURPRISE has no business here and is
+#              accepted only so the enum stays shared with the event ledger.
+# recurrence - ONCE | MONTHLY | ANNUAL.
+# notes      - one line on what the investor should watch for. May contain commas.
+date,factor,label,kind,geography,recurrence,notes
+
+# ---------------------------------------------------------------- RBI Monetary Policy Committee
+# Six meetings a financial year. Dates from the RBI's published schedule; update each April.
+2026-04-08,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,First policy of the financial year. The rate decision and the tone of the statement both matter.
+2026-06-05,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Comes just as the monsoon arrives, so the food inflation view usually gets a full airing.
+2026-08-06,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Mid-year review with the first read on the monsoon's effect on prices.
+2026-10-07,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Festive-season policy, usually with a growth as well as an inflation message.
+2026-12-04,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Last policy of the calendar year.
+2027-02-05,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Comes days after the Budget, so the two are usually read together.
+2027-04-07,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,First policy of the next financial year.
+2027-06-04,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Monsoon-onset policy.
+2027-08-05,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Mid-year review.
+2027-10-06,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Festive-season policy.
+2027-12-03,INTEREST_RATES,RBI policy decision,SCHEDULED,India,ONCE,Last policy of the calendar year.
+
+# ---------------------------------------------------------------- Union Budget
+2027-02-01,GOVT_CAPEX,Union Budget,SCHEDULED,India,ANNUAL,The capital spending number and the sector allocations are what reach an order book; the tax changes reach the consumer.
+
+# ---------------------------------------------------------------- US Federal Reserve
+2026-09-17,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+2026-10-29,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+2026-12-10,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Last decision of the year, usually with updated projections.
+2027-01-28,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+2027-03-17,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+2027-04-28,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+2027-06-16,US_RATES,US Fed rate decision,SCHEDULED,United States,ONCE,Moves foreign flows into and out of Indian shares, and the rupee with them.
+
+# ---------------------------------------------------------------- Indian statistics releases
+2026-09-12,FOOD_INFLATION,India inflation figures (CPI),SCHEDULED,India,MONTHLY,Released on or about the twelfth. Food is roughly half the basket, so this is where a monsoon shows up in the numbers.
+2026-09-12,GLOBAL_DEMAND_SLOWDOWN,India factory output (IIP),SCHEDULED,India,MONTHLY,Released alongside inflation. A read on whether industry is actually producing more.
+2026-10-01,GOVT_CAPEX,Monthly GST collections,SCHEDULED,India,MONTHLY,Published on the first. The broadest monthly read on whether the economy is transacting.
+2026-10-01,MONSOON_DEFICIT,Monthly vehicle sales,SCHEDULED,India,MONTHLY,Published on the first. Tractor and two-wheeler numbers are the clearest monthly read on rural demand.
+
+# ---------------------------------------------------------------- Monsoon
+2027-04-15,MONSOON_DEFICIT,India Meteorological Department first forecast,SCHEDULED,India,ANNUAL,The first official view on the coming monsoon. Watch the number against the long-period average, not the adjectives.
+2027-05-27,MONSOON_DEFICIT,India Meteorological Department updated forecast,SCHEDULED,India,ANNUAL,The revised forecast, usually with a regional breakdown that matters more than the headline.
+2027-06-01,MONSOON_DEFICIT,Monsoon onset over Kerala,SCHEDULED,India,ANNUAL,The normal onset date. A delay of more than a week or two starts to show up in sowing.
+2027-09-30,MONSOON_DEFICIT,End of the monsoon season,SCHEDULED,India,ANNUAL,The final rainfall tally against the long-period average, which is what the rural demand outlook rests on for the next two quarters.
