@@ -65,6 +65,7 @@ and renaming it over the original is the version of this that cannot lose data.
 | ID | Severity | Title | Discovered | Notes |
 |---|---|---|---|---|
 | B-100 | P0 | A live-looking OpenAI API key was committed as a config default | 2026-09-12 | `application.yml` carried `ai.api-key: ${AI_API_KEY:sk-proj-...}` - a real-shaped key as the **default** of the env placeholder, present since the baseline commit. Removed from the working tree (`${AI_API_KEY:}`), but **it remains in git history**, which cannot be rewritten safely here. **The only real remedy is for the investor to rotate the key at the provider.** Stays open until that is done. See the full entry below. |
+| B-114 | P2 | The app failed to start on two mornings and left no diagnostic trace whatsoever | 2026-09-16 | `start-app.bat` discarded every byte it produced: Steps 1-2 wrote to a console Task Scheduler throws away, and Step 3 redirected `mvn spring-boot:run` to **nul**. The 09:00 `TradingApp-Start` task exited **1** on 2026-09-15 and again on 2026-09-16 (Sep-15 only came up at 10:14, by hand), and there is no record anywhere of why - `logs/trading-app.log` has no entry for either 09:00, because the script aborted before launching the JVM. Exit 1 can only come from Step 1, so `mvn clean compile` failed; the same command succeeded three minutes later and the task itself succeeded on a manual trigger at 09:12, so it is **intermittent**, cause not yet named. Leading hypothesis: the VSCode Java language server (launched ~08:22 both mornings, indexing when the task fires at 09:00) holds handles on `target\classes`, so `mvn clean` cannot delete it - the classic Windows lock. **Fix shipped 2026-09-16**: the script now appends everything to `logs/start-app.log` and sends console output to `logs/app-console.log` instead of nul, so the next failure names itself. Stays open until a captured failure confirms or refutes the hypothesis. |
 | B-008 | P2 | Logback `maxHistory` is 1 day — audit windows are tiny | 2026-05-10 | `trading-app.log` rolls daily, only one rolled file kept. A 5-day audit can only see ~2 days of data. Bump retention in `logback-spring.xml`. |
 | B-010 | P2 | Depreciation no longer in NSE quarterly JSON | 2026-05-10 | Lives only in XBRL files. `IntrinsicValuationService` falls back to net profit as FCF proxy (conservative). `FinancialQuality` cash-flow ratio treated as missing (neutral 50). Add XBRL parser if precision needed. |
 | B-012 | P2 | FII vs DII split is approximated 50/50 in shareholding | 2026-05-10 | Per-record split is in XBRL only. JSON has total promoter % and public %. Trend detection still works (FII and DII change directions are correlated), but absolute split is no longer authoritative. |
@@ -96,6 +97,49 @@ and renaming it over the original is the version of this that cannot lose data.
 ---
 
 ## Resolved Bugs
+
+### B-114 - The app failed to start on two mornings and left no diagnostic trace  `[P2]`  `OPEN`
+
+The investor reported the app was not starting. `TradingApp-Start` (09:00 MON-FRI) had
+`LastTaskResult = 1` for 2026-09-16, and the 2026-09-15 session only begins at **10:14** - a manual
+start hours after its scheduled one. `logs/trading-app.log` contains nothing at all for either
+09:00: the script aborted before the JVM launched.
+
+**Root cause of the blindness** (which is the part that is certain): `start-app.bat` threw away
+every byte it produced. Steps 1 and 2 printed to a console that Task Scheduler discards, and Step 3
+ran `start /B mvn spring-boot:run > nul 2>&1`. So a build failure, a port collision and a Spring
+boot failure were all indistinguishable from each other and from a healthy run - exactly the silent
+degradation this codebase documents repeatedly (B-054, Gotcha 94). Two consecutive failed mornings
+produced zero evidence.
+
+**Root cause of the failure itself**: not yet named. `exit /b 1` is reachable only from Step 1, so
+`mvn clean compile` failed. The same command succeeded at 09:03 (BUILD SUCCESS, 58 s) and the task
+itself succeeded on a manual trigger at 09:12 (`LastTaskResult = 0`, app up, 0 errors), so it is
+intermittent rather than a broken environment - `mvn`, `JAVA_HOME` and disk are all fine, and the
+task action, working directory and triggers are correct. Leading hypothesis, unproven: the VSCode
+Java language server starts ~08:22 on both failing mornings and holds file handles on
+`target\classes` while it indexes, so `mvn clean` cannot delete the directory; by 09:03 it has let
+go. Sep-14, when the 09:00 task did work, would then be a morning the editor was not yet open.
+
+**Blast radius**: a missed trading day of every scheduled job - the 14:00 screening, 15:18 holdings
+analysis, 15:22 outcome measurement, 15:28 tax-lot capture, and all four report emails. The
+freshness strip and `/api/dashboard/data-health` would show the gap the next day, but nothing
+alerts at 09:00, so the app being down is only noticed by a human opening the dashboard.
+
+**Fix shipped 2026-09-16** (partial - observability only): [start-app.bat](start-app.bat) now wraps
+its body in a subroutine redirected to `logs/start-app.log` (appended, with a timestamp and
+`JAVA_HOME` per run), and Step 3 writes to `logs/app-console.log` instead of nul. The
+`exit /b 1` on a failed `taskkill` inside the Step-2 `for` loop was also removed: `%ERRORLEVEL%`
+there expands at parse time, before the loop body ever runs, so the check never tested what it
+claimed to - and `netstat` legitimately lists one PID on several sockets, so the second `taskkill`
+reports "process not found" on a perfectly healthy run (observed at 09:12).
+
+**Verification**: triggered `TradingApp-Start` by hand at 09:12 - result 0, `logs/start-app.log`
+captured the full Maven run and both `taskkill` lines, app reached `Started IntradayApplication`
+with Tomcat on 8080 and 0 ERROR lines, `/api/dashboard/health` answered.
+
+**Stays open** until a captured 09:00 failure names the cause. If the language-server hypothesis
+holds, the fix is to retry the `clean` rather than abort on it.
 
 ### B-113 - The plausibility panel returned one verdict for every stock  `[P2]`  `RESOLVED 2026-09-14`
 
