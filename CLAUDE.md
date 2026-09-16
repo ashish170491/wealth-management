@@ -70,7 +70,11 @@ Recurring operational tasks are codified as Claude Code skills in `.claude/skill
 
 ```bash
 # Quick start (clean, compile, kill port 8080, start in background)
-start-app.bat  # Logs: logs\trading-app.log
+start-app.bat  # Logs: logs\trading-app.log (app), logs\start-app.log (the script's
+               # own run: Maven output, port kill, launch - appended per run), and
+               # logs\app-console.log (JVM stdout/stderr, truncated each start). The script
+               # used to discard all three, so a failed 09:00 scheduled start left no
+               # trace at all - B-114.
 
 # Stop the running application
 stop-app.bat
