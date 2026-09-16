@@ -62,7 +62,7 @@ class CompoundingLensResolutionTest {
                                                List<Object[]> depthRows) {
         MultibaggerScoreRepository scores = mock(MultibaggerScoreRepository.class);
         AnnualFundamentalsRepository fundamentals = mock(AnnualFundamentalsRepository.class);
-        when(scores.findRecentForSymbols(anyCollection(), any(LocalDate.class))).thenReturn(rows);
+        when(scores.findLatestForSymbolsSince(anyCollection(), any(LocalDate.class))).thenReturn(rows);
         when(fundamentals.countYearsBySymbol()).thenReturn(depthRows);
         return new CompoundingLensService(scores, fundamentals);
     }
@@ -141,7 +141,7 @@ class CompoundingLensResolutionTest {
         // what keeps the portfolio page inside its load budget.
         MultibaggerScoreRepository scores = mock(MultibaggerScoreRepository.class);
         AnnualFundamentalsRepository fundamentals = mock(AnnualFundamentalsRepository.class);
-        when(scores.findRecentForSymbols(anyCollection(), any(LocalDate.class)))
+        when(scores.findLatestForSymbolsSince(anyCollection(), any(LocalDate.class)))
                 .thenReturn(List.of(rich("NSE:A"), rich("NSE:B"), rich("NSE:C")));
         when(fundamentals.countYearsBySymbol()).thenReturn(List.of());
 
@@ -151,7 +151,7 @@ class CompoundingLensResolutionTest {
 
         assertThat(out).hasSize(3);
         org.mockito.Mockito.verify(scores, org.mockito.Mockito.times(1))
-                .findRecentForSymbols(anyCollection(), any(LocalDate.class));
+                .findLatestForSymbolsSince(anyCollection(), any(LocalDate.class));
     }
 
     @Test
@@ -159,7 +159,7 @@ class CompoundingLensResolutionTest {
     void repositoryFailureDegradesQuietly() {
         MultibaggerScoreRepository scores = mock(MultibaggerScoreRepository.class);
         AnnualFundamentalsRepository fundamentals = mock(AnnualFundamentalsRepository.class);
-        when(scores.findRecentForSymbols(anyCollection(), any(LocalDate.class)))
+        when(scores.findLatestForSymbolsSince(anyCollection(), any(LocalDate.class)))
                 .thenThrow(new RuntimeException("db down"));
 
         assertThat(new CompoundingLensService(scores, fundamentals)

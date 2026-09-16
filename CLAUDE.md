@@ -70,11 +70,12 @@ Recurring operational tasks are codified as Claude Code skills in `.claude/skill
 
 ```bash
 # Quick start (clean, compile, kill port 8080, start in background)
-start-app.bat  # Logs: logs\trading-app.log (app), logs\start-app.log (the script's
-               # own run: Maven output, port kill, launch - appended per run), and
-               # logs\app-console.log (JVM stdout/stderr, truncated each start). The script
-               # used to discard all three, so a failed 09:00 scheduled start left no
-               # trace at all - B-114.
+start-app.bat  # Logs: logs\trading-app.log (app) and logs\start-app.log (the script's own
+               # run: Maven output, port kill, launch - appended per run). The script used to
+               # discard both, so a failed 09:00 scheduled start left no trace at all (B-114).
+               # Each phase closes its own redirect: wrapping the whole script in one lets the
+               # app JVM inherit the handle and hold the log open for its whole life, which
+               # makes the NEXT run die at the redirect, silently.
 
 # Stop the running application
 stop-app.bat
@@ -1055,6 +1056,26 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     anyway, and a loss-making first or last year yielding no CAGR at all — a recovery from a loss is
     genuinely undefined, and both the negative and the enormous answer the arithmetic would otherwise
     give are wrong about good news.
+
+127. **A "newest row per symbol" map built in Java reads the whole table** (B-115). `findRecentForSymbols`
+    selects every screening row for a symbol list inside a window, and four callers used it only to keep the
+    last write per symbol. On the screener that is 276 symbols x up to four spellings (Gotcha 84) x a
+    **400-day** window against 27,845 rows — essentially the entire table hydrated as 103-column entities to
+    use 408 of them, and it put `GET /api/dashboard/screener` at **31.7 s cold** against `api.js`'s 8 s
+    timeout, so the dashboard showed its "did not answer in time" banner on every load. `findLatestForSymbolsSince`
+    asks the database instead (grouped max over the existing `(symbol, screening_date)` unique index): **44 ms**,
+    output byte-identical. Two rules. **A window plus an IN list is not a bounded query** — it is bounded by
+    how long the app has been screening, so it gets slower every week and nothing fails. And **`MacroMeasurementService`
+    deliberately still uses the old method**, because it keeps the newest row *with a positive price*: when a
+    caller's "last write wins" carries an extra condition, it is not the same question, and switching it would
+    silently drop data. Check what the loop body does before assuming two callers want the same rows.
+
+128. **Prove the process you measured contains the change** (B-115, process note). Two `start-app.bat` runs
+    appeared to succeed while port 8080 was still served by the process from an hour earlier: the health check
+    answered, so everything looked restarted, and the old code's 23 s -> 6.5 s -> 4.9 s **JIT warm-up** read
+    exactly like a fix landing. Caught only by comparing the process start time against the edit time. A
+    responding endpoint proves something is listening, never that it is your build — check `StartTime`, or a
+    fresh `Started IntradayApplication` line, before believing a before/after number.
 
 ## REST API Endpoints
 

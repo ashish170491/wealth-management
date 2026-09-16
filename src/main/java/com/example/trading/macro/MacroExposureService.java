@@ -249,9 +249,11 @@ public class MacroExposureService {
         }
         if (spellings.isEmpty()) return map;
         try {
-            // ASC by date, so writing every row leaves the newest per symbol - the convention the
-            // rest of the codebase already relies on.
-            for (MultibaggerScoreEntity row : scoreRepository.findRecentForSymbols(
+            // One row per symbol, newest first, resolved in SQL. This used to load every row in
+            // the 400-day window and keep the last write per symbol - the same answer, but on the
+            // screener it read ~100 screening dates for the whole universe and took 20-30 s of a
+            // page load that is supposed to be DB-only and fast (B-115).
+            for (MultibaggerScoreEntity row : scoreRepository.findLatestForSymbolsSince(
                     spellings, LocalDate.now().minusDays(SCORE_LOOKBACK_DAYS))) {
                 map.put(row.getSymbol(), row);
             }
