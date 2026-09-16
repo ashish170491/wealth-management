@@ -1077,6 +1077,21 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     responding endpoint proves something is listening, never that it is your build — check `StartTime`, or a
     fresh `Started IntradayApplication` line, before believing a before/after number.
 
+129. **A third party's free text does not fit a column you sized from today's feed, and `saveAll` turns
+    that into a total loss** (B-116). `ipo_issues.issue_type` is NSE's own wording, capped at
+    `varchar(32)` because every value seen at build time was under 20 characters. A **further public
+    offer** then arrived reading *"100% Book Building ( Further Public Offer)"* — 42 — and every IPO
+    capture from 2026-09-14 died. The width was half the bug; the other half is that
+    `IpoTrackingService` ended its run with one `repository.saveAll(...)`, so that row rolled back
+    **all 255** plus four minutes of paced NSE and Kite calls. **A bulk save at the end of an expensive
+    paced run is a single point of total failure** — save per row and report the count that failed
+    (B-049 is the same shape, and its lesson had not been carried here). Two rules beside it: widen
+    *and* truncate, because a length chosen from the current feed is the assumption that just failed;
+    and widening needs an explicit `ALTER ... TYPE` in `SchemaMigrationRunner`, since `ddl-auto=update`
+    adds columns but never alters an existing one's type (Gotcha 74, third face). **What found it was
+    the freshness strip**: a stamp that had stopped moving, and `/api/dashboard/data-health` naming the
+    job that owned it (SPEC §44). Nothing alerted — the scheduler caught the exception and carried on.
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):

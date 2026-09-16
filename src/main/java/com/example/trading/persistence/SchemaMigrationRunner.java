@@ -40,6 +40,7 @@ public class SchemaMigrationRunner {
             migrateLobToText(tableColumn[0], tableColumn[1]);
         }
         addMissingColumns();
+        widenColumns();
         dropObsoleteNotNullConstraints();
         normalizeRecommendationSymbols();
         backfillOutcomeDaysElapsed();
@@ -132,6 +133,32 @@ public class SchemaMigrationRunner {
             new String[]{"multibagger_scores", "fii_holding_pct", "double precision"},
             new String[]{"multibagger_scores", "dii_holding_pct", "double precision"}
     );
+
+    /**
+     * Columns whose declared width grew after the table was created. Hibernate's
+     * {@code ddl-auto=update} adds columns but never alters an existing one's type (Gotcha 74), so
+     * a widened {@code @Column(length = ...)} silently stays narrow and every write of a longer
+     * value fails at runtime. Format: {table, column, new type}.
+     */
+    private static final List<String[]> WIDEN_COLUMNS = List.<String[]>of(
+            // B-116: NSE's free-text "Issue Type" outgrew varchar(32) and failed the whole
+            // IPO capture transaction, freezing the table from 2026-09-14.
+            new String[]{"ipo_issues", "issue_type", "varchar(160)"}
+    );
+
+    /** Widen any column whose entity now declares more room than the table has. */
+    private void widenColumns() {
+        for (String[] spec : WIDEN_COLUMNS) {
+            try {
+                jdbc.execute("ALTER TABLE " + spec[0] + " ALTER COLUMN " + spec[1]
+                        + " TYPE " + spec[2]);
+            } catch (Exception e) {
+                log.warn("Schema migration: could not widen {}.{} to {} ({}). Writes of longer "
+                        + "values to that column will keep failing until it is widened.",
+                        spec[0], spec[1], spec[2], e.getMessage());
+            }
+        }
+    }
 
     /** Add any column the entity declares that the table is missing. */
     private void addMissingColumns() {
