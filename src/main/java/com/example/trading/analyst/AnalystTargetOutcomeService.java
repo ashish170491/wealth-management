@@ -86,6 +86,22 @@ public class AnalystTargetOutcomeService {
             return new MeasurementResult(0, 0, 0, 0, 0, 0, false, "No open analyst targets to measure.");
         }
 
+        // The deadline is checked BEFORE the cache is warmed, not only inside the loop below.
+        // Warming is the expensive half - one paced broker call per distinct symbol - so a run
+        // that starts already past its stop time used to fetch every candle and then break on
+        // the first iteration, spending exactly the budget the deadline exists to protect and
+        // measuring nothing. Observed 2026-09-17, when thread contention delayed the 13:20 job
+        // to 13:51 against a 13:50 stop: "0 open targets examined ... Candles: 93 fetched".
+        // Gotcha 97/101 - the reason for the guard is contention, so the guard has to cover the
+        // contention rather than the moment of asking.
+        if (shouldStop != null && shouldStop.getAsBoolean()) {
+            log.info("Analyst target measurement skipped: already past its stop time before any "
+                    + "broker call. {} open targets keep their place at the front of the next "
+                    + "run's queue.", open.size());
+            return new MeasurementResult(0, 0, 0, 0, 0, 0, true,
+                    "Past the stop time before measuring began; no broker calls were made.");
+        }
+
         LocalDate earliest = open.stream()
                 .map(AnalystTargetEntity::getIssuedOn)
                 .min(LocalDate::compareTo)

@@ -1092,6 +1092,27 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     the freshness strip**: a stamp that had stopped moving, and `/api/dashboard/data-health` naming the
     job that owned it (SPEC §44). Nothing alerted — the scheduler caught the exception and carried on.
 
+130. **A value stored as a date must be reported as a date — and JavaScript parses the two shapes in
+    different timezones** (B-119). `new Date("2026-09-17T15:15:00")` has no zone and is read as
+    **local** time; `new Date("2026-09-17")` is read as **UTC midnight**, which is 05:30 IST. Five of
+    the twelve freshness keys are bare dates, because the tables behind them are keyed by date and no
+    run time was ever recorded (`multibaggerScores`, `holdingsHistory`, `recommendationOutcomes`,
+    `holdingClassification`, `watchlistSnapshot`). `relative()` ran both through one `new Date()`, so
+    the 14:00 screening announced itself as **"9 hours ago"** on the strip at the top of *every*
+    screen, and rows aged into "1 day ago" five and a half hours early. That is the whole app
+    appearing stale while `/api/dashboard/data-health` reports 0 problems across 55 checks — which is
+    exactly how it presented. Two rules. **Answer a date in days** ("today" / "yesterday" / "N days
+    ago"): an hours-ago phrasing for a value with no recorded time invents precision nobody has, and
+    the invented figure here was not even midnight local but another timezone's midnight. And
+    **build a date-only stamp at local midnight** before any arithmetic — `daysAgo()` drives the
+    amber `.stale` class, so the same skew delayed a genuine late-table warning by 5.5 hours.
+    `dateTimeIst()` was already correct and is the model: its regex declines to match a date-only
+    value and falls back to `shortDate`, refusing to name an hour it was not given. Note what did
+    **not** find this: every server-side check passed, the syntax checker passed, and the pages
+    rendered — it took reading the strip's own words against the run time in the log. Sibling of
+    B-047 (a quarter filed as a year) and B-060 (an RSI whose window could not reach its period):
+    a figure quoted on a scale it was never measured on.
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):

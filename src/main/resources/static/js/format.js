@@ -136,20 +136,68 @@ export function dateTimeIst(iso) {
   return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}, ${h}:${m[5]} ${ampm}`;
 }
 
-/** Whole days between an ISO date/datetime and now. Null when unparseable. */
-export function daysAgo(iso) {
+/**
+ * Parses a freshness stamp, and says whether it carried a time of day.
+ *
+ * The two shapes the health payload mixes are parsed by different rules in JavaScript, which
+ * is the whole reason this helper exists. `2026-09-17T15:15:00` has no zone, so it is read as
+ * LOCAL time - correct here, because the server writes IST and the reader is in IST. But a
+ * bare `2026-09-17` is read as UTC midnight by specification, which is 05:30 IST: five and a
+ * half hours of age this app never actually accrued.
+ *
+ * @returns {{date: Date, dayOnly: boolean}|null} null when unparseable
+ */
+function parseStamp(iso) {
   if (!iso) return null;
-  const d = new Date(String(iso).replace(' ', 'T'));
-  if (Number.isNaN(d.getTime())) return null;
-  return Math.floor((Date.now() - d.getTime()) / 86400000);
+  const raw = String(iso).trim();
+  const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  if (dayOnly) {
+    const [y, m, d] = raw.split('-').map(Number);
+    return { date: new Date(y, m - 1, d), dayOnly: true };   // local midnight, not UTC
+  }
+  const date = new Date(raw.replace(' ', 'T'));
+  return Number.isNaN(date.getTime()) ? null : { date, dayOnly: false };
 }
 
-/** "just now" / "3 hours ago" / "2 days ago" — for the freshness strip. */
+/** Whole days between an ISO date/datetime and now. Null when unparseable. */
+export function daysAgo(iso) {
+  const parsed = parseStamp(iso);
+  if (!parsed) return null;
+  if (parsed.dayOnly) return calendarDaysAgo(parsed.date);
+  return Math.floor((Date.now() - parsed.date.getTime()) / 86400000);
+}
+
+/** Whole calendar days between a local midnight and today's local midnight. */
+function calendarDaysAgo(then) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((today.getTime() - then.getTime()) / 86400000);
+}
+
+/**
+ * "just now" / "3 hours ago" / "today" / "yesterday" — for the freshness strip.
+ *
+ * Five of the twelve freshness keys (screening scores, holdings history, pick outcomes, core
+ * tiers, watchlist history) are stored as a DATE, because the table behind them is keyed by
+ * date and no run time was ever recorded. An hours-ago phrasing for those is inventing a
+ * precision nobody has: read as UTC midnight, today's 14:00 screening reported itself as
+ * "9 hours ago", which is the freshness strip - on every page - telling the investor their
+ * data is far older than it is. Answer a date in days and say "today" when it is today
+ * (SPEC 21 rule 7: never render an assumption as a fact).
+ */
 export function relative(iso) {
   if (!iso) return 'never';
-  const d = new Date(String(iso).replace(' ', 'T'));
-  if (Number.isNaN(d.getTime())) return String(iso);
-  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  const parsed = parseStamp(iso);
+  if (!parsed) return String(iso);
+
+  if (parsed.dayOnly) {
+    const days = calendarDaysAgo(parsed.date);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    return `${days} days ago`;
+  }
+
+  const mins = Math.floor((Date.now() - parsed.date.getTime()) / 60000);
   if (mins < 2) return 'just now';
   if (mins < 60) return `${mins} min ago`;
   const hrs = Math.floor(mins / 60);
