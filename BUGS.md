@@ -100,6 +100,151 @@ and renaming it over the original is the version of this that cannot lose data.
 
 ## Resolved Bugs
 
+### B-119 - The freshness strip aged five tables by up to 15 hours, on every page  `[P2]`  `RESOLVED 2026-09-17`
+
+Found by investigating "I see stale data in my entire app" when every table was in fact current.
+`/api/dashboard/data-health` reported **0 problems across 55 checks**, prices were live, and the
+14:00 screening had written 274 rows that afternoon - yet the strip at the top of every screen
+read **"Scores: 9 hours ago"**.
+
+**Root cause**: `relative()` in `format.js` parsed both freshness shapes with a bare `new Date()`.
+The two shapes are parsed by *different rules* in JavaScript. A date-time with no zone
+(`2026-09-17T15:15:00`) is read as **local** time, which is correct here. A bare date
+(`2026-09-17`) is read as **UTC midnight** by specification - 05:30 IST. Five of the twelve
+freshness keys are dates, because the tables behind them are keyed by date and no run time was
+ever recorded: `multibaggerScores`, `holdingsHistory`, `recommendationOutcomes`,
+`holdingClassification`, `watchlistSnapshot`.
+
+So a screening that finished at 14:00 reported itself as "9 hours ago", and yesterday's rows
+aged into "1 day ago" five and a half hours early. `daysAgo()` - which drives the amber `.stale`
+class - had the same skew in the forgiving direction, so it flagged a genuinely late table up to
+5.5 hours after it was due.
+
+**Blast radius**: the freshness strip is the app's answer to "is what I am looking at current?",
+and it renders on all eleven screens (SPEC 27.12, Gotcha 116). Understating freshness there
+understates it everywhere at once, which is precisely the "entire app" shape of the complaint. The
+cost is the investor's trust in the screen - the same thing Gotcha 116 protects when it insists a
+refresh control must never claim an update it cannot demonstrate, and Gotcha 125 protects when it
+refuses to mark an on-demand key stale. A strip that cries stale on fresh data trains the eye past
+the colour on the keys where it means something.
+
+**Fix**: one `parseStamp()` helper now reports whether a stamp carried a time of day, and the
+date-only branch is built at **local** midnight. `relative()` answers a date in whole days -
+"today" / "yesterday" / "N days ago" - and never in hours, because **an hours-ago phrasing for a
+value with no recorded time is inventing precision nobody has** (SPEC 21 rule 7). `daysAgo()`
+counts whole calendar days for the same values. `dateTimeIst()` needed no change: its regex
+already declines to match a date-only value and falls back to `shortDate`, which is the same
+refusal one function earlier.
+
+**Verification**: headless render of all five affected pages before and after, reading the strip
+out of the DOM. Before - `Scores: 9 hours ago`, `History: 9 hours ago`, `Outcomes: 1 day ago`.
+After - `Scores: today`, `History: today`, `Outcomes: today`, with `Prices: 7 min ago` unchanged
+(it carries a real timestamp) and `Analyst targets: 1 day ago` correctly left alone, because that
+one genuinely had not advanced.
+
+**Prevention**: `relative()` had exactly one caller and no test, which is how a pure display
+function that every screen depends on went unexamined. The general rule, and the reason this is
+filed rather than quietly patched: **a value stored as a date must be reported as a date.** The
+moment it is rendered in hours, something has assumed a time of day - and here the assumption was
+not even midnight local, it was another timezone's midnight. Sibling of B-047 (a quarter filed as
+a year) and B-060 (an RSI whose window could not reach its period): all three are a figure quoted
+on a scale it was never measured on.
+
+
+### B-118 - A ternary unboxed a null and took down the long-horizon panel  `[P2]`  `RESOLVED 2026-09-17`
+
+Found in `logs/trading-app.log` during the same review - a 500 out of
+`GET /api/fundamentals/long-horizon`, which is the SPEC 42 capital-allocation record and the
+SPEC 43 compounding track record on the stock page.
+
+**Root cause**: `CompoundingPersistence.roce()` chose its EBIT figure like this -
+
+```java
+Double ebit = r.getProfitBeforeTax() != null && r.getInterestCost() != null
+        ? r.getProfitBeforeTax() + r.getInterestCost()
+        : r.getOperatingProfit();
+if (ebit == null) return null;
+```
+
+The true branch is `Double + Double`, which is a **primitive** `double`. Java's conditional
+operator applies binary numeric promotion when one branch is primitive and the other boxed, so the
+whole expression is typed `double` and `getOperatingProfit()` is **unboxed before it can be
+tested**. The `if (ebit == null)` on the very next line - written precisely to handle this case -
+is unreachable on that path. Any year carrying neither pair threw
+`NullPointerException: Cannot invoke "java.lang.Double.doubleValue()"`.
+
+**Blast radius**: a 500, not a degraded reading - so both long-horizon panels vanished for the
+affected stocks rather than saying "not enough years". That inverts the discipline these panels
+exist to uphold: SPEC 32.5 records that NSE's older archive filings often carry the profit and
+loss account but not the balance sheet, and `returnPersistence` already has an unmeasured branch
+with wording for exactly that gap. The code was written to report the absence and crashed on it
+instead.
+
+**Fix**: an explicit `if`/`else` assigning to `Double`, so both branches stay boxed and the
+existing null check does the job it was written for. A comment records why it must not be folded
+back into a ternary.
+
+**Verification**: `CompoundingPersistenceTest.missingEbitFiguresAreUnmeasuredRatherThanAnException`
+builds ten years with `profitBeforeTax` and `operatingProfit` both null, asserts `roce()` returns
+null and that `analyse()` returns a verdict. Confirmed to pin the defect rather than merely pass -
+reverted to the ternary and the test failed with the identical production stack trace
+(`NullPointerException ... getOperatingProfit() is null`), then passed again on restore. Suite:
+10/10 green.
+
+**Prevention**: grepped the `fundamentals` package for the same shape - this was the only
+instance; the neighbouring `borrowings` line uses `== null ? 0 :` on a primitive target, which is
+safe and intentional. The rule worth carrying: **a ternary whose branches mix a primitive
+arithmetic result with a boxed fallback silently unboxes the fallback**, so a null guard placed
+after it never runs. Where a null is a meaningful outcome rather than an error - which is most of
+this codebase (Gotcha 21, 44, 68) - assign it with an `if`/`else` and keep the declared type
+boxed.
+
+
+### B-117 - The analyst coverage panel called three covered holdings "no target on file"  `[P3]`  `RESOLVED 2026-09-17`
+
+Found by rendering the new SPEC §49.14 panel against the live book before shipping it, not in
+review and not by any check.
+
+**Root cause**: the panel split holdings into `covered` (`analystHouses > 0`) and `uncovered`
+(everything else), collapsing the two zero states that the whole feature exists to keep apart. A
+summary tile then read **"Nothing on file — 9"** with the sub-line *"no target reached our feeds"*,
+and the sentence beneath the table named all nine by ticker under **"No target on file:"**.
+
+Three of those nine — NITINSPIN, MARKSANS and NATIONALUM — have targets on file. NATIONALUM
+carries **ten**, from Emkay, ICICI Securities and Motilal Oswal. What is true of them is that
+nothing is *running*: every call has resolved or been revised away. The panel stated the opposite,
+in plain English, about a third of the group it named.
+
+**Blast radius**: the screen built to answer *"who is watching the stocks I own"* would have told
+the investor that three holdings are uncovered when the desks had covered them and gone quiet —
+which is a signal in itself, and the more interesting of the two states. It would also have
+silently deflated the ledger's apparent reach on exactly the screen used to judge it.
+
+**Why it happened**: the cell and the column got this right — `analystCoverageCell` branches on
+`analystHousesEver` and draws "None running" with the firms named. The *panel* was written after
+and re-derived its own grouping from `analystHouses` alone. Two pieces of arithmetic over one
+question, in one file, written twenty minutes apart: Gotcha 85's failure at the smallest possible
+scale, and proof it does not need two teams or two screens to happen.
+
+**Fix**: `quiet` (`houses == 0 && housesEver > 0`) and `never` (`houses == 0 && !housesEver`) are
+separate groups. The tile is now *"No live target — 9"* with the sub-line *"6 never quoted, 3
+covered before"*, and the two groups get their own sentences, the first saying what a desk going
+quiet on a holding means.
+
+**Verification**: headless render of `holdings.html#analysis` against the live book — the tile
+reads `9 / 6 never quoted, 3 covered before`; *"Covered before, nothing running now: NITINSPIN,
+MARKSANS, NATIONALUM"*; *"No target on file: LCCPROJECT, SKYGOLD, GNFC, SCI, RATHIST, GULPOLY"*.
+0 skeleton elements, no console error.
+
+**Prevention**: this is the same family as B-098 (a count rendered beside a list must be derived
+from that list) and Gotcha 121 (not-measured and nothing-applies must never render alike). The
+rule that would have caught it earlier: **when a renderer already distinguishes N states, a
+summary over the same rows must distinguish the same N states** — deriving the summary from a
+narrower predicate is how a carefully-kept distinction gets thrown away in the one place the
+reader actually looks. Neither the syntax checker nor any test can see this; it took reading the
+rendered sentence against the data.
+
+
 ### B-116 - One free-text field from NSE froze the whole IPO table for two days  `[P2]`  `RESOLVED 2026-09-16`
 
 Found while checking why the dashboard looked stale. Almost everything was simply not due yet - the

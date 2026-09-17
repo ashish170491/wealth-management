@@ -46,6 +46,8 @@ public class HoldingsViewDecorator {
     private final com.example.trading.universe.UniverseConfig universeConfig;
     /** SPEC 48.4. DB-only, like every other dependency here - no model, no NSE, no broker. */
     private final com.example.trading.macro.MacroExposureService macroExposureService;
+    /** SPEC 49.14. DB-only: the ledger the 13:20 pass already wrote, never a live fetch. */
+    private final com.example.trading.analyst.AnalystTargetViewService analystTargetViewService;
 
     /** Decorates every row in place and returns the same list, for use inline in a controller. */
     public List<HoldingsEntity> decorate(List<HoldingsEntity> holdings) {
@@ -84,6 +86,20 @@ public class HoldingsViewDecorator {
                     + "events column, which must not be read as 'no event affects it': {}", e.getMessage());
         }
 
+        // One query for the whole table (SPEC 49.14). Per row it would be ~120 lookups on a page
+        // load, because each holding resolves through up to four symbol spellings (Gotcha 84).
+        Map<String, com.example.trading.analyst.AnalystTargetViewService.Coverage> analyst = Map.of();
+        try {
+            analyst = analystTargetViewService.forSymbols(
+                    holdings.stream().map(HoldingsEntity::getSymbol).toList());
+        } catch (Exception e) {
+            // Say what the absence will look like. A blank analyst column reads as "nobody covers
+            // this", which is the one thing a failed lookup must never be mistaken for (Gotcha 44).
+            log.warn("Analyst coverage lookup failed - every holding will read 'not measured' in "
+                    + "the analyst column, which must not be read as 'no broker covers it': {}",
+                    e.getMessage());
+        }
+
         for (HoldingsEntity h : holdings) {
             try {
                 decorateOne(h, timing.get(h.getSymbol()));
@@ -91,6 +107,7 @@ public class HoldingsViewDecorator {
                 applyHoldingPeriod(h);
                 applyIpo(h);
                 applyMacro(h, macro.get(h.getSymbol()));
+                applyAnalyst(h, analyst.get(h.getSymbol()));
                 h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
             } catch (Exception e) {
                 log.warn("Could not decorate {} — its row falls back to the raw stored signal: {}",
@@ -111,6 +128,7 @@ public class HoldingsViewDecorator {
             applyHoldingPeriod(h);
             applyIpo(h);
             applyMacro(h, macroExposureService.forSymbol(h.getSymbol()));
+            applyAnalyst(h, analystTargetViewService.forSymbolCoverage(h.getSymbol()));
             h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
         } catch (Exception e) {
             log.warn("Could not decorate {}: {}", h.getSymbol(), e.getMessage());
@@ -138,6 +156,39 @@ public class HoldingsViewDecorator {
                 .map(com.example.trading.macro.MacroExposureRead.Reason::text).toList());
         h.setMacroExposureEvents(result.reasons().isEmpty() ? null : result.reasons().size());
         h.setMacroExposureFrom(reading.symbolAnswered());
+    }
+
+    /**
+     * Who is quoting a target on this holding (SPEC 49.14).
+     *
+     * <p>A null reading leaves every field null, so the column reads "not measured" rather than
+     * "nobody covers it" — those are different facts and the second one is not ours to assert
+     * (Gotcha 44). A reading that found nothing is different again: it sets a counted <b>zero</b>,
+     * because the ledger genuinely was searched. What a zero means is still bounded by SPEC 49.7,
+     * and the note the reading carries says so in words.
+     *
+     * <p>Contributes zero points to any score and is not an input to any verdict.
+     */
+    private static void applyAnalyst(HoldingsEntity h,
+                                     com.example.trading.analyst.AnalystTargetViewService.Coverage c) {
+        if (c == null) {
+            return;
+        }
+        h.setAnalystHouses(c.houses());
+        h.setAnalystHouseNames(c.houseNames());
+        h.setAnalystOpenTargets(c.openTargets());
+        h.setAnalystMedianTarget(c.medianTarget());
+        h.setAnalystHighestTarget(c.highestTarget());
+        h.setAnalystLowestTarget(c.lowestTarget());
+        h.setAnalystUpsidePct(c.impliedUpsidePct());
+        h.setAnalystPriceAsStored(c.priceAsStored());
+        h.setAnalystPriceAsOf(c.priceAsOf());
+        h.setAnalystHousesEver(c.housesEver());
+        h.setAnalystHouseNamesEver(c.houseNamesEver());
+        h.setAnalystTargetsEver(c.targetsEver());
+        h.setAnalystLastCallOn(c.lastCallOn());
+        h.setAnalystTargetsFrom(c.symbolAnswered());
+        h.setAnalystNote(c.note());
     }
 
     private void decorateOne(HoldingsEntity h, HoldingsBuyTimingService.HoldingBuyTiming t) {

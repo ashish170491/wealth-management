@@ -56,6 +56,30 @@ class CompoundingPersistenceTest {
     }
 
     @Test
+    @DisplayName("A year with no profit-before-tax and no operating profit is unmeasured, not a crash")
+    void missingEbitFiguresAreUnmeasuredRatherThanAnException() {
+        // The live defect: `roce` chose between `pbt + interest` (a primitive double) and the
+        // boxed `operatingProfit` in a ternary, so Java promoted the whole expression to double
+        // and unboxed the fallback BEFORE the null check on the next line could run. Any company
+        // whose row carries neither pair threw NullPointerException out of
+        // GET /api/fundamentals/long-horizon, blanking the capital-allocation and compounding
+        // panels entirely. An absent figure is an absence (Gotcha 21, 44) - never an exception.
+        List<AnnualFundamentalsEntity> history = new ArrayList<>();
+        for (int fy = 2016; fy <= 2025; fy++) {
+            AnnualFundamentalsEntity r = year(fy, 1000, 150, 500, 20, 100);
+            r.setProfitBeforeTax(null);     // NSE's older archive filings often carry neither
+            r.setOperatingProfit(null);
+            history.add(r);
+        }
+
+        assertThat(CompoundingPersistence.roce(history.get(0))).isNull();
+
+        CompoundingPersistence.Result result = CompoundingPersistence.analyse(history, false);
+        assertThat(result).isNotNull();
+        assertThat(result.verdict()).isNotNull();
+    }
+
+    @Test
     @DisplayName("A steady compounder passes every applicable check")
     void steadyCompounderIsProven() {
         CompoundingPersistence.Result r = CompoundingPersistence.analyse(steadyCompounder(), false);

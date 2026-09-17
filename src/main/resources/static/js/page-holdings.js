@@ -40,6 +40,9 @@ import { donut, gauge, barChart, sparkline, lineChart, legend, scatter, COLORS }
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank, COMPOUNDING } from './compounding.js';
 import { macroExposureCol, macroFilterGroup, macroCoverageLine } from './macro-cells.js';
+import {
+  analystCoverageCol, analystFilterGroup, analystCoverageLine, analystCoveragePanel,
+} from './analyst-cells.js';
 
 const view = document.getElementById('view');
 
@@ -737,6 +740,7 @@ const HOLDING_FILTERS = chipFilters([
     ],
   },
   macroFilterGroup(),
+  analystFilterGroup(),
   {
     label: 'Position:',
     key: 'pnl',
@@ -783,6 +787,10 @@ function holdingsTable(rows, matrix) {
     },
     { key: 'overallScore', label: 'Score', align: 'r', render: (h) => scoreBar(h.overallScore) },
     { key: 'compounding', label: 'Compounds?', value: compoundingRank, render: compoundingCell },
+    // Who else is watching this stock (SPEC 49.14). Beside the app's own verdict, never blended
+    // into it: a brokerage target is somebody else's opinion recorded so it can be scored later,
+    // and it contributes zero points to anything here.
+    analystCoverageCol(),
     { key: 'recommendation', label: 'Signal', render: signalCell },
     { key: 'rsi14', label: 'RSI', align: 'r', render: (h) => (missing(h.rsi14) ? unmeasured() : h.rsi14.toFixed(0)) },
     { key: 'stockPe', label: 'P/E', align: 'r', render: (h) => (missing(h.stockPe) ? unmeasured('No P/E computed for this stock') : h.stockPe.toFixed(1)) },
@@ -1028,7 +1036,20 @@ function renderAnalysis() {
     holdingsTable(HOLDING_FILTERS.apply(data.holdings || []), data.matrix),
     // Mandatory beneath the Macro column (Gotcha 44): an empty-looking column must never be
     // read as "nothing is wrong" when it may mean "nothing was checked".
-    macroCoverageLine(data.holdings || [])));
+    macroCoverageLine(data.holdings || []),
+    // Same rule for the Analysts column: a column full of "None on file" must not read as "the
+    // market has no view on what I own" when it means this app's ledger is thin (SPEC 49.7).
+    analystCoverageLine(data.holdings || [])));
+
+  const analyst = analystCoveragePanel(data.holdings || []);
+  if (analyst) {
+    nodes.push(section('Who else is covering what you own',
+      'Which brokerages have a price target running on each of your holdings, and what they are '
+      + 'quoting. This is other people’s opinion, recorded so it can be scored later — it is not '
+      + 'this app’s view and it changes no score here. A stock with no target on file is usually '
+      + 'one no published note reached, not one nobody follows.',
+      analyst));
+  }
 
   nodes.push(section('How spread out is your money?',
     'Your holdings grouped by sector. A single slice dominating means your portfolio rises and falls with one part of the economy. Holdings with no sector on record are named, not hidden in a slice.',

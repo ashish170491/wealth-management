@@ -343,9 +343,18 @@ public final class CompoundingPersistence {
         double borrowings = r.getBorrowings() == null ? 0 : r.getBorrowings();
         double capital = r.getEquity() + borrowings;
         if (capital <= 0) return null;
-        Double ebit = r.getProfitBeforeTax() != null && r.getInterestCost() != null
-                ? r.getProfitBeforeTax() + r.getInterestCost()
-                : r.getOperatingProfit();
+        // Written as an if/else, NOT a ternary. `pbt + interest` is a primitive double, so a
+        // conditional mixing it with the boxed getOperatingProfit() is promoted to double and
+        // the fallback is UNBOXED before it can be tested - which threw NullPointerException
+        // out of GET /api/fundamentals/long-horizon for any company whose row carries neither
+        // pair, taking the whole capital-allocation and compounding panel down with it. The
+        // null check below reads as though it guards that case; in a ternary it never runs.
+        Double ebit;
+        if (r.getProfitBeforeTax() != null && r.getInterestCost() != null) {
+            ebit = r.getProfitBeforeTax() + r.getInterestCost();
+        } else {
+            ebit = r.getOperatingProfit();
+        }
         if (ebit == null) return null;
         return ebit / capital * 100.0;
     }
