@@ -66,6 +66,8 @@ and renaming it over the original is the version of this that cannot lose data.
 |---|---|---|---|---|
 | B-100 | P0 | A live-looking OpenAI API key was committed as a config default | 2026-09-12 | `application.yml` carried `ai.api-key: ${AI_API_KEY:sk-proj-...}` - a real-shaped key as the **default** of the env placeholder, present since the baseline commit. Removed from the working tree (`${AI_API_KEY:}`), but **it remains in git history**, which cannot be rewritten safely here. **The only real remedy is for the investor to rotate the key at the provider.** Stays open until that is done. See the full entry below. |
 | B-114 | P2 | The app failed to start on two mornings and left no diagnostic trace whatsoever | 2026-09-16 | `start-app.bat` discarded every byte it produced: Steps 1-2 wrote to a console Task Scheduler throws away, and Step 3 redirected `mvn spring-boot:run` to **nul**. The 09:00 `TradingApp-Start` task exited **1** on 2026-09-15 and again on 2026-09-16 (Sep-15 only came up at 10:14, by hand), and there is no record anywhere of why - `logs/trading-app.log` has no entry for either 09:00, because the script aborted before launching the JVM. Exit 1 can only come from Step 1, so `mvn clean compile` failed; the same command succeeded three minutes later and the task itself succeeded on a manual trigger at 09:12, so it is **intermittent**, cause not yet named. Leading hypothesis: the VSCode Java language server (launched ~08:22 both mornings, indexing when the task fires at 09:00) holds handles on `target\classes`, so `mvn clean` cannot delete it - the classic Windows lock. **Fix shipped 2026-09-16**: the script now appends everything to `logs/start-app.log` and sends console output to `logs/app-console.log` instead of nul, so the next failure names itself. Stays open until a captured failure confirms or refutes the hypothesis. |
+| B-115 | P1 | The screener page timed out on every load: one query read the whole score table to keep 276 rows | 2026-09-16 | The dashboard showed *"the app is running but did not answer in time"* on the screener. `GET /api/dashboard/screener` measured **31.7 s cold** against `api.js`'s 8 s `TIMEOUT_MS`, so the page fell back to its last saved view every time. Cause: `MacroExposureService.latestScores` (and three siblings) called `findRecentForSymbols`, which loads **every** screening row for the given symbols over a 400-day window and then keeps the newest per symbol in a Java map. On the screener that is 276 symbols x up to four spellings (Gotcha 84) against a table of **27,845 rows / 408 symbols / 112 dates** - effectively the whole table, hydrated as 103-column entities, to use 408 of them. Stack sampling put 11 of 12 in-request samples in that one call. **Fix**: `findLatestForSymbolsSince` returns one row per symbol, resolved in SQL via a grouped max over the existing `(symbol, screening_date)` unique index; three callers with identical semantics switched to it. `EXPLAIN ANALYZE` on the new query: **44 ms**. Screener cold **31.7 s -> 3.2 s**, warm **~0.9 s**; summary 8.9 s -> 1.5 s; watchlist 3.0 s -> 0.7 s. Output verified **byte-identical** across all 276 rows and 103 fields. Resolved 2026-09-16. |
+| B-116 | P2 | One free-text field from NSE froze the whole IPO table for two days | 2026-09-16 | `ipo_issues.issue_type` is NSE's own words for the offer structure, stored in a `varchar(32)`. A **further public offer** entered the pipeline reading *"100% Book Building ( Further Public Offer)"* - **42 characters** - and every capture since **2026-09-14** died on `value too long for type character varying(32)`. Two failures in one: the column was sized for the values seen at build time rather than for third-party prose, and `IpoTrackingService` ends its run with a single `repository.saveAll(...)`, so one bad row rolled back **all 255** and discarded ~4 minutes of paced NSE and Kite calls - the same shape as B-049. The scheduler logged the exception and moved on, and the only outward sign was `ipoIssues` sitting at 2026-09-14 on the freshness strip, which `/api/dashboard/data-health` correctly reported as WATCH. **Fix**: column widened to 160 with an explicit `ALTER ... TYPE` in `SchemaMigrationRunner` (Gotcha 74 - `ddl-auto=update` never alters an existing column's type), the value truncated on write so no future length can abort a run, and rows saved one at a time with the failure count reported in the capture note. Verified: capture returns 200, 255 rows touched, 232 prices refreshed, 0 failures; data-health back to OK. Resolved 2026-09-16. |
 | B-008 | P2 | Logback `maxHistory` is 1 day — audit windows are tiny | 2026-05-10 | `trading-app.log` rolls daily, only one rolled file kept. A 5-day audit can only see ~2 days of data. Bump retention in `logback-spring.xml`. |
 | B-010 | P2 | Depreciation no longer in NSE quarterly JSON | 2026-05-10 | Lives only in XBRL files. `IntrinsicValuationService` falls back to net profit as FCF proxy (conservative). `FinancialQuality` cash-flow ratio treated as missing (neutral 50). Add XBRL parser if precision needed. |
 | B-012 | P2 | FII vs DII split is approximated 50/50 in shareholding | 2026-05-10 | Per-record split is in XBRL only. JSON has total promoter % and public %. Trend detection still works (FII and DII change directions are correlated), but absolute split is no longer authoritative. |
@@ -98,6 +100,99 @@ and renaming it over the original is the version of this that cannot lose data.
 
 ## Resolved Bugs
 
+### B-116 - One free-text field from NSE froze the whole IPO table for two days  `[P2]`  `RESOLVED 2026-09-16`
+
+Found while checking why the dashboard looked stale. Almost everything was simply not due yet - the
+screening runs at 14:00, holdings analysis at 15:15 - but `/api/dashboard/data-health` flagged the IPO
+pipeline as one session behind, and a manual `POST /api/ipo/capture` returned **500**.
+
+**Root cause**: `ipo_issues.issue_type` carries NSE's own description of the offer structure and was
+declared `@Column(length = 32)`. Every value seen when the feature shipped fitted ("100% Book Building"
+is 18, "Book Building" is 13). Then a **further public offer** entered the pipeline reading
+*"100% Book Building ( Further Public Offer)"* - **42 characters** - and every capture from 2026-09-14
+died on `value too long for type character varying(32)`.
+
+**The second half is the one that matters.** `IpoTrackingService.capture` ends with a single
+`repository.saveAll(touched.values())`, which is one transaction, so that one row rolled back **all
+255** - together with ~4 minutes of paced NSE and Kite calls already spent on prices and listing
+candles. A field nothing scores on, describing an issue the investor had not asked about, silently
+discarded the entire day's IPO data. B-049 is the same shape (`queue()` outside the per-symbol `try`,
+one unique-constraint collision discarding twenty minutes of completed scan), and it was not applied
+here.
+
+**Fix**: three parts, because the defect has three independent halves.
+1. `issue_type` widened to 160, with an explicit `ALTER TABLE ... ALTER COLUMN ... TYPE` in a new
+   `WIDEN_COLUMNS` block in `SchemaMigrationRunner` - `ddl-auto=update` adds columns but never alters
+   an existing one's type (Gotcha 74), so changing the annotation alone would have done nothing.
+2. The value is **truncated on write** (`fit(...)`). Widening alone just moves the cliff; a length
+   chosen from today's feed is the assumption that failed in the first place.
+3. `saveEachSeparately` replaces both `saveAll` calls and **returns the failure count**, which the
+   capture note reports. One unstorable row now keeps its previously stored values and says so at
+   WARN, naming what the reader will see; every other row in the run is kept.
+
+**Verification**: `POST /api/ipo/capture` -> 200 in 240 s, "255 mainboard issues touched, 33 detail
+pages read, 232 prices refreshed, 4 listing-day candles fetched", no failure clause. The stored
+`issue_type` is now the full 42-character string. `/api/dashboard/data-health` moved the IPO pipeline
+from WATCH to **OK (up to date 2026-09-16)** and reports 0 problems across 55 checks.
+
+**Worth noting about the detection.** Nothing alerted. The scheduler caught the exception and carried
+on, so the app looked healthy for two days; what surfaced it was the freshness strip showing a date
+that had stopped moving, and the data-health screen saying which job owned that date (SPEC 44). That is
+exactly what that screen was built for, and this is the first time it has paid.
+
+### B-115 - The screener page timed out on every load  `[P2]`  `RESOLVED 2026-09-16`
+
+The investor reported the dashboard showing *"The app is running but did not answer in time, so this
+page is showing your last saved view. That usually means it is still warming up."* It was not warming
+up. `GET /api/dashboard/screener` measured **31.7 s on a fresh JVM** and 19-27 s after, against the 8 s
+`TIMEOUT_MS` in `static/js/api.js`, so `paintOffline(false, 'timeout')` fired on every load and the
+page rendered stale content. `/api/dashboard/summary` sat at 5.4-8.9 s, straddling the same limit.
+
+**Root cause**: `MultibaggerScoreRepository.findRecentForSymbols` selects every row for a symbol list
+inside a date window, and all four of its callers used it to build a "newest row per symbol" map by
+writing each row into a `Map` and letting the last write win. Correct, and enormously wasteful: the
+macro reading on the screener asks for 276 symbols, `SymbolVariants.candidates` expands each to up to
+four spellings (Gotcha 84), and `SCORE_LOOKBACK_DAYS` is **400**. Measured against the live table -
+**27,845 rows, 408 symbols, 112 screening dates** - that is essentially the entire table hydrated into
+103-column entities, to keep 408 of them. Stack sampling during a request put **11 of 12** in-request
+samples inside `MacroExposureService.latestScores`.
+
+**Fix**: `findLatestForSymbolsSince` asks the database the question the Java code was asking:
+
+    WHERE (m.symbol, m.screeningDate) IN (
+        SELECT m2.symbol, MAX(m2.screeningDate) FROM ... WHERE m2.symbol IN :symbols
+        AND m2.screeningDate >= :fromDate GROUP BY m2.symbol)
+
+The `(symbol, screeningDate)` unique constraint already on the table guarantees one row per symbol and
+supplies the index; `EXPLAIN ANALYZE` reports **44 ms** with a 1,173-element IN list. Three callers with
+identical semantics moved onto it: `MacroExposureService.latestScores`, `CompoundingLensService
+.latestBySymbol`, `PortfolioPerformanceService`. **`MacroMeasurementService` deliberately did not**: it
+keeps the newest row *with a positive price*, so an older row can legitimately answer where the newest
+cannot, and narrowing it to one row per symbol would silently drop prices.
+
+**Measured, fresh JVM, same data:**
+
+| Endpoint | Before | After |
+|---|---|---|
+| `/api/dashboard/screener` (first call) | 31.7 s | 3.2 s |
+| `/api/dashboard/screener` (warm) | 19-27 s | 0.83-1.0 s |
+| `/api/dashboard/summary` | 5.4-8.9 s | 1.5-2.2 s |
+| `/api/watchlist/items` | 3.0 s | 0.67 s |
+| `/api/trading/holdings/buy-timing` | 3.0 s | 0.78 s |
+| `/api/portfolio/performance` | 0.95 s | 0.23 s |
+
+**Verification**: the full screener payload was captured before and after and compared field by field -
+276 rows, 103 fields, **zero differences**, macro readings and compounding verdicts present on the same
+rows as before. 805 tests pass.
+
+**A process note worth keeping.** The first "after" numbers I took were wrong, and they were wrong in
+the flattering direction. Two `./start-app.bat` runs appeared to succeed while the app on port 8080 was
+still PID 30612 from 09:14 - the restarts never happened, the health check answered from the old
+process, and 23 s -> 6.5 s -> 4.9 s was the *old* code warming up under JIT, which reads exactly like a
+fix working. It was caught by checking the process start time against the edit time. **Before believing
+a performance measurement, prove the process you measured contains the change** - a responding health
+endpoint proves only that something is listening.
+
 ### B-114 - The app failed to start on two mornings and left no diagnostic trace  `[P2]`  `OPEN`
 
 The investor reported the app was not starting. `TradingApp-Start` (09:00 MON-FRI) had
@@ -126,9 +221,21 @@ analysis, 15:22 outcome measurement, 15:28 tax-lot capture, and all four report 
 freshness strip and `/api/dashboard/data-health` would show the gap the next day, but nothing
 alerts at 09:00, so the app being down is only noticed by a human opening the dashboard.
 
-**Fix shipped 2026-09-16** (partial - observability only): [start-app.bat](start-app.bat) now wraps
-its body in a subroutine redirected to `logs/start-app.log` (appended, with a timestamp and
-`JAVA_HOME` per run), and Step 3 writes to `logs/app-console.log` instead of nul. The
+**Fix shipped 2026-09-16** (partial - observability only): [start-app.bat](start-app.bat) logs its
+build and port-kill phases to `logs/start-app.log` (appended, with a timestamp and `JAVA_HOME` per
+run). **Corrected the same day**: the first cut wrapped the *whole* script in one redirect, and
+`start` then handed that inherited handle down the chain cmd -> mvn -> the app JVM, which holds
+`logs/start-app.log` open for as long as the app runs. The next run then died at the redirect with
+"the process cannot access the file", printing nothing - the identical silent failure this logging
+exists to prevent, now triggered on every restart. Proven directly: with the app up, `echo >> logs
+\start-app.log` from a fresh shell fails, and it succeeds the moment the app is stopped. Each phase
+now closes its own redirect, the launch runs outside all of them, a locked log falls back to
+`start-app-alt-<n>.log` rather than aborting the start, and Step 2 clears the leftover Maven
+launcher and cmd wrapper that outlive the app and hold `target\` (that filter is restricted to
+`cmd.exe`/`java.exe`: a broader `CommandLine -like '*spring-boot:run*'` match also kills the shell
+that typed the command, which it did to mine). The JVM console goes back to nul - capturing it needs
+a second lockable file for little gain, since logback initialises early enough that boot failures
+reach `trading-app.log`. The
 `exit /b 1` on a failed `taskkill` inside the Step-2 `for` loop was also removed: `%ERRORLEVEL%`
 there expands at parse time, before the loop body ever runs, so the check never tested what it
 claimed to - and `netstat` legitimately lists one PID on several sockets, so the second `taskkill`

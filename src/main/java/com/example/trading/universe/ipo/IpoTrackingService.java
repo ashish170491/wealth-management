@@ -18,6 +18,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -191,7 +192,7 @@ public class IpoTrackingService {
         }
 
         for (IpoIssueEntity e : touched.values()) e.setCapturedAt(now);
-        repository.saveAll(touched.values());
+        int failedEarly = saveEachSeparately(touched.values());
 
         int prices = 0;
         int candles = 0;
@@ -200,16 +201,53 @@ public class IpoTrackingService {
             candles = backfillListingCandles(touched.values(), today, stop);
             stoppedEarly = stop.getAsBoolean();
         }
-        repository.saveAll(touched.values());
+        int failed = failedEarly + saveEachSeparately(touched.values());
 
         String note = String.format("%d mainboard issues touched (%d in the pipeline, %d listed/closed, %d listing "
                         + "dates taken from the equity list where the feed had none); %d SME rows dropped by design; "
                         + "%d detail pages read; %d prices refreshed; %d listing-day candles fetched%s.",
                 touched.size(), needDetail.size(), pastSeen, listingDatesFilled, sme, details, prices, candles,
-                stoppedEarly ? "; stopped early at the protected window" : "");
+                stoppedEarly ? "; stopped early at the protected window" : "")
+                + (failed == 0 ? "" : String.format(" %d row(s) could not be stored and were skipped "
+                        + "- see WARN lines above; the rest of the run was kept.", failed));
         log.info("IPO capture: {}", note);
         return new CaptureResult(upcoming.size() + current.size(), pastSeen, sme, touched.size(),
                 details, prices, candles, stoppedEarly, note);
+    }
+
+    /**
+     * Saves one row at a time so a single bad row cannot discard the run.
+     *
+     * <p>`saveAll` is one transaction: on 2026-09-16 a single issue whose NSE "Issue Type" ran past
+     * the column width failed the lot, and the capture had silently written nothing since 14 Sep
+     * while the scheduler reported an exception and moved on (B-116). Two minutes of paced NSE and
+     * Kite calls, and ~250 good rows, thrown away for one field nothing scores on. Same shape as
+     * B-049, where one unique-constraint collision discarded twenty minutes of completed scan.
+     *
+     * @return how many rows could not be stored - never silently zero
+     */
+    private int saveEachSeparately(Collection<IpoIssueEntity> rows) {
+        int failed = 0;
+        for (IpoIssueEntity row : rows) {
+            try {
+                repository.save(row);
+            } catch (Exception ex) {
+                failed++;
+                // WARN, and name what the absence will look like: this issue keeps whatever was
+                // last stored for it, so the page shows a stale row rather than nothing at all.
+                log.warn("IPO capture: could not store {} ({}). That issue keeps its previously "
+                        + "stored values; every other row in this run was saved.",
+                        row.getSymbol(), ex.getMessage());
+            }
+        }
+        return failed;
+    }
+
+    /** Trims third-party free text to what the column can hold. Null stays null. */
+    private static String fit(String value, int max) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
     }
 
     private IpoIssueEntity rowFor(Map<String, IpoIssueEntity> touched, String tradingSymbol) {
@@ -220,7 +258,7 @@ public class IpoTrackingService {
 
     private static void applyDetail(IpoIssueEntity e, IpoFeedParser.Detail d, LocalDateTime now, LocalDate today) {
         if (d.issueSizeText() != null) e.setIssueSizeText(d.issueSizeText());
-        if (d.issueType() != null) e.setIssueType(d.issueType());
+        if (d.issueType() != null) e.setIssueType(fit(d.issueType(), 160));
         if (d.faceValue() != null) e.setFaceValue(d.faceValue());
         if (d.lotSize() != null) e.setLotSize(d.lotSize());
         if (e.getPriceBandLow() == null && d.bandLow() != null) e.setPriceBandLow(d.bandLow());
