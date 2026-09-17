@@ -220,6 +220,85 @@ public class HoldingsEntity {
     @Transient
     private String macroExposureFrom;
 
+    // ---- Analyst target coverage (SPEC 49.14) -----------------------------------------------
+    // WHO IS WATCHING THIS STOCK, not what this app thinks of it. Contributes zero points to any
+    // score, is not an input to BuyTimingVerdict, and its vocabulary contains no instruction to
+    // transact. Attached here so every holdings read path carries the same counts and no two
+    // screens can disagree about how many firms cover one holding (SPEC 6.6, Gotcha 85).
+
+    /**
+     * Brokerages with a target still running on this stock.
+     *
+     * <p><b>Zero means counted zero</b> — the ledger was searched and nothing is live. Null means
+     * the lookup did not run at all. The two are different facts and the UI draws them
+     * differently (Gotcha 21, 121). Note what a zero here does NOT mean: coverage is bounded by
+     * what reaches this app's feeds (SPEC 49.7), so "no house quoting it" is a statement about
+     * the feed, never about whether analysts follow the company.
+     */
+    @Transient
+    private Integer analystHouses;
+
+    /** The firms, named. A count with no names cannot be checked or argued with. */
+    @Transient
+    private java.util.List<String> analystHouseNames;
+
+    /** Live targets. Exceeds {@code analystHouses} when a firm has revised (B-041). */
+    @Transient
+    private Integer analystOpenTargets;
+
+    /** Median of the live targets — never called a consensus (SPEC 49.8). */
+    @Transient
+    private Double analystMedianTarget;
+
+    /** Upside from the last stored price to that median. Null, never 0, if either leg is missing. */
+    @Transient
+    private Double analystUpsidePct;
+
+    /** Highest and lowest live target, so the spread of opinion is visible beside the median. */
+    @Transient
+    private Double analystHighestTarget;
+
+    @Transient
+    private Double analystLowestTarget;
+
+    /**
+     * The price the upside was measured from, and the day it was stored.
+     *
+     * <p>This is the ledger's own last-measured close, <b>not</b> {@code currentPrice} on this
+     * row — they come from different passes and can differ. Carried so a screen can name the
+     * basis instead of leaving a reader to recompute the percentage against the price column
+     * beside it and conclude the app is wrong. A reading must be traceable (Gotcha 84's rule,
+     * applied to a figure rather than to a symbol).
+     */
+    @Transient
+    private Double analystPriceAsStored;
+
+    @Transient
+    private java.time.LocalDate analystPriceAsOf;
+
+    /** Firms that have ever quoted a target here. Covered-but-quiet is not never-covered. */
+    @Transient
+    private Integer analystHousesEver;
+
+    @Transient
+    private java.util.List<String> analystHouseNamesEver;
+
+    /** Every target on file for this stock, live or closed. */
+    @Transient
+    private Integer analystTargetsEver;
+
+    /** The most recent call, so a stale book reads as stale rather than as current. */
+    @Transient
+    private java.time.LocalDate analystLastCallOn;
+
+    /** Which symbol spelling carried the targets, so a reading can be traced (Gotcha 84). */
+    @Transient
+    private String analystTargetsFrom;
+
+    /** The plain-English state: nothing on file, covered but quiet, or N firms running. */
+    @Transient
+    private String analystNote;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

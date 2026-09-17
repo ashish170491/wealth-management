@@ -200,6 +200,51 @@ this codebase (Gotcha 21, 44, 68) - assign it with an `if`/`else` and keep the d
 boxed.
 
 
+### B-117 - The analyst coverage panel called three covered holdings "no target on file"  `[P3]`  `RESOLVED 2026-09-17`
+
+Found by rendering the new SPEC §49.14 panel against the live book before shipping it, not in
+review and not by any check.
+
+**Root cause**: the panel split holdings into `covered` (`analystHouses > 0`) and `uncovered`
+(everything else), collapsing the two zero states that the whole feature exists to keep apart. A
+summary tile then read **"Nothing on file — 9"** with the sub-line *"no target reached our feeds"*,
+and the sentence beneath the table named all nine by ticker under **"No target on file:"**.
+
+Three of those nine — NITINSPIN, MARKSANS and NATIONALUM — have targets on file. NATIONALUM
+carries **ten**, from Emkay, ICICI Securities and Motilal Oswal. What is true of them is that
+nothing is *running*: every call has resolved or been revised away. The panel stated the opposite,
+in plain English, about a third of the group it named.
+
+**Blast radius**: the screen built to answer *"who is watching the stocks I own"* would have told
+the investor that three holdings are uncovered when the desks had covered them and gone quiet —
+which is a signal in itself, and the more interesting of the two states. It would also have
+silently deflated the ledger's apparent reach on exactly the screen used to judge it.
+
+**Why it happened**: the cell and the column got this right — `analystCoverageCell` branches on
+`analystHousesEver` and draws "None running" with the firms named. The *panel* was written after
+and re-derived its own grouping from `analystHouses` alone. Two pieces of arithmetic over one
+question, in one file, written twenty minutes apart: Gotcha 85's failure at the smallest possible
+scale, and proof it does not need two teams or two screens to happen.
+
+**Fix**: `quiet` (`houses == 0 && housesEver > 0`) and `never` (`houses == 0 && !housesEver`) are
+separate groups. The tile is now *"No live target — 9"* with the sub-line *"6 never quoted, 3
+covered before"*, and the two groups get their own sentences, the first saying what a desk going
+quiet on a holding means.
+
+**Verification**: headless render of `holdings.html#analysis` against the live book — the tile
+reads `9 / 6 never quoted, 3 covered before`; *"Covered before, nothing running now: NITINSPIN,
+MARKSANS, NATIONALUM"*; *"No target on file: LCCPROJECT, SKYGOLD, GNFC, SCI, RATHIST, GULPOLY"*.
+0 skeleton elements, no console error.
+
+**Prevention**: this is the same family as B-098 (a count rendered beside a list must be derived
+from that list) and Gotcha 121 (not-measured and nothing-applies must never render alike). The
+rule that would have caught it earlier: **when a renderer already distinguishes N states, a
+summary over the same rows must distinguish the same N states** — deriving the summary from a
+narrower predicate is how a carefully-kept distinction gets thrown away in the one place the
+reader actually looks. Neither the syntax checker nor any test can see this; it took reading the
+rendered sentence against the data.
+
+
 ### B-116 - One free-text field from NSE froze the whole IPO table for two days  `[P2]`  `RESOLVED 2026-09-16`
 
 Found while checking why the dashboard looked stale. Almost everything was simply not due yet - the

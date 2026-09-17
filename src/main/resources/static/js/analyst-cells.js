@@ -10,8 +10,11 @@
  * present a target as a recommendation (the vocabulary has no word for "buy", deliberately —
  * SPEC 20 rule 10), and render an unmeasured figure as a number (SPEC 21 rule 7).
  */
-import { el, badge, unmeasured, kpi } from './ui.js';
-import { inr, pct, num, shortDate, missing, NOT_MEASURED, humanLabel } from './format.js';
+import { el, badge, unmeasured, kpi, table } from './ui.js';
+import {
+  inr, pct, num, shortDate, missing, NOT_MEASURED, humanLabel,
+  displaySymbol, stockHref,
+} from './format.js';
 
 /** Status -> how it reads and how it looks. Plain words (SPEC 21 rule 3). */
 export const TARGET_STATUS = {
@@ -279,4 +282,355 @@ export function plausibilityBlock(p) {
     p.reason ? el('p', { style: 'margin-top:10px' }, p.reason) : null,
     checks,
     caveatList.firstChild ? el('div.info-box', { style: 'margin-top:14px' }, caveatList) : null);
+}
+
+// ---------------------------------------------------- who is covering what I own (SPEC 49.14)
+
+/**
+ * Coverage of a holding, from the `analyst*` fields HoldingsViewDecorator attaches to every
+ * holdings read path. Nothing is decided here; the counting happens once, in Java.
+ *
+ * Three states have to stay visibly distinct, and they are the same three that every other lens
+ * in this app keeps apart (Gotcha 21, 44, 121):
+ *
+ *   - the lookup did not run           -> unmeasured marker. Never "nobody covers it".
+ *   - the ledger was searched, nothing -> a counted zero, with what that actually means.
+ *   - N firms are quoting a target     -> the count, and the firms by name.
+ *
+ * The second is the one that needs care. This app sees a brokerage note only when it reaches one
+ * of the feeds it reads (SPEC 49.7), so "no target on file" is a fact about the feed and not
+ * about whether the company is covered. Every place a zero is drawn says so.
+ */
+
+/** Most-covered first; nothing-on-file last but ahead of never-looked. */
+export function analystCoverageRank(row) {
+  if (!row || row.analystHouses === null || row.analystHouses === undefined) return -1;
+  return row.analystHouses;
+}
+
+/** What a zero means, said the same way everywhere it is drawn. */
+const NONE_ON_FILE = 'No brokerage target has reached this app’s feeds for this stock. That is a '
+  + 'statement about the feed, not about whether analysts cover the company — the ledger sees a '
+  + 'note only if it is published where this app reads.';
+
+function houseList(names, max = 8) {
+  const all = Array.isArray(names) ? names : [];
+  if (!all.length) return '';
+  return all.length <= max ? all.join(', ')
+    : all.slice(0, max).join(', ') + ' and ' + (all.length - max) + ' more';
+}
+
+/**
+ * One table cell: how many firms, and who — the firms in the tooltip so the column stays narrow
+ * (SPEC 27.10). The names in full are in the section below the table, which is where a reader
+ * who actually wants to know "which analysts" will look.
+ */
+export function analystCoverageCell(row) {
+  const n = row && row.analystHouses;
+
+  if (n === null || n === undefined) {
+    return unmeasured('The analyst ledger was not read for this holding. This is not a statement '
+      + 'that nobody covers it.');
+  }
+
+  if (n === 0) {
+    const ever = (row && row.analystHousesEver) || 0;
+    if (ever > 0) {
+      const node = badge('QUIET', { type: 'neutral', label: 'None running' });
+      node.title = ever + ' firm' + (ever === 1 ? ' has' : 's have') + ' quoted a target on this '
+        + 'stock before — ' + houseList(row.analystHouseNamesEver) + ' — but none is still '
+        + 'running. Covered but quiet is a different thing from never covered.';
+      node.setAttribute('data-no-gloss', '');
+      return node;
+    }
+    const node = badge('NONE', { type: 'neutral', label: 'None on file' });
+    node.title = NONE_ON_FILE;
+    node.setAttribute('data-no-gloss', '');
+    return node;
+  }
+
+  const node = el('span.badge.info', {}, num(n) + (n === 1 ? ' firm' : ' firms'));
+  node.title = houseList(row.analystHouseNames)
+    + (row.analystOpenTargets > n
+      ? ' (' + num(row.analystOpenTargets) + ' live targets — a firm has revised)' : '')
+    + (row.analystTargetsFrom && row.analystTargetsFrom !== row.symbol
+      ? '. Filed under ' + displaySymbol(row.analystTargetsFrom) + '.' : '');
+  node.setAttribute('data-no-gloss', '');
+
+  // The level first, then what it implies. A percentage on its own cannot be checked against a
+  // broker's note or a chart; the rupee figure is the thing a house actually published and the
+  // move is derived from it. Showing only the derived number is the weaker half of the pair.
+  if (missing(row.analystMedianTarget)) return node;
+
+  let text = inr(row.analystMedianTarget, { abbreviate: false });
+  if (!missing(row.analystUpsidePct)) {
+    // Whole percent here on purpose: this sits under a badge in a 20-column table and the extra
+    // digit buys nothing (SPEC 27.10). The panel below the table carries the precise figure.
+    text += ' · ' + pct(row.analystUpsidePct, { digits: 0 });
+  }
+
+  const line = el('span.faint', { style: 'font-size:11.5px' }, text);
+  line.title = targetBasis(row);
+
+  return el('div', { style: 'display:flex;flex-direction:column;gap:2px' }, node, line);
+}
+
+/**
+ * What the percentage is measured against, said out loud.
+ *
+ * The upside is computed from the price the ledger last stored for this stock, which comes from
+ * the 13:20 measurement pass — NOT from the `currentPrice` on the holdings row beside it, which
+ * comes from the broker sync. The two can differ by a day's move, and a reader who recomputes
+ * the percentage against the Price column and gets a different answer will conclude the app is
+ * wrong rather than that it is measuring from a different close. Naming the basis costs one
+ * sentence; leaving it unnamed costs the reader's trust in the column.
+ */
+function targetBasis(row) {
+  const n = row.analystHouses;
+  const head = 'Median of ' + num(row.analystOpenTargets) + ' live target'
+    + (row.analystOpenTargets === 1 ? '' : 's') + ' from ' + num(n) + ' firm'
+    + (n === 1 ? '' : 's') + ': ' + houseList(row.analystHouseNames) + '.';
+
+  const range = (!missing(row.analystLowestTarget) && !missing(row.analystHighestTarget)
+    && row.analystLowestTarget !== row.analystHighestTarget)
+    ? ' They range from ' + inr(row.analystLowestTarget, { abbreviate: false }) + ' to '
+      + inr(row.analystHighestTarget, { abbreviate: false }) + '.' : '';
+
+  const basis = missing(row.analystUpsidePct) ? ''
+    : ' The move is measured against ' + inr(row.analystPriceAsStored, { abbreviate: false })
+      + (row.analystPriceAsOf ? ', the close this ledger last stored on '
+        + shortDate(row.analystPriceAsOf) : '')
+      + ' — not the price in the column beside it, which is from a different pass.';
+
+  return head + range + basis
+    + ' A median over one or two calls is not a consensus, and this app endorses none of it.';
+}
+
+/**
+ * The column, declared once.
+ *
+ * The header says "Analysts" on every screen that draws it, for the reason a column reading
+ * "Brokers" here and "Coverage" there invites the reader to ask whether they are the same
+ * measurement (Gotcha 85 applied to a heading).
+ */
+export function analystCoverageCol() {
+  return {
+    key: 'analystHouses',
+    label: 'Analysts',
+    value: analystCoverageRank,
+    render: analystCoverageCell,
+  };
+}
+
+/**
+ * The chip group. "None on file" gets its own chip rather than being folded in with
+ * "not measured" — a reader has to be able to ask for either deliberately (Gotcha 117 rule b).
+ */
+export function analystFilterGroup() {
+  return {
+    label: 'Analysts:',
+    key: 'analyst',
+    options: [
+      { value: 'ALL', text: 'All' },
+      {
+        value: 'COVERED',
+        text: 'Covered',
+        test: (r) => (r.analystHouses || 0) > 0,
+        title: 'At least one brokerage has a target still running on this stock.',
+      },
+      {
+        value: 'AGREED',
+        text: '3+ firms',
+        test: (r) => (r.analystHouses || 0) >= 3,
+        title: 'Three or more separate firms are quoting a target. Measured on the cross-section, '
+          + 'most covered stocks carry one or two — three is where agreement starts to mean '
+          + 'something (SPEC 49.12).',
+      },
+      {
+        value: 'NONE',
+        text: 'Nobody quoting',
+        test: (r) => r.analystHouses === 0,
+        title: 'The ledger was searched and no target is running. That is a fact about what '
+          + 'reaches this app’s feeds, not about whether the company is covered.',
+      },
+    ],
+  };
+}
+
+/**
+ * The coverage line that must sit under any table drawing the Analysts column.
+ *
+ * Without it a column full of "None on file" reads as "the market has no view on what I own",
+ * when what it actually means is that this app's ledger is thin by construction (SPEC 49.7).
+ * Same rule as the macro and forensic coverage lines (Gotcha 44).
+ */
+export function analystCoverageLine(rows) {
+  const all = rows || [];
+  if (!all.length) return null;
+  const looked = all.filter((r) => r.analystHouses !== null && r.analystHouses !== undefined);
+  const covered = looked.filter((r) => r.analystHouses > 0);
+  const quiet = looked.filter((r) => r.analystHouses === 0 && (r.analystHousesEver || 0) > 0);
+  const never = looked.filter((r) => r.analystHouses === 0 && !(r.analystHousesEver || 0));
+
+  return el('div.muted', { style: 'font-size:12.5px;margin-top:10px' },
+    covered.length + ' of ' + all.length + ' holdings have a brokerage target still running; '
+    + quiet.length + ' have been covered before but have nothing live; '
+    + never.length + ' have no target on file at all. '
+    + 'That last group is not a finding about those companies: this app records a target only '
+    + 'when a note reaches the feeds it reads (SPEC 49.7), so the ledger is thin by construction. '
+    + 'None of this changes any score, and a brokerage target is not this app’s opinion.');
+}
+
+/**
+ * "Who is covering what you own" — the full answer, names included.
+ *
+ * The column above gives a count and hides the names in a tooltip to keep the table narrow. A
+ * reader who wants to know *which* firms is not going to hover thirty rows, so the names are
+ * spelled out here, with the spread of what they are quoting beside them. Sorted by how many
+ * firms, because that is the question being asked.
+ */
+export function analystCoveragePanel(rows) {
+  const all = (rows || []).filter((r) => r.analystHouses !== null && r.analystHouses !== undefined);
+  if (!all.length) return null;
+
+  const covered = all.filter((r) => r.analystHouses > 0)
+    .sort((a, b) => b.analystHouses - a.analystHouses);
+  // The two zero states are NOT one group. A stock the desks have stopped quoting has been
+  // covered; a stock with nothing on file has not, as far as this app can see. Folding them
+  // together makes the second sentence below false about the first group, which is the whole
+  // distinction this feature turns on (Gotcha 121). Found by rendering it, not in review.
+  const quiet = all.filter((r) => !r.analystHouses && (r.analystHousesEver || 0) > 0);
+  const never = all.filter((r) => !r.analystHouses && !(r.analystHousesEver || 0));
+
+  const houses = new Set();
+  for (const r of covered) for (const h of (r.analystHouseNames || [])) houses.add(h);
+
+  const head = el('div.grid.kpis', {},
+    kpi({
+      label: 'Holdings with a live target',
+      value: num(covered.length) + ' of ' + num(all.length),
+      raw: covered.length,
+      tone: 'neutral',
+      sub: 'brokerage targets still running',
+    }),
+    kpi({
+      label: 'Firms covering your book',
+      value: num(houses.size),
+      raw: houses.size,
+      tone: 'neutral',
+      sub: houses.size ? 'distinct brokerages' : 'none on file',
+    }),
+    kpi({
+      label: 'No live target',
+      value: num(quiet.length + never.length),
+      raw: quiet.length + never.length,
+      tone: 'neutral',
+      sub: never.length + ' never quoted, ' + quiet.length + ' covered before',
+    }));
+
+  const tbl = covered.length ? table([
+    {
+      key: 'symbol',
+      label: 'Stock',
+      render: (r) => el('a', { href: stockHref(r.symbol), title: r.symbol }, displaySymbol(r.symbol)),
+    },
+    {
+      key: 'analystHouses',
+      label: 'Firms',
+      align: 'r',
+      render: (r) => el('span.num', {}, num(r.analystHouses)),
+    },
+    {
+      key: 'analystHouseNames',
+      label: 'Who',
+      sortable: false,
+      render: (r) => el('span', {}, houseList(r.analystHouseNames, 12)),
+    },
+    {
+      key: 'analystOpenTargets',
+      label: 'Targets',
+      align: 'r',
+      render: (r) => {
+        const node = el('span.num', {}, num(r.analystOpenTargets));
+        if (r.analystOpenTargets > r.analystHouses) {
+          node.title = 'More targets than firms: a house has published more than one live call. '
+            + 'The firm count is the number of opinions (B-041).';
+        }
+        return node;
+      },
+    },
+    {
+      key: 'analystMedianTarget',
+      label: 'Median target',
+      align: 'r',
+      render: (r) => (missing(r.analystMedianTarget) ? unmeasured('No figure quoted')
+        : el('span', { title: 'Median of the live targets. Never a consensus — on most stocks '
+            + 'this is one or two calls.' }, inr(r.analystMedianTarget, { abbreviate: false }))),
+    },
+    {
+      key: 'analystSpread',
+      label: 'Range',
+      sortable: false,
+      render: (r) => (missing(r.analystLowestTarget) || missing(r.analystHighestTarget)
+        ? el('span.muted', {}, '—')
+        : el('span.muted', { style: 'font-size:12px' },
+          inr(r.analystLowestTarget, { abbreviate: false }) + ' – '
+          + inr(r.analystHighestTarget, { abbreviate: false }))),
+    },
+    {
+      key: 'analystUpsidePct',
+      label: 'vs last price',
+      align: 'r',
+      render: (r) => {
+        if (missing(r.analystUpsidePct)) {
+          return unmeasured('The ledger has no stored price for this stock yet');
+        }
+        const node = el('span.num' + (r.analystUpsidePct > 0 ? '.positive' : '.negative'), {},
+          pct(r.analystUpsidePct));
+        // Same obligation as the cell above: name the price this is measured from, or the reader
+        // recomputes it against a different one and concludes the app cannot do arithmetic.
+        node.title = 'From ' + inr(r.analystPriceAsStored, { abbreviate: false })
+          + (r.analystPriceAsOf ? ', the close this ledger last stored on '
+            + shortDate(r.analystPriceAsOf) : '')
+          + ', to the median target. Not from the live price.';
+        return node;
+      },
+    },
+    {
+      key: 'analystLastCallOn',
+      label: 'Last call',
+      render: (r) => (r.analystLastCallOn ? shortDate(r.analystLastCallOn)
+        : unmeasured('No date recorded')),
+    },
+  ], covered, { sortKey: 'analystHouses', filter: false }) : null;
+
+  const none = el('div', {});
+  if (quiet.length) {
+    none.append(el('div', { style: 'margin-top:12px;font-size:13px' },
+      el('strong', {}, 'Covered before, nothing running now: '),
+      quiet.map((r) => displaySymbol(r.symbol)).join(', '),
+      '. A brokerage has quoted a target on each of these at some point, but every one has run '
+      + 'its course or been revised away. Desks going quiet on a stock you own is worth noticing; '
+      + 'it is a different thing from never having been covered.'));
+  }
+  if (never.length) {
+    none.append(el('div', { style: 'margin-top:12px;font-size:13px' },
+      el('strong', {}, 'No target on file: '),
+      never.map((r) => displaySymbol(r.symbol)).join(', '),
+      '. ', NONE_ON_FILE));
+  }
+
+  return el('div', {}, head, tbl, none.firstChild ? none : null,
+    el('div.info-box', { style: 'margin-top:14px' },
+      el('ul', {},
+        el('li', {}, 'A brokerage target is somebody else’s opinion, recorded so it can be '
+          + 'scored later. It is not this app’s view and it changes no score here.'),
+        el('li', {}, 'The firm count is the number of opinions, not the number of notes — a house '
+          + 'that revised its target three times is still one firm.'),
+        el('li', {}, 'The median is a median of however many calls exist, which on most stocks is '
+          + 'one or two. That is not a consensus and the firm count is printed beside it so it '
+          + 'cannot be read as one.'),
+        el('li', {}, 'How each of these firms has actually done is on the Accuracy page — and '
+          + 'the sell-side sample here is roughly four-fifths Buy, so read a hit rate against '
+          + 'the market, not on its own.'))));
 }

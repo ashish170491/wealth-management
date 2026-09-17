@@ -236,44 +236,25 @@ public class AnalystTargetViewService {
      * target" computed from a single note cannot be mistaken for the market's view.
      */
     Map<String, Object> liveSummary(List<AnalystTargetEntity> rows) {
+        // Delegates, deliberately. The portfolio screen needs the same counts in a different
+        // shape, and two pieces of arithmetic answering "how many brokerages cover this?" is how
+        // two screens end up disagreeing about one stock (Gotcha 85).
+        Coverage c = coverage(rows, null);
         Map<String, Object> out = new LinkedHashMap<>();
-        List<AnalystTargetEntity> live = rows.stream()
-                .filter(r -> AnalystTargetStatus.PENDING.name().equals(r.getStatus()))
-                .toList();
-
-        Set<String> houses = new TreeSet<>();
-        List<Double> targets = new ArrayList<>();
-        Double lastPrice = null;
-        LocalDate lastPriceOn = null;
-
-        for (AnalystTargetEntity r : live) {
-            houses.add(r.getBrokerage());
-            targets.add(r.getTargetPrice());
-        }
-        // Latest stored price across all rows for this stock, whatever their status: the most
-        // recently measured row has the most recent close, and this is a display figure only.
-        for (AnalystTargetEntity r : rows) {
-            if (r.getLastPrice() == null || r.getLastMeasuredAt() == null) continue;
-            LocalDate on = r.getLastMeasuredAt().toLocalDate();
-            if (lastPriceOn == null || on.isAfter(lastPriceOn)) {
-                lastPriceOn = on;
-                lastPrice = r.getLastPrice();
-            }
-        }
-
-        Double median = AnalystTrackRecord.median(targets);
-        out.put("openTargets", live.size());
-        out.put("houses", houses.size());
-        out.put("houseNames", List.copyOf(houses));
-        out.put("medianTarget", median);
-        out.put("highestTarget", targets.stream().max(Double::compareTo).orElse(null));
-        out.put("lowestTarget", targets.stream().min(Double::compareTo).orElse(null));
-        out.put("priceAsStored", lastPrice);
-        out.put("priceAsOf", lastPriceOn == null ? null : lastPriceOn.toString());
-        out.put("impliedUpsidePct",
-                (median != null && lastPrice != null && lastPrice > 0)
-                        ? (median - lastPrice) / lastPrice * 100.0 : null);
-        out.put("note", note(rows, live, houses.size()));
+        out.put("openTargets", c.openTargets());
+        out.put("houses", c.houses());
+        out.put("houseNames", c.houseNames());
+        out.put("medianTarget", c.medianTarget());
+        out.put("highestTarget", c.highestTarget());
+        out.put("lowestTarget", c.lowestTarget());
+        out.put("priceAsStored", c.priceAsStored());
+        out.put("priceAsOf", c.priceAsOf() == null ? null : c.priceAsOf().toString());
+        out.put("impliedUpsidePct", c.impliedUpsidePct());
+        out.put("targetsEver", c.targetsEver());
+        out.put("housesEver", c.housesEver());
+        out.put("houseNamesEver", c.houseNamesEver());
+        out.put("lastCallOn", c.lastCallOn() == null ? null : c.lastCallOn().toString());
+        out.put("note", c.note());
         return out;
     }
 
@@ -306,6 +287,159 @@ public class AnalystTargetViewService {
         }
         return "No target is currently running on this stock. The ones below have either run their "
                 + "course or been revised by the brokerage that made them.";
+    }
+
+    // ------------------------------------------------------------------ what covers what I own
+
+    /**
+     * Who is quoting a target on one stock, in the shape a table cell needs (SPEC §49.14).
+     *
+     * <p>This is the same computation {@link #liveSummary} publishes for the stock page — that
+     * method now builds its map from this record rather than counting houses a second time.
+     * Two surfaces answering "how many brokerages cover this?" with two pieces of arithmetic is
+     * Gotcha 85 in its plainest form, and the failure mode is not a wrong answer but two
+     * different answers to one question on two screens.
+     *
+     * @param houses         brokerages with a target still running. <b>Zero is a counted zero</b>,
+     *                       not an absence — the ledger was searched. What it means is bounded by
+     *                       §49.7: no note reached this app's feeds, which is a far weaker claim
+     *                       than "no analyst covers this company".
+     * @param housesEver     brokerages that have quoted a target at any point in the ledger. A
+     *                       stock with 10 recorded targets and none running is covered but quiet,
+     *                       which is a different fact from never being covered at all.
+     * @param symbolAnswered which spelling carried the targets, so a reading can be traced rather
+     *                       than assumed (Gotcha 84). Two thirds of this portfolio is held
+     *                       BSE-prefixed while every target is filed under the NSE symbol.
+     */
+    public record Coverage(String symbolAnswered,
+                           int openTargets, int houses, List<String> houseNames,
+                           Double medianTarget, Double highestTarget, Double lowestTarget,
+                           Double priceAsStored, LocalDate priceAsOf, Double impliedUpsidePct,
+                           int targetsEver, int housesEver, List<String> houseNamesEver,
+                           LocalDate lastCallOn, String note) {
+    }
+
+    /** Nothing on file for this stock, stated as such rather than as a row of zeroes. */
+    static Coverage noCoverage(String symbol) {
+        return new Coverage(null, 0, 0, List.of(), null, null, null, null, null, null,
+                0, 0, List.of(), null, note(List.of(), List.of(), 0));
+    }
+
+    /**
+     * Analyst coverage for a whole portfolio, in one query (SPEC §49.14).
+     *
+     * <p><b>One bulk call per screen, not one per row.</b> Thirty holdings resolving through up
+     * to four symbol spellings each is ~120 queries on a page load; this is one, the same
+     * reasoning as the macro and compounding lenses.
+     *
+     * <p><b>"First hit wins" has to mean "first hit that answers"</b> (Gotcha 107). A spelling
+     * carrying only expired or revised calls cannot answer "who is tracking this stock", so a
+     * spelling with a live target is preferred over one without; exact-first still decides
+     * between two spellings that can both answer, leaving Gotcha 84's order intact. Measured on
+     * the live book: 15 of 30 holdings answer under a different prefix from the one they are
+     * held under, so getting this wrong would blank half the column.
+     */
+    public Map<String, Coverage> forSymbols(java.util.Collection<String> symbols) {
+        Map<String, Coverage> out = new LinkedHashMap<>();
+        if (symbols == null || symbols.isEmpty()) return out;
+
+        List<String> lookups = new ArrayList<>();
+        for (String s : symbols) {
+            for (String candidate : SymbolVariants.candidates(s)) {
+                if (!lookups.contains(candidate)) lookups.add(candidate);
+            }
+        }
+        if (lookups.isEmpty()) return out;
+
+        Map<String, List<AnalystTargetEntity>> bySymbol = new LinkedHashMap<>();
+        for (AnalystTargetEntity t : repository.findBySymbolInOrderByIssuedOnDesc(lookups)) {
+            if (t.getSymbol() == null) continue;
+            bySymbol.computeIfAbsent(t.getSymbol(), k -> new ArrayList<>()).add(t);
+        }
+
+        for (String symbol : symbols) {
+            if (symbol == null || symbol.isBlank()) continue;
+            out.put(symbol, resolve(symbol, bySymbol));
+        }
+        return out;
+    }
+
+    /** One holding's coverage. Same rules, same single query — see {@link #forSymbols}. */
+    public Coverage forSymbolCoverage(String symbol) {
+        Coverage c = forSymbols(List.of(symbol)).get(symbol);
+        return c != null ? c : noCoverage(symbol);
+    }
+
+    /** Picks the spelling that can answer, then summarises it. */
+    static Coverage resolve(String symbol, Map<String, List<AnalystTargetEntity>> bySymbol) {
+        List<AnalystTargetEntity> anyRows = null;
+        String anySymbol = null;
+        for (String candidate : SymbolVariants.candidates(symbol)) {
+            List<AnalystTargetEntity> rows = bySymbol.get(candidate);
+            if (rows == null || rows.isEmpty()) continue;
+            if (anyRows == null) {
+                anyRows = rows;
+                anySymbol = candidate;
+            }
+            boolean hasLive = rows.stream()
+                    .anyMatch(r -> AnalystTargetStatus.PENDING.name().equals(r.getStatus()));
+            if (hasLive) return coverage(rows, candidate);
+        }
+        return anyRows == null ? noCoverage(symbol) : coverage(anyRows, anySymbol);
+    }
+
+    /**
+     * The one place house counts, the median target and the implied upside are computed.
+     *
+     * <p>Every refusal in {@link #liveSummary} is preserved because that method now delegates
+     * here: the median is a median (an outlier must not carry a two-call stock), the upside is
+     * null rather than zero when either leg is missing (SPEC §21 rule 7), and the count of
+     * <em>firms</em> is what travels beside it — one house revising three times is one opinion,
+     * not three (B-041).
+     */
+    static Coverage coverage(List<AnalystTargetEntity> rows, String symbolAnswered) {
+        List<AnalystTargetEntity> live = rows.stream()
+                .filter(r -> AnalystTargetStatus.PENDING.name().equals(r.getStatus()))
+                .toList();
+
+        Set<String> houses = new TreeSet<>();
+        Set<String> housesEver = new TreeSet<>();
+        List<Double> targets = new ArrayList<>();
+        Double lastPrice = null;
+        LocalDate lastPriceOn = null;
+        LocalDate lastCallOn = null;
+
+        for (AnalystTargetEntity r : live) {
+            if (r.getBrokerage() != null) houses.add(r.getBrokerage());
+            if (r.getTargetPrice() != null) targets.add(r.getTargetPrice());
+        }
+        for (AnalystTargetEntity r : rows) {
+            if (r.getBrokerage() != null) housesEver.add(r.getBrokerage());
+            if (r.getIssuedOn() != null && (lastCallOn == null || r.getIssuedOn().isAfter(lastCallOn))) {
+                lastCallOn = r.getIssuedOn();
+            }
+            // Latest stored price across all rows whatever their status: the most recently
+            // measured row carries the most recent close, and this is a display figure only.
+            if (r.getLastPrice() == null || r.getLastMeasuredAt() == null) continue;
+            LocalDate on = r.getLastMeasuredAt().toLocalDate();
+            if (lastPriceOn == null || on.isAfter(lastPriceOn)) {
+                lastPriceOn = on;
+                lastPrice = r.getLastPrice();
+            }
+        }
+
+        Double median = AnalystTrackRecord.median(targets);
+        Double upside = (median != null && lastPrice != null && lastPrice > 0)
+                ? (median - lastPrice) / lastPrice * 100.0 : null;
+
+        return new Coverage(symbolAnswered,
+                live.size(), houses.size(), List.copyOf(houses),
+                median,
+                targets.stream().max(Double::compareTo).orElse(null),
+                targets.stream().min(Double::compareTo).orElse(null),
+                lastPrice, lastPriceOn, upside,
+                rows.size(), housesEver.size(), List.copyOf(housesEver),
+                lastCallOn, note(rows, live, houses.size()));
     }
 
     // ------------------------------------------------------------------ the overlap

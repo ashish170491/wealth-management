@@ -4533,3 +4533,101 @@ target plus a headline at the **median** of them (not the mean: on most stocks t
 calls and an outlier would carry it). Rendered on `stock.html` between the target summary and the
 ledger, because a reader who has just seen a median target and an implied upside is at the moment
 of deciding whether to believe it. DB-only, page-load safe. **Contributes zero points to any score.**
+
+### 49.14 Coverage on what you actually own (2026-09-17)
+
+**The gap.** Every screen built on the ledger so far answered a question about *stocks in
+general*: the track record answers "is this house any good", the overlap answers "is anyone
+quoting the stocks we rate", the plausibility panel answers "is this target achievable". The
+portfolio screen — the one the investor opens most — said nothing at all. The ledger held
+**47 targets on HDFCBANK from 6 firms** and the holding's row did not mention it.
+
+**What this adds.** Two things on the portfolio screen, and nothing else:
+
+- an **Analysts** column on the full holdings table: how many firms have a target still running,
+  the firms named in the tooltip, and the upside to the median beneath it;
+- a **"Who else is covering what you own"** section spelling the firms out by name per holding,
+  with the number of live targets, the median, the **range** of what is quoted, the move to the
+  last stored price, and the date of the most recent call.
+
+It **contributes zero points to any score**, is not an input to `BuyTimingVerdict`, and its
+vocabulary contains no instruction to transact (§20 rule 10). It reports who is watching, never
+what to do about it.
+
+**Measured before it was built, and it discriminates.** Over the live book of 30 holdings:
+**24 have a target on file, 21 have one still running**, and the firm count runs 6 / 5 / 4 / 4 /
+4 / 3 / 3 / 3 / 2 … down to 0. That distribution is the check §49.13 (B-113) says to run before
+shipping a new reading — a column that read the same on every row would be a defect, not a
+finding.
+
+**15 of the 30 answer under a different exchange prefix from the one they are held under.**
+Targets are filed under the NSE symbol because that is what the research feed publishes; two
+thirds of this portfolio is held BSE-prefixed. Resolution goes through `SymbolVariants`
+(Gotcha 84) — and "first hit wins" has to mean **"first hit that answers wins"** (Gotcha 107,
+B-088): a spelling carrying only expired or revised calls cannot answer "who is tracking this
+stock", so a spelling with a live target is preferred, exact-first deciding between two that can
+both answer. Getting this wrong would blank half the column while looking like an honest result.
+
+**Three states, drawn three ways.** This is the distinction the whole ledger turns on, and it is
+Gotcha 121's rule applied here:
+
+| State | What it means | How it renders |
+|---|---|---|
+| lookup did not run | the query failed, or was not attempted | striped **not measured** |
+| searched, nothing live, nothing ever | no note reached this app's feeds | neutral **None on file** |
+| searched, nothing live, covered before | the desks have stopped quoting it | neutral **None running**, firms named |
+| N firms running | N separate opinions | the count, firms named |
+
+**A zero here is a counted zero, and what it does not mean is the important part.** The ledger
+records a target only when a note reaches the feeds this app reads (§49.7). So "no target on
+file" is a statement about the feed, never about whether analysts follow the company — and every
+place a zero is drawn says exactly that, in words, rather than leaving the reader to infer it.
+That is why `analystHouses` is a nullable `Integer`: null is "did not look", `0` is "looked and
+found none", and a primitive would collapse the two (§21 rule 7). The mandatory coverage line
+beneath the table states all three counts, the same obligation `macroCoverageLine` carries
+(Gotcha 44).
+
+**Covered-but-quiet is a finding.** NATIONALUM carries ten recorded targets and nothing running.
+Reporting that as "no coverage" would lose the difference between a stock the desks have stopped
+quoting — which is worth noticing — and one they never quoted, which is mostly a fact about this
+app's feeds. `housesEver` is published beside `houses` for that reason.
+
+**Firms, not notes** (B-041). One house revising three times is one opinion. The count beside the
+median is a count of *firms*; the live-target count is published alongside it, and where the two
+differ the tooltip says a house has revised. This is the same rule §49.12 set its agreement
+threshold on.
+
+**The level, then what it implies — and the price it is measured from, named.** The column shows
+the median target in rupees beside the percentage, because a percentage on its own cannot be
+checked against a broker's note or a chart: the rupee figure is what a house actually published
+and the move is derived from it. Showing only the derived number is the weaker half of the pair.
+The compact cell rounds the percentage to whole points (it sits under a badge in a 20-column
+table, §27.10); the panel below carries the precise figure, the range and the firms.
+
+**The trap that comes with showing both.** The upside is computed against **the ledger's own last
+stored close**, written by the 13:20 measurement pass — *not* against the `currentPrice` in the
+column beside it, written by the broker sync. The two can differ by a day's move, so a reader who
+recomputes the percentage from the Price column gets a different answer and concludes the app
+cannot do arithmetic. `analystPriceAsStored` and `analystPriceAsOf` are therefore carried onto the
+row, and every place the percentage appears names the price and the date it came from. Naming the
+basis costs a sentence; leaving it unnamed costs the reader's trust in the column — Gotcha 84's
+rule that a reading must be traceable, applied to a figure rather than to a symbol.
+
+**Still not a consensus.** The median is a median of however many calls exist, which on most of
+these holdings is one or two, and the firm count is printed beside it precisely so it cannot be
+read as the market's view (§49.8). The upside is null rather than zero whenever either leg is
+missing.
+
+**One computation, two surfaces.** `liveSummary` — what the stock page has always shown — now
+builds its map from the same `Coverage` record the portfolio column reads. Two pieces of
+arithmetic answering "how many brokerages cover this?" is Gotcha 85 in its plainest form, and the
+failure is not a wrong number but two different numbers on two screens.
+`AnalystCoverageSurfaceTest` pins that they agree by construction.
+
+**Where it is.** `HoldingsViewDecorator` attaches thirteen `@Transient` `analyst*` fields to
+**every** holdings read path (§6.6), so a screen can only render what it is given and a new screen
+inherits it. One bulk query for the whole table: per row it would be ~120 lookups on a page load.
+Rendered by `analyst-cells.js` — the same file the stock page and the accuracy page use, because
+a fix that lands on one screen has to be walked to every screen that shares the data (B-099). A
+failed lookup leaves every field null and logs at WARN naming what the absence will be mistaken
+for. DB-only, page-load safe, no broker call.
