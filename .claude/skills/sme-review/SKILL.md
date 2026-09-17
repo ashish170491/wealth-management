@@ -5,7 +5,7 @@ description: Run the stock-market SME reviewer over a feature, a tier, or the wh
 
 # SME review
 
-Drives the `stock-market-sme` agent (`.claude/agents/stock-market-sme.md`). Read-only throughout —
+Drives the `sme-agent` agent (`.claude/agents/sme-agent.md`). Read-only throughout —
 nothing here edits code, SPEC.md, BUGS.md or CLAUDE.md.
 
 ## 1. Pick a scope — "all features" is not one pass
@@ -43,7 +43,7 @@ agent to work from code, SPEC, BUGS and direct SQL. Do **not** start the app for
 ## 3. Spawn
 
 ```
-Agent(subagent_type: "stock-market-sme", prompt: "
+Agent(subagent_type: "sme-agent", prompt: "
   Scope: <feature name> (SPEC §NN).
   Ground truth: app is <up|down>; latest screening date <date>; coverage snapshot attached below.
   Follow your seven-step method. Report findings ranked by blast radius, draft BUGS.md entries for
