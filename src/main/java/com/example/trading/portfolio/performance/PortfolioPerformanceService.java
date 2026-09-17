@@ -346,9 +346,9 @@ public class PortfolioPerformanceService {
                 candidates.addAll(v);
             }
             Map<String, MultibaggerScoreEntity> bySymbol = new HashMap<>();
-            for (MultibaggerScoreEntity e : scoreRepository.findRecentForSymbols(candidates,
+            for (MultibaggerScoreEntity e : scoreRepository.findLatestForSymbolsSince(candidates,
                     LocalDate.now(IST).minusDays(SCORE_LOOKBACK_DAYS))) {
-                bySymbol.put(e.getSymbol(), e);   // ASC order: last write is newest
+                bySymbol.put(e.getSymbol(), e);   // one row per symbol, the newest (B-115)
             }
             for (HoldingsEntity h : active) {
                 // First spelling that answers (Gotcha 107): an empty BSE row must not beat a full NSE one.

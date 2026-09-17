@@ -78,7 +78,12 @@ public class IpoIssueEntity {
 
     private Integer lotSize;
     private Double faceValue;
-    @Column(length = 32)
+    /**
+     * NSE's own words for the offer structure ("100% Book Building", "Book Building"). Free text
+     * from a third party, so it is sized generously and truncated on write rather than trusted:
+     * at length 32 a longer value aborted the whole capture transaction (B-116).
+     */
+    @Column(length = 160)
     private String issueType;
 
     private Boolean employeeQuota;

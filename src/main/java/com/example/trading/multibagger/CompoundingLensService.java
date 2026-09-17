@@ -201,14 +201,14 @@ public class CompoundingLensService {
     /**
      * Newest screening row per symbol inside the lookback window.
      *
-     * <p>The query returns oldest-first, so writing every row into the map leaves the newest -
-     * the same "last one wins" the stock page's trend lookup relies on.
+     * <p>Resolved in SQL: one row per symbol rather than the whole window filtered down in Java,
+     * which is the same answer without reading a year of history on every page load (B-115).
      */
     private Map<String, MultibaggerScoreEntity> latestBySymbol(Collection<String> symbols) {
         Map<String, MultibaggerScoreEntity> map = new LinkedHashMap<>();
         try {
             LocalDate from = LocalDate.now().minusDays(LOOKBACK_DAYS);
-            for (MultibaggerScoreEntity row : scoreRepository.findRecentForSymbols(symbols, from)) {
+            for (MultibaggerScoreEntity row : scoreRepository.findLatestForSymbolsSince(symbols, from)) {
                 map.put(row.getSymbol(), row);
             }
         } catch (Exception ex) {
