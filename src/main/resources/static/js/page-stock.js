@@ -505,7 +505,16 @@ function resultHistoryTable(earnings) {
   const rows = resultHistoryRows(earnings);
   if (!rows.length) return null;
   return table([
-    { key: 'quarter', label: 'Quarter' },
+    // Sorted on the quarter END, never the label: a string sort of "Q1 FY27" / "Q4 FY26" puts
+    // Q4 FY25 above Q3 FY26 and the newest quarter in the middle.
+    // `value` is the SORT accessor and `render` is the display; giving only the first shows raw
+    // dates where the fiscal label belongs (Gotcha 117's trap, in the other direction).
+    {
+      key: 'quarter',
+      label: 'Quarter',
+      value: (r) => r.quarterEnd || '',
+      render: (r) => r.quarter || shortDate(r.quarterEnd) || unmeasured(),
+    },
     { key: 'revenue', label: 'Sales', align: 'r', render: (r) => (missing(r.revenue) ? unmeasured() : crore(r.revenue)) },
     { key: 'profit', label: 'Profit', align: 'r', render: (r) => (missing(r.profit) ? unmeasured() : crore(r.profit)) },
     { key: 'netMargin', label: 'Margin', align: 'r', render: (r) => (missing(r.netMargin) ? unmeasured() : pct(r.netMargin, { signed: false })) },

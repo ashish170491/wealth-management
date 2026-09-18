@@ -274,6 +274,11 @@ export function resultHistoryRows(data) {
   const history = Array.isArray(data && data.resultHistory) ? data.resultHistory : [];
   return history.map((q) => ({
     quarter: q.fiscalLabel,
+    // The sort key, and it has to be the date. Sorting on the LABEL is a string sort, which puts
+    // "Q4 FY25" above "Q3 FY26" and does not even put the newest quarter first — a history table
+    // whose first row is not the latest reading is worse than no table. Caught by looking at a
+    // screenshot; every server-side check and the syntax checker passed (Gotcha 89).
+    quarterEnd: q.quarterEnd,
     revenue: q.revenue,
     profit: q.profit,
     netMargin: q.netMargin,
