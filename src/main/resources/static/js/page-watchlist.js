@@ -26,6 +26,9 @@ import { sparkline } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
+import {
+  analystCoverageCol, analystFilterGroup, analystCoverageLine,
+} from './analyst-cells.js';
 
 const view = document.getElementById('view');
 const CRUNCH_START = '14:55';
@@ -257,6 +260,9 @@ function addForm() {
  * low score: a stock outside the screening universe has not been judged (Gotcha 21).
  */
 const FILTERS = chipFilters([
+  // Who else is quoting a target. A row filter, not a display toggle: narrowing to the stocks
+  // nobody covers is a real question on a watchlist of small caps.
+  analystFilterGroup(),
   {
     label: 'Timing:',
     key: 'verdict',
@@ -346,6 +352,10 @@ function mainTable(active) {
     // Same renderer as the portfolio, the screener, discovery and the stock page — five
     // surfaces, one cell, nothing to drift (SPEC 48.10).
     macroExposureCol(),
+    // Who else is quoting a target on this stock (SPEC 49.15). Beside our own verdict, never
+    // blended into it: it is somebody else's opinion, recorded so it can be scored later, and it
+    // contributes zero points to anything here.
+    analystCoverageCol(),
     { key: 'trendDirection', label: 'Trend (90 days)', sortable: false, render: trendCell },
     { key: 'verdict', label: 'Still a good time to buy?', value: (w) => VERDICT_ORDER[w.verdict] ?? 9, render: verdictCell },
     // Same rule and same renderer as the screener, so one stock cannot show two entry levels.
@@ -397,6 +407,11 @@ function render(opts = {}) {
     'Two separate questions, never blended: Quality asks whether this is a business worth owning for years (the 0-100 composite score from the daily screening — earnings, balance sheet, ownership). Timing asks whether today is a sensible day to pay this price (trend, RSI, distance from the 50-day average). "Buy now" needs both. "Accumulate" means the business is good but there is no entry trigger, so buy in small tranches. "Wait for a dip" means it has run — RSI is high, or it is stretched above its average. "Avoid" means a red flag on the books, a thinly traded stock, or a quality score under 50, and no chart fixes that. "Not measured" is exactly that: nothing has been analysed yet. Actions sit next to each name: ↻ re-analyses the stock now, ↻Q also computes an ad-hoc quality score, ✕ removes it (history kept).',
     FILTERS.bar(active, shown.length, 'stocks'),
     mainTable(shown),
+    // Mandatory beside the Analysts column (Gotcha 44): a column of "None on file" must not read
+    // as "the market has no view on these stocks" when it means this app's ledger is thin by
+    // construction (SPEC 49.7). Over `shown` - a count beside a list must describe THAT list,
+    // the same rule the section's own chip follows (B-098).
+    analystCoverageLine(shown, { noun: 'stocks' }),
     removedTable(removed)), shown.length));
 
   mount(view, nodes);

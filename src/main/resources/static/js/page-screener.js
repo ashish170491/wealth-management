@@ -32,6 +32,9 @@ import { buyTimingCell, buyTimingRank, entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
 import {
+  analystCoverageCol, analystFilterGroup, analystCoverageLine,
+} from './analyst-cells.js';
+import {
   finQualityCell, finQualityRank, roceCell, roceValue, leverageCell, leverageValue,
   growthCell, growthValue, promoterCell, promoterValue, valuationCell, valuationRank,
   redFlagsCell, redFlagsRank, worstFlag, marketCapCell, sectorCell, ownedLine,
@@ -153,6 +156,18 @@ const FILTERS = chipFilters([
     ownLine: true,
     options: (rs) => sectorOptions(rs, { label: humanLabel }),
   },
+  analystFilterGroup(),
+  {
+    key: 'showAnalysts',
+    toggle: true,
+    text: 'Show analyst targets',
+    title: 'Adds the Analysts column: how many brokerages have a price target running on each '
+      + 'stock, and the median target. Off by default because this table is already at its '
+      + 'column budget, not because the data is thin — 213 of 274 screened stocks carry a live '
+      + 'target. It contributes zero points to any score.',
+    // No `test`, like the toggle below: it changes which COLUMNS are drawn, it does not narrow
+    // the list, so it must never make the bar report the table as filtered.
+  },
   {
     key: 'showScores',
     toggle: true,
@@ -264,6 +279,13 @@ function scoreTable(data) {
       render: entryPriceCell,
     },
   ];
+
+  // Opt-in (SPEC 49.15): who else is quoting a target. Same renderer as the portfolio, the
+  // watchlist, discovery and the stock page — one cell, nothing to drift (Gotcha 85). Gated on
+  // the toggle purely for width: the default table is at the 20-column budget B-098 set.
+  if (FILTERS.state.showAnalysts) {
+    cols.push(analystCoverageCol());
+  }
 
   // Opt-in: one compact bar per dimension. Nulls become the striped "not measured" marker, which
   // is deliberately impossible to mistake for a low bar.
@@ -541,7 +563,11 @@ function paint(opts = {}) {
     // The FILTERED count, because that is the list directly underneath this heading. The chip on
     // "The screening universe" above carries the unfiltered total, so both numbers are on screen
     // and each one describes its own list (Gotcha 98).
-    scoreTable(data)), data.length));
+    scoreTable(data),
+    // Only when the column is on: a line explaining what blanks in a column mean is noise when
+    // the column is not drawn. Over `data` - the list actually under this heading (B-098).
+    FILTERS.state.showAnalysts ? analystCoverageLine(data, { noun: 'stocks' }) : null),
+  data.length));
 
   nodes.push(withSummary(section('Grade spread',
     'How the screened universe breaks down by grade. A+ is a composite of 85 or more, D is under 35.',

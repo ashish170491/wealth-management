@@ -56,6 +56,9 @@ class AnalystCoverageSurfaceTest {
         m.put("analystLastCallOn", LocalDate.class);
         m.put("analystTargetsFrom", String.class);
         m.put("analystNote", String.class);
+        // Live targets the price has already passed. Integer, so "the lookup did not run" and
+        // "none had been passed" stay apart like every other count here.
+        m.put("analystOvertaken", Integer.class);
         return Map.copyOf(m);
     }
 
@@ -229,6 +232,139 @@ class AnalystCoverageSurfaceTest {
         assertThat(summary.get("medianTarget")).isEqualTo(c.medianTarget());
         assertThat(summary.get("openTargets")).isEqualTo(c.openTargets());
         assertThat(summary.get("note")).isEqualTo(c.note());
+    }
+
+    /**
+     * The same fifteen names must exist on the watchlist row (SPEC 49.15).
+     *
+     * <p>The watchlist, the screener, discovery and the portfolio all feed one renderer. A rename
+     * on this record fails nothing at compile time - the cell finds {@code undefined} and draws
+     * the unmeasured marker for ever, on a stock the app measured perfectly well. That is the
+     * {@code CompoundingSurfaceContractTest} failure shape, and it is quieter here than most,
+     * because "not measured" is an ordinary thing to see in this column.
+     */
+    @Test
+    @DisplayName("The watchlist row carries every field the analyst coverage cell reads")
+    void watchlistRowHonoursTheContract() {
+        Map<String, Class<?>> actual = Arrays.stream(
+                        com.example.trading.watchlist.WatchlistItemView.class.getRecordComponents())
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.RecordComponent::getName,
+                        java.lang.reflect.RecordComponent::getType,
+                        (a, b) -> a, LinkedHashMap::new));
+
+        assertThat(actual).containsKeys(REQUIRED.keySet().toArray(new String[0]));
+        REQUIRED.forEach((name, type) -> assertThat(actual.get(name))
+                .as("WatchlistItemView.%s must be %s - a primitive would collapse "
+                        + "'did not look' into 'looked and found none'", name, type.getSimpleName())
+                .isEqualTo(type));
+    }
+
+    /**
+     * The screener and discovery rows carry the same names, written by {@code DashboardService}.
+     *
+     * <p>Those rows are an untyped {@code Map<String,Object>}, so there is nothing to reflect on.
+     * What can be pinned is that the Java field names and the record accessors have not drifted
+     * apart - the two renames crossing that boundary ({@code impliedUpsidePct ->
+     * analystUpsidePct}, {@code symbolAnswered -> analystTargetsFrom}) are exactly where a
+     * careless edit would silently blank two columns on three screens.
+     */
+    @Test
+    @DisplayName("Coverage exposes every component the wire contract is built from")
+    void coverageExposesTheComponentsTheWireNeeds() {
+        List<String> components = Arrays.stream(
+                        AnalystTargetViewService.Coverage.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList();
+
+        assertThat(components).contains(
+                "houses", "houseNames", "openTargets", "medianTarget", "highestTarget",
+                "lowestTarget", "impliedUpsidePct", "priceAsStored", "priceAsOf",
+                "housesEver", "houseNamesEver", "targetsEver", "lastCallOn",
+                "symbolAnswered", "note", "overtakenTargets");
+        assertThat(components).hasSize(REQUIRED.size());
+    }
+
+    /**
+     * A target the share price has already passed leaves the median (SPEC 49.16).
+     *
+     * <p>Measured on the live book before this rule existed: 43 of 459 running targets had been
+     * overtaken, every one of them filed as a downward call because its level sat at or just
+     * below the price on the day it was published - so the measurement pass would never retire
+     * it, and it sat in the live set dragging the median down. On CPPLUS that produced a median
+     * BELOW the stored price and a reported "upside" of minus 4.6%.
+     */
+    @Test
+    @DisplayName("A target the price has already passed leaves the median and is counted")
+    void targetsThePriceHasPassedLeaveTheMedian() {
+        AnalystTargetEntity standing = open("Motilal Oswal", 4200.0);
+        standing.setLastPrice(3825.5);
+        standing.setLastMeasuredAt(LocalDateTime.now());
+        AnalystTargetEntity passed = open("ICICI Securities", 3100.0);
+        passed.setLastPrice(3825.5);
+        passed.setLastMeasuredAt(LocalDateTime.now());
+
+        AnalystTargetViewService.Coverage c =
+                AnalystTargetViewService.coverage(List.of(standing, passed), "NSE:CPPLUS");
+
+        // The median is over what is still standing, so it can never sit below the price it is
+        // measured against, and the upside it implies is positive rather than nonsense.
+        assertThat(c.medianTarget()).isEqualTo(4200.0);
+        assertThat(c.lowestTarget()).isEqualTo(4200.0);
+        assertThat(c.impliedUpsidePct()).isGreaterThan(0.0);
+        assertThat(c.overtakenTargets()).isEqualTo(1);
+
+        // But the firm is NOT dropped. A house whose target the price has overtaken is still
+        // covering the stock, and reporting it as uncovered would be worse than the original bug
+        // - it is the one claim this ledger can never support (SPEC 49.7).
+        assertThat(c.houses()).isEqualTo(2);
+        assertThat(c.houseNames()).containsExactly("ICICI Securities", "Motilal Oswal");
+        assertThat(c.openTargets()).isEqualTo(2);
+    }
+
+    /**
+     * When every running target has been passed there is no median at all - and no zero either.
+     *
+     * <p>The stock is still covered. What has run out is anything to quote as an upside, which
+     * the surfaces say in words rather than by drawing a blank (Gotcha 44).
+     */
+    @Test
+    @DisplayName("All targets passed leaves no median, no upside, and the firms intact")
+    void allTargetsPassedIsStillCoverage() {
+        AnalystTargetEntity a = open("Emkay", 900.0);
+        a.setLastPrice(1059.4);
+        a.setLastMeasuredAt(LocalDateTime.now());
+        AnalystTargetEntity b = open("Motilal Oswal", 740.0);
+        b.setLastPrice(1059.4);
+        b.setLastMeasuredAt(LocalDateTime.now());
+
+        AnalystTargetViewService.Coverage c =
+                AnalystTargetViewService.coverage(List.of(a, b), "NSE:CYIENT");
+
+        assertThat(c.medianTarget()).isNull();
+        assertThat(c.highestTarget()).isNull();
+        assertThat(c.lowestTarget()).isNull();
+        assertThat(c.impliedUpsidePct()).isNull();
+        assertThat(c.overtakenTargets()).isEqualTo(2);
+        assertThat(c.houses()).isEqualTo(2);
+        // Still covered: this must never collapse into the "nothing on file" state.
+        assertThat(c.housesEver()).isEqualTo(2);
+    }
+
+    /**
+     * With no stored price nothing can be judged passed, so nothing is dropped.
+     *
+     * <p>The alternative - treating an unknown price as zero and calling every target passed -
+     * is the null-is-not-zero error this whole feature is built to avoid.
+     */
+    @Test
+    @DisplayName("Without a stored price no target is treated as passed")
+    void noStoredPriceDropsNothing() {
+        AnalystTargetViewService.Coverage c = AnalystTargetViewService.coverage(
+                List.of(open("Emkay", 100.0), open("LKP", 140.0)), "NSE:X");
+
+        assertThat(c.priceAsStored()).isNull();
+        assertThat(c.overtakenTargets()).isZero();
+        assertThat(c.medianTarget()).isEqualTo(120.0);
     }
 
     private static AnalystTargetEntity open(String house, double target) {

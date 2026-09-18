@@ -276,6 +276,15 @@ public class HoldingsEntity {
     @Transient
     private java.time.LocalDate analystPriceAsOf;
 
+    /**
+     * Live targets the share price has already passed (SPEC 49.16).
+     *
+     * <p>Excluded from the median, the range and the upside, and counted here so the missing
+     * figure can be explained instead of merely going blank on a stock that is plainly covered.
+     */
+    @Transient
+    private Integer analystOvertaken;
+
     /** Firms that have ever quoted a target here. Covered-but-quiet is not never-covered. */
     @Transient
     private Integer analystHousesEver;

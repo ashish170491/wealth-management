@@ -96,6 +96,9 @@ import {
 } from './fundamentals-cells.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
+import {
+  analystCoverageCol, analystFilterGroup, analystCoverageLine,
+} from './analyst-cells.js';
 import { analyseCol } from './ipo-analyse.js';
 
 const view = document.getElementById('view');
@@ -163,6 +166,20 @@ const compoundingCol = () => ({
  * (SPEC 27.16, Gotcha 120).
  */
 const macroCol = () => macroExposureCol();
+
+/**
+ * Who else is quoting a price target (SPEC 49.15) — on the screening-row lanes only.
+ *
+ * Same restriction as macroCol above, for the same reason: the insider, universe and IPO tables
+ * carry no analyst* fields, so the column would draw "not measured" on every line — spending
+ * column budget to say nothing (SPEC 27.16, Gotcha 120).
+ *
+ * The contrarian lane is where this earns its place. Measured on the live run: 23 of its 26 rows
+ * have a brokerage target still running, the densest coverage anywhere in the app. A good
+ * business that has fallen is exactly the case where "does anyone still have a number on it?"
+ * is worth asking — and it contributes zero points to any score.
+ */
+const analystCol = () => analystCoverageCol();
 
 /**
  * The business figures themselves, in the order an investor reads them: what it earns on its
@@ -239,6 +256,7 @@ function underRadarSection(rows) {
     { key: 'compositeScore', label: 'Score', align: 'r', render: scoreCell },
     compoundingCol(),
     macroCol(),
+    analystCol(),
     { key: 'underDiscoveryScore', label: 'Under-radar', align: 'r', render: (r) => scoreBar(r.underDiscoveryScore, { width: 54 }) },
     ...businessCols(),
     { key: 'marketCapCrores', label: 'Market cap', align: 'r', render: marketCapCell },
@@ -442,6 +460,7 @@ function contrarianSection(rows) {
     { key: 'rangePosition52w', label: 'How far down', align: 'r', value: (r) => r.rangePosition52w, render: fallCell },
     compoundingCol(),
     macroCol(),
+    analystCol(),
     { key: 'financialQualityVerdict', label: 'Fin. quality', value: finQualityRank, render: finQualityCell },
     { key: 'turnaroundVerdict', label: 'Turning?', value: (r) => (r.turnaroundVerdict === 'TURNAROUND_CANDIDATE' ? 0 : r.turnaroundVerdict ? 1 : 2), render: turnaroundCell },
     ...businessCols(),
@@ -461,7 +480,11 @@ function contrarianSection(rows) {
       + 'here is a finding rather than a failure.');
 
   return withCount(section('Good Business, Currently Down', explain,
-    card(body, contrarianCoverage(rows, picks))), picks.length);
+    card(body,
+      // Mandatory beside the Analysts column (Gotcha 44). Over `picks` - the list drawn above
+      // it, not the universe behind it (B-098). Measured at 23 of 26 live on this lane.
+      picks.length ? analystCoverageLine(picks, { noun: 'stocks' }) : null,
+      contrarianCoverage(rows, picks))), picks.length);
 }
 
 /**
@@ -886,6 +909,9 @@ let loaded = { rows: [], screeningDate: null, insider: [], universe: null, ipo: 
  * looking at", not "which stocks are good" — that second question is what the lanes are.
  */
 const FILTERS = chipFilters([
+  // Narrows the universe the three screening-row lanes search. Deliberately on this bar only:
+  // the insider, universe and IPO bars govern rows that carry no analyst* fields at all.
+  analystFilterGroup(),
   {
     label: 'Compounding:',
     key: 'compounding',

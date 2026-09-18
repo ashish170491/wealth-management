@@ -210,6 +210,7 @@ public class HoldingsViewDecorator {
         h.setAnalystLastCallOn(c.lastCallOn());
         h.setAnalystTargetsFrom(c.symbolAnswered());
         h.setAnalystNote(c.note());
+        h.setAnalystOvertaken(c.overtakenTargets());
     }
 
     /**

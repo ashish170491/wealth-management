@@ -47,6 +47,8 @@ public class WatchlistTrackingService {
     private final WatchlistAnalysisService analysisService;
     private final MarketDataService marketDataService;
     private final MultibaggerScreenerService screenerService;
+    /** SPEC 49.15. DB-only: the ledger the 13:20 pass already wrote, never a live fetch. */
+    private final com.example.trading.analyst.AnalystTargetViewService analystTargetViewService;
     /** SPEC 41.5 - the one DB-backed reader of the compounding lens, shared with three other screens. */
     private final com.example.trading.multibagger.CompoundingLensService compoundingLensService;
 
@@ -108,12 +110,28 @@ public class WatchlistTrackingService {
             macro = Map.of();
         }
 
+        // Same shape again: who else is quoting a target on these stocks (SPEC 49.15). Measured
+        // on the live watchlist, 9 of 23 carry a live target, 6 have been covered and gone quiet
+        // and 8 have nothing on file - all three states, which is why the column is worth drawing.
+        Map<String, com.example.trading.analyst.AnalystTargetViewService.Coverage> analyst;
+        try {
+            analyst = analystTargetViewService.forSymbols(
+                    rows.stream().map(WatchlistEntity::getSymbol).toList());
+        } catch (Exception e) {
+            // Name what the emptiness will be mistaken for (B-054). Every row then reads "not
+            // measured", which must never be read as "no brokerage covers this" (SPEC 49.7).
+            log.warn("Analyst coverage failed - every watchlist row will read 'not measured' in "
+                    + "the analyst column, which must not be read as 'nobody covers it': {}",
+                    e.getMessage());
+            analyst = Map.of();
+        }
+
         List<WatchlistItemView> out = new ArrayList<>(rows.size());
         for (WatchlistEntity w : rows) {
             try {
                 out.add(toView(w, seriesBySymbol.getOrDefault(w.getSymbol(), List.of()), niftyNow, niftyAsOf,
                         held.contains(w.getSymbol()), compounding.get(w.getSymbol()),
-                        macro.get(w.getSymbol())));
+                        macro.get(w.getSymbol()), analyst.get(w.getSymbol())));
             } catch (Exception e) {
                 log.warn("Watchlist view failed for {} — row omitted, not defaulted: {}", w.getSymbol(), e.getMessage());
             }
@@ -128,7 +146,8 @@ public class WatchlistTrackingService {
     private WatchlistItemView toView(WatchlistEntity w, List<WatchlistSnapshotEntity> snaps,
                                      Double niftyNow, LocalDate niftyAsOf, boolean heldNow,
                                      com.example.trading.multibagger.CompoundingLensService.Reading compounding,
-                                     com.example.trading.macro.MacroExposureService.Reading macro) {
+                                     com.example.trading.macro.MacroExposureService.Reading macro,
+                                     com.example.trading.analyst.AnalystTargetViewService.Coverage analyst) {
         MultibaggerScoreEntity score = latestScore(w.getSymbol());
         HoldingsDecayService.DecayAlert decay = quietDecay(w.getSymbol());
 
@@ -222,7 +241,26 @@ public class WatchlistTrackingService {
                         : java.util.List.of(),
                 macro != null && !macro.result().reasons().isEmpty()
                         ? macro.result().reasons().size() : null,
-                macro != null ? macro.symbolAnswered() : null);
+                macro != null ? macro.symbolAnswered() : null,
+                // Null throughout when the lookup did not run, so the cell draws the unmeasured
+                // marker. A Coverage that IS present carries a counted zero, which reads as
+                // "None on file" - a different fact, and the distinction B-117 was filed for.
+                analyst != null ? analyst.houses() : null,
+                analyst != null ? analyst.houseNames() : null,
+                analyst != null ? analyst.openTargets() : null,
+                analyst != null ? analyst.medianTarget() : null,
+                analyst != null ? analyst.highestTarget() : null,
+                analyst != null ? analyst.lowestTarget() : null,
+                analyst != null ? analyst.impliedUpsidePct() : null,
+                analyst != null ? analyst.priceAsStored() : null,
+                analyst != null ? analyst.priceAsOf() : null,
+                analyst != null ? analyst.housesEver() : null,
+                analyst != null ? analyst.houseNamesEver() : null,
+                analyst != null ? analyst.targetsEver() : null,
+                analyst != null ? analyst.lastCallOn() : null,
+                analyst != null ? analyst.symbolAnswered() : null,
+                analyst != null ? analyst.note() : null,
+                analyst != null ? analyst.overtakenTargets() : null);
     }
 
     /**

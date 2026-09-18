@@ -124,6 +124,11 @@ public class DashboardService {
     private final com.example.trading.macro.MacroEventRepository macroEventRepository;
     private final com.example.trading.intelligence.MarketImpactNewsRepository marketImpactNewsRepository;
     private final com.example.trading.analyst.AnalystTargetRepository analystTargetRepository;
+    /**
+     * Analyst coverage for the screening rows (SPEC 49.15). DB-only: the ledger the 13:20 pass
+     * already wrote, never a live fetch, so the screener and discovery stay page-load safe.
+     */
+    private final com.example.trading.analyst.AnalystTargetViewService analystTargetViewService;
     /** SPEC 50: the freshness stamp for quarterly result capture. Read-only, like every field here. */
     private final com.example.trading.earnings.QuarterlyResultRepository quarterlyResultRepository;
     private final com.example.trading.learning.ScreeningCoverageService screeningCoverageService;
@@ -581,10 +586,18 @@ public class DashboardService {
                 Map<String, com.example.trading.macro.MacroExposureService.Reading> macro =
                         quietly("screening:macro", Map::of, () -> macroExposureService.forSymbols(
                                 rows.stream().map(MultibaggerScoreEntity::getSymbol).toList()));
+                // The same, for who else is quoting a target on these stocks (SPEC 49.15). One
+                // query for the run: per row it would be ~1,100 lookups, because every symbol
+                // resolves through up to four exchange spellings (Gotcha 84). Measured on the
+                // live universe, 213 of 274 screened stocks carry a live target, so this column
+                // discriminates rather than reading empty (B-113's rule).
+                Map<String, com.example.trading.analyst.AnalystTargetViewService.Coverage> analyst =
+                        quietly("screening:analyst", Map::of, () -> analystTargetViewService.forSymbols(
+                                rows.stream().map(MultibaggerScoreEntity::getSymbol).toList()));
                 return new DashboardDto.ScreenerResponse(date, rows.size(),
                         rows.stream()
                                 .map(r -> (Object) withBuyTiming(r, tracked.get(r.getSymbol()), years, change,
-                                        macro.get(r.getSymbol())))
+                                        macro.get(r.getSymbol()), analyst.get(r.getSymbol())))
                                 .toList());
             }
         }
@@ -781,6 +794,49 @@ public class DashboardService {
         m.put("macroExposureFrom", r.symbolAnswered());
     }
 
+    /**
+     * Who else is quoting a price target on this stock (SPEC 49.15).
+     *
+     * <p>The same fifteen keys {@code HoldingsViewDecorator.applyAnalyst} writes onto a holdings
+     * row, so the screener, discovery, the watchlist and the portfolio all feed one renderer and
+     * cannot count brokerages differently (Gotcha 85).
+     *
+     * <p><b>A null coverage writes nothing, deliberately.</b> That is what keeps three states
+     * apart on the wire. Absent keys mean the lookup did not run and the cell draws the unmeasured
+     * marker; a {@code Coverage} whose {@code houses()} is 0 means the ledger was searched and
+     * nothing is running, which is a real measurement and reads as "None on file". Collapsing
+     * those two lets a failed query render as "no brokerage covers this stock" - the one claim
+     * this ledger can never support (SPEC 49.7, Gotcha 44).
+     *
+     * <p>Contributes zero points to any score, here as everywhere else in SPEC 49.
+     */
+    private void putAnalyst(Map<String, Object> m,
+                            com.example.trading.analyst.AnalystTargetViewService.Coverage c) {
+        if (c == null) {
+            return;
+        }
+        m.put("analystHouses", c.houses());
+        m.put("analystHouseNames", c.houseNames());
+        m.put("analystOpenTargets", c.openTargets());
+        m.put("analystMedianTarget", c.medianTarget());
+        m.put("analystHighestTarget", c.highestTarget());
+        m.put("analystLowestTarget", c.lowestTarget());
+        m.put("analystUpsidePct", c.impliedUpsidePct());
+        // The price the percentage was measured from, and when. Without it a reader recomputes
+        // the move against the price column beside it and concludes the app cannot add up.
+        m.put("analystPriceAsStored", c.priceAsStored());
+        m.put("analystPriceAsOf", c.priceAsOf());
+        m.put("analystHousesEver", c.housesEver());
+        m.put("analystHouseNamesEver", c.houseNamesEver());
+        m.put("analystTargetsEver", c.targetsEver());
+        m.put("analystLastCallOn", c.lastCallOn());
+        m.put("analystTargetsFrom", c.symbolAnswered());
+        m.put("analystNote", c.note());
+        // Live targets the price has already passed (SPEC 49.16). Counted, never silently
+        // dropped: a median that quietly stops appearing is worse than one that explains itself.
+        m.put("analystOvertaken", c.overtakenTargets());
+    }
+
     /** Watchlist rows by symbol. Empty on any failure - the screener must still render. */
     private Map<String, WatchlistItemView> trackedVerdicts() {
         Map<String, WatchlistItemView> map = new LinkedHashMap<>();
@@ -798,19 +854,20 @@ public class DashboardService {
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts) {
-        return withBuyTiming(e, tracked, yearsOfAccounts, ScoreChangeContext.none(), null);
+        return withBuyTiming(e, tracked, yearsOfAccounts, ScoreChangeContext.none(), null, null);
     }
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts,
                                               ScoreChangeContext change) {
-        return withBuyTiming(e, tracked, yearsOfAccounts, change, null);
+        return withBuyTiming(e, tracked, yearsOfAccounts, change, null, null);
     }
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts,
                                               ScoreChangeContext change,
-                                              com.example.trading.macro.MacroExposureService.Reading macro) {
+                                              com.example.trading.macro.MacroExposureService.Reading macro,
+                                              com.example.trading.analyst.AnalystTargetViewService.Coverage analyst) {
         ScreenerTimingVerdict.Result r = ScreenerTimingVerdict.evaluate(new ScreenerTimingVerdict.Input(
                 e.getCompositeScore(),
                 e.getWeeklyRsi(),
@@ -827,6 +884,7 @@ public class DashboardService {
 
         putCompounding(m, compoundingLensService.evaluate(e, yearsOfAccounts));
         putMacro(m, macro);
+        putAnalyst(m, analyst);
 
         // Sector in the shared vocabulary, where the price sits in its 52-week range, and how the
         // score has moved against the universe (SPEC §12.5, 2026-09-09). All derived from fields

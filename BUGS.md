@@ -97,6 +97,7 @@ and renaming it over the original is the version of this that cannot lose data.
 | B-124 | P2 | The app's only armed risk control never reaches the attention list | 2026-09-18 | `BSE:ABCAPITAL` is held. Its 2026-09-17 screening row carries `forensicFlags = CASH_CONVERSION:HIGH` - the severity tier that disqualifies (Gotcha 77) - plus `financialQualityVerdict = HIGH_RISK` and `compositeScore = 54`, the HIGH_RISK hard cap itself; compounding reads `NO`. It appears **nowhere** on the Overview. `DashboardService.attention` draws from exactly four sources: `holdings.recommendation` in {SELL, STRONG_SELL} (the momentum rule B-069 and B-056 are about), thesis decay, allocation drift and concentration alerts. Forensic flags and the financial-quality verdict are not among them, although both sit on the screening row the same service reads two methods away. A business that is structurally fragile but whose chart is fine is therefore invisible - while the list had room for ten allocation-bucket rows (B-121). **Direction: silently flatters a holding the app itself judged HIGH_RISK.** Forensic is the one signal that ships **armed** (`forensic-actionable: true`, Gotcha 42) precisely because a risk control being wrong costs capital; arming it and then not showing it on the action surface removes the asymmetry it was armed for. **Fix**: a `FORENSIC_FLAG` kind (URGENT for HIGH, WARNING for MEDIUM naming the flag, INFO never raised) and a `QUALITY_RISK` kind for `HIGH_RISK`, both resolved across exchange prefixes via `SymbolVariants` and both carrying the screening date they came from - surfacing verdicts the engine already computes, adding no new vocabulary and no points. |
 | B-125 | P2 | My Portfolio's allocation heading reads a green "On target" while the Overview lists the same buckets as drifting | 2026-09-18 | `page-holdings.js:1096-1100` filters `data.drift.buckets` on `b.status === 'OVER_TOLERANCE'`. **`AllocationDto.DriftBucket` has no `status` field** - it has `alertLevel`, which `driftPanel()` itself reads correctly at line 1000. The filter therefore always yields 0, so the folded section heading renders **"On target"** with `{type:'success'}` - a green all-clear - from the same response that produced 10 over-tolerance buckets on the Overview. Under SPEC 27.15 a folded heading is the only thing the reader sees, so a green badge means the section is never opened. Two screens answering one question with different answers (Gotcha 85), and the wrong one is the reassuring one. Adjacent, same file, line 468: the thesis-drift count is `verdict !== 'INTACT'`, which includes the **9 `NO_DATA`** holdings, so that heading reads 16 where the Overview's list has 7 - "could not check" counted as "not intact" (Gotcha 44/68). Both arrived with the uncommitted collapsible-sections work and neither is on the Overview, so both are filed rather than fixed. **Fix**: read `alertLevel`; derive each count from the list it sits above (Gotcha 98); exclude or separately label the unmeasured decay rows. |
 | B-126 | P3 | Every section on every page folds by default, including the landing page's action surface | 2026-09-18 | Headless render of `index.html`: all five sections carry `hidden="until-found"`, so a first-time reader's landing page is five collapsed headings - one of which is *"What needs your attention today (11)"*. `ui.js` `foldSections()` calls `collapse(node, { key, open: false })` unconditionally. SPEC 27.15 specifies the opposite: *"The default is data-driven, not positional... the first section **with a non-zero count** opens and the rest fold. A page whose one open section is the empty one is the opposite of a contents page."* Count pills make this safe rather than dangerous - the reader can see there are 11 items - so it is a specification mismatch and a usability regression, not a correctness bug, which is why it is P3. Affects all eleven folding pages; it costs most on the Overview, whose own javadoc says it "answers two questions and then gets out of the way" and which in this state answers neither without a click. **Fix**: open the first section whose heading carries a non-zero `.count` pill, falling back to all-folded when none does, with a reader's stored choice still winning over the default. |
+| B-128 | P3 | Two junk analyst targets survived capture, one of them filed 10x off | 2026-09-18 | Found while measuring B-127. Two rows in `analyst_targets` carry a target that cannot belong to the stock it is filed against: **NSE:LT, Emkay, Rs 330** against a price at call of **Rs 4,037.70** (the price is 1091% above the target), and **NSE:SOLARINDS, Prabhudas Lilladher, Rs 2,191** against **Rs 13,445.00** (917%). Both carry a **BUY** rating, which is what gives them away - nobody publishes a Buy at a twelfth of the current price. Root cause not diagnosed; most likely the structured feed carrying a figure from another field, or a stock-id collision of the kind SPEC 49.11(g) describes. `AnalystTargetParser`'s currency-marker rule (Gotcha 126a) guards the *headline* path, and these came through the **structured** path, which has no equivalent sanity check on magnitude. **Blast radius is bounded but real**: the coverage median is already protected, because B-127 excludes any target the price has run past and both of these qualify, so no screen quotes them - but they still pollute `AnalystTrackRecord`. Each will resolve MISSED at its horizon and count against its house's hit rate, and both Emkay and Prabhudas Lilladher sit in the 15+ resolved-call set where a hit rate is published. Two rows in 6,986, so the effect is small, but it records a fact about the feed as a fact about the desk. **Fix**: a magnitude guard at capture - reject a target more than ~5x or less than ~0.2x the price at the call and log it rather than storing it - with the threshold set against the measured distribution first rather than assumed, the same discipline SPEC 49.12 used for `MIN_HOUSES_FOR_AGREEMENT`. Filed rather than fixed: it is a capture-side change with its own measurement to do, and it is not what was asked for. |
 | B-013 | P2 | Stale-symbol replacements pending verification | 2026-05-10 | Removed 23 stale symbols (B-005). 2026-05-23: removed `GSPL` from the Nifty200 pool (Kite `/quote` returns `{status=success, data={}}` — invalid tradingsymbol) and made `KWIL-BE` resolve via NSE trading-series-suffix stripping in `KiteBrokerClient.getQuote` (`-BE/-BZ/-BL/-IL` → plain symbol). TATAMOTORS, LTIM still need verified post-corporate-action tradingsymbols before re-adding. Don't replace by guess — wrong symbol = wrong company analysed. |
 
 ## In Progress
@@ -106,6 +107,55 @@ and renaming it over the original is the version of this that cannot lose data.
 ---
 
 ## Resolved Bugs
+
+### B-127 - A target the share price had already passed kept dragging the median down  `[P2]`  `RESOLVED 2026-09-18`
+
+**Symptom.** The Analysts column reported CPPLUS at **minus 4.6%** "upside" to a median target of
+Rs 3,650 while the ledger's own stored price was Rs 3,825 - a median sitting *below* the price it
+is measured against, which is not an upside at all. Found by the investor reading the column.
+
+**Root cause.** `AnalystTargetOutcomeService` sets a target's `direction` from
+`targetPrice >= priceAtCall` and retires it as REACHED only when the price moves **that** way. A
+target published at or just below the price of the day is therefore filed as a DOWNWARD call, and
+if the price then runs UP past it the call can never resolve: not reached (the price went the
+other way), not missed until its horizon expires up to a year later. It stays in the live set the
+whole time, and `AnalystTargetViewService.coverage()` averaged it into the median.
+
+CPPLUS is the clean case - ICICI Securities published Rs 3,100 when the stock was Rs 3,126, the
+stock is now Rs 3,825, and that stale level pulled the median from Rs 4,200 down to Rs 3,650.
+
+**Measured across the live book before the fix: 43 of 459 running targets, every one overtaken.**
+By rating: 18 SELL, 21 HOLD, 4 BUY. Two of the four BUYs are the junk rows in B-128.
+
+**Blast radius.** The median target and the implied-upside figure everywhere the ledger is read -
+the portfolio and the stock page, and from SPEC 49.15 the same day, the screener, the watchlist,
+discovery and the Overview. Never a score: SPEC 49 contributes zero points to anything.
+
+**Fix.** `coverage()` establishes the stored price first, then partitions the live set: a target
+at or below that price leaves the median, the range and the upside, and is counted in a new
+`overtakenTargets`. Two things it deliberately does **not** do. It does not drop the **firm** - a
+house whose target the price has overtaken is still covering the stock, and reporting it as
+uncovered would be a worse error than the one being fixed (SPEC 49.7). And it does not hide the
+absence: the cell reads *"price past its target"* or appends *"N passed"*, and the panel carries a
+Passed column, because a median that quietly stops appearing is the shape of the bug rather than
+the fix (Gotcha 44, B-117).
+
+A genuine Sell call sitting below the price is the same shape and is handled the same way. It
+keeps its firm - it is a real live claim and the track record still scores it - but averaging it
+into an "upside to the median target" states a level nobody published.
+
+**Verification.** Live, after the fix: CPPLUS **-4.6% -> +9.8%**, median Rs 3,650 -> Rs 4,200, one
+target flagged passed. Across the screened universe the three coverage states are **unchanged**
+(213 live / 40 quiet / 21 nothing on file - nothing lost its classification), 34 stocks carry at
+least one passed target, 13 have had every running target passed, and **no stock reports a
+negative upside any more**. Rendering confirmed on the screener with the column on: 21 cells
+carrying a `N passed` suffix, 13 reading `price past its target`, the firm count still drawn
+beside each, and the faint line's styling confirmed via `getComputedStyle` rather than by reading
+the attribute back (Gotcha 90). Pinned by three cases in `AnalystCoverageSurfaceTest`, including
+that an **absent** stored price drops nothing - treating an unknown price as zero would call every
+target passed, which is the null-is-not-zero error this feature exists to avoid.
+
+---
 
 ### B-119 - The freshness strip aged five tables by up to 15 hours, on every page  `[P2]`  `RESOLVED 2026-09-17`
 
