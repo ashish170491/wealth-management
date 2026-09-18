@@ -115,6 +115,16 @@ public class AllocationService {
         Set<String> seenKeys = new HashSet<>();
 
         for (PortfolioTargetWeightEntity target : targets) {
+            // A placeholder is never a bucket (B-096, Gotcha 110), and a TARGET on one is worse
+            // than a slice: "OTHER is 0.0% against a 15.0% target" is a warning the investor
+            // cannot act on, because since SectorMapping.resolve classifies every holding there
+            // is nothing that can ever land in it. Unsatisfiable by construction, so it is not
+            // reported as drift at all - the unclassified weight is already carried separately
+            // on the response, by weight and by name, which is the honest form of the same fact.
+            if (BUCKET_SECTOR.equals(target.getBucketType())
+                    && SectorMapping.isUnknown(SectorMapping.normalize(target.getBucketKey()))) {
+                continue;
+            }
             double targetWeight = target.getTargetWeight();
             double actualWeight = actualFor(actual, target.getBucketType(), target.getBucketKey());
             double driftPp = actualWeight - targetWeight;
@@ -134,11 +144,30 @@ public class AllocationService {
 
         return new AllocationDto.DriftResponse(
                 profile.getName(), actual.totalValue(), actual.holdingsCount(), buckets,
-                actual.unclassifiedWeight(), actual.unclassifiedSymbols());
+                actual.unclassifiedWeight(), actual.unclassifiedSymbols(),
+                targetsStated(profile));
+    }
+
+    /**
+     * Has the investor actually chosen these targets, or are they the ones we seeded?
+     *
+     * <p>TRUE only when the flag says so. Null - a profile written before the column existed - is
+     * deliberately NOT read as true: it is unknown, and the caller is expected to say so rather
+     * than raise an alarm against numbers whose author it cannot name (Gotcha 68).
+     */
+    public static boolean targetsStated(PortfolioProfileEntity profile) {
+        return profile != null && Boolean.TRUE.equals(profile.getTargetsStated());
     }
 
     @Transactional
     public void replaceTargetWeights(Long profileId, List<PortfolioTargetWeightEntity> newWeights) {
+        // This is the investor's own write, and the only one: nothing else calls this method, and
+        // the bootstrapper seeds a profile with no weights at all. Recording it here is what lets
+        // every reader tell a chosen target from a seeded one.
+        profileRepository.findById(profileId).ifPresent(p -> {
+            p.setTargetsStated(true);
+            profileRepository.save(p);
+        });
         targetRepository.deleteByProfileId(profileId);
         targetRepository.flush();
         for (PortfolioTargetWeightEntity w : newWeights) {

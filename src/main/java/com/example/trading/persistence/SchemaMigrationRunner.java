@@ -61,6 +61,10 @@ public class SchemaMigrationRunner {
             // B-097: a seeded thesis is not a statement. Gotcha 74 case - a silently missing
             // column here would make every investor-written thesis read as generated.
             new String[]{"holding_conviction", "thesis_stated", "boolean"},
+            // Same rule one level up: a SEEDED allocation target is not a chosen one. Gotcha 74
+            // case - if this column is silently missing, every seeded target reads as stated and
+            // the landing page goes back to raising ten daily warnings nobody can act on.
+            new String[]{"portfolio_profile", "targets_stated", "boolean"},
             // Portfolio truth (SPEC 46): benchmark closes and cash are new tables, but the
             // unique constraints are declared on the entities; nothing to ensure here.
             // PIT V2.0 ingestion key (B-089). Gotcha 74: ddl-auto=update does not reliably
