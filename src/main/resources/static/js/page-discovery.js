@@ -1001,11 +1001,14 @@ function paint(opts = {}) {
 
   // Every section folds, and the reader's choice sticks per section in this browser (SPEC 27.15).
   //
-  // Default: the first section that actually FOUND something is open, the rest are folded. The
-  // literal first section is Under the Radar, which reads 0 today — opening an empty section
-  // while folding the ones with findings is the opposite of what a contents page is for. What
-  // makes this safe at all is that each heading keeps its count, so a folded lane still says
-  // how much is behind it.
+  // Everything starts folded, on this page as on every other. The earlier rule here opened the
+  // first lane that had actually found something — which existed to avoid opening an empty
+  // section while folding the ones with findings. Opening nothing avoids that too, and the
+  // count each heading carries is what still separates "I chose not to look at this" from
+  // "I did not know there was anything to look at".
+  //
+  // The explicit keys stay: they are what a reader's stored choices are filed under, and the
+  // page-wide pass in mount() deliberately leaves an already-folding section alone.
   const sections = [
     ['under-radar', underRadarSection(shown)],
     ['currently-down', contrarianSection(shown)],
@@ -1015,19 +1018,12 @@ function paint(opts = {}) {
     ['listings', ipoSection(loaded.ipo)],
   ].filter(([, node]) => node);
 
-  const countOf = (node) => {
-    const pill = node.querySelector('.section-title .count');
-    return pill ? Number(pill.textContent) || 0 : 0;
-  };
-  const firstWithFindings = sections.findIndex(([, node]) => countOf(node) > 0);
-  const openIndex = firstWithFindings === -1 ? 0 : firstWithFindings;
-
   mount(view,
     header,
     bar,
-    sections.map(([key, node], i) => collapse(node, {
+    sections.map(([key, node]) => collapse(node, {
       key: 'discovery.' + key,
-      open: i === openIndex,
+      open: false,
     })));
 
   if (opts.keepFocus) {

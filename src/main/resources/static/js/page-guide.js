@@ -16,7 +16,7 @@
 import { get } from './api.js';
 import { initChrome } from './nav.js';
 import { inr, pct } from './format.js';
-import { el, section, kpi, alert, card, mount, badge, empty, unmeasured } from './ui.js';
+import { el, section, kpi, alert, card, mount, badge, empty, unmeasured, revealSection} from './ui.js';
 
 const view = document.getElementById('view');
 
@@ -908,9 +908,17 @@ function jumpToHash() {
   if (!id) return;
   const target = document.getElementById(id);
   if (!target) return;
-  target.scrollIntoView({ block: 'start' });
+  // Every section folds now (SPEC 27.15), and an anchor inside a folded one is inside a hidden
+  // subtree — scrollIntoView on it silently does nothing, so the reader arrives at the top of
+  // the page with no idea the link worked. Find-in-page rescues itself via `beforematch`; a
+  // programmatic scroll does not, so the section is opened explicitly first.
+  revealSection(target);
   target.classList.add('jump-target');
   setTimeout(() => target.classList.remove('jump-target'), 2600);
+  // Next frame, not this one. The section has just gone from hidden to laid out, and a scroll
+  // issued in the same tick is computed against the collapsed layout — it lands in the wrong
+  // place, which looks exactly like the link not working.
+  requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
 }
 
 await initChrome();

@@ -1614,7 +1614,7 @@ Per-row live actions (the IPO analyse button, the watchlist and holdings re-anal
 one click: they are seconds long and clicked repeatedly, and a confirmation on each would train the
 reader to dismiss confirmations — which is what makes the one on the expensive action worthless.
 
-### 27.15 Collapsible sections ✅ *(new 2026-09-10)*
+### 27.15 Collapsible sections ✅ *(new 2026-09-10; extended to every page 2026-09-18)*
 
 Discovery measured **30,976px — about 31 screens** — and 84% of that was three tables:
 Recent Listings 14,017px (238 rows), Universe Expansion 7,261px (120), Insider Activity 4,926px
@@ -1648,6 +1648,77 @@ would be three things to keep in step. The three tables that are **not** screeni
 filings, the expansion funnel, recent listings — get their own chips, because their rows share no
 fields with a screening row and the universe bar cannot reach them. They are also, not
 coincidentally, where the length was.
+
+#### 27.15.1 Every page, every section, folded by default *(2026-09-18)*
+
+The mechanism above sat on three pages for eight days. It now runs on all thirteen, and two of
+its rules changed in the process.
+
+**The default is now "everything folded", everywhere.** The earlier rule opened the first section
+with a non-zero count. That rule existed to stop the page opening an *empty* section while folding
+the ones that had findings — and opening nothing satisfies that concern equally, while giving the
+reader what they actually asked for: a page that starts as one screen of headings. The reader's
+choice is still remembered per section, so this governs only the first visit to each page. The
+storage prefix moved to `dash:collapse:v2:` in the same change, because a stored value written
+under "open unless told otherwise" means the opposite under "folded unless told otherwise".
+
+Measured folded-versus-expanded, at 1600px:
+
+| Page | Expanded | Folded | |
+|---|---|---|---|
+| Screener | 34,783px | 900px | 97% |
+| Discovery | 25,614px | 985px | 96% |
+| Track record | 21,502px | 1,333px | 94% |
+| IPOs | 16,922px | 900px | 95% |
+| Events | 12,663px | 900px | 93% |
+| Stock | 8,107px | 1,303px | 84% |
+| Guide | 8,032px | 1,389px | 83% |
+| Portfolio (Actions) | 3,927px | 900px | 77% |
+
+**A heading may now carry a verdict instead of a count.** §27.15 above requires a count because a
+folded section must separate "I chose not to look" from "I did not know there was anything to
+look at". That reasoning is right and unchanged — but roughly half the sections on the stock and
+portfolio screens are not lists, and a count of `1` beside *"Can this business compound?"* answers
+nothing. Those carry their own verdict: `Can this business compound? [Partial]`, `What did it
+report last quarter? [Weak]`, `Has it actually compounded? [Proven Compounder]`. `withSummary()`
+sits beside `withCount()` in `ui.js` and routes through the existing `badge()`, so a verdict
+inherits its tone from `badgeType`, its wording from `humanLabel`, and — the part that matters —
+renders a missing value as the striped "not measured" marker rather than a blank (§21 rule 7). A
+folded heading is the last place in this app where an unmeasured value may look measured.
+
+The third case is deliberate and is the limit of the rule: **a section that is prose, a control,
+or a link list gets nothing**, because it hides no finding. The guide's thirteen sections, "Add a
+stock", "Dig deeper" and the two button-driven panels on the Plan tab are all in this class.
+
+**Where the fold is applied.** In `mount()`, once, rather than at ~87 call sites. Every page's
+`mount()` is called with `view` and nothing else, so the pass is total, and no page module needed
+an import — which matters because a missed import edit is a runtime `ReferenceError` that the
+page's own `.catch()` renders as a friendly error box, so every file still returns 200 and the
+failure is invisible outside a browser (Gotcha 41/82). Keys are `<page>:<slug-of-title>`, stamped
+on the heading by `section()` from the title alone so a changing row count cannot change the key.
+A section that already folds itself is left alone by a guard inside `collapse()`, which keeps the
+hand-written keys on discovery, accuracy and macro from being orphaned; a view with fewer than two
+foldable sections is not folded at all, which covers every error and loading state.
+
+**Ctrl+F still works.** The body is hidden with `hidden="until-found"`, so Chrome hides it via
+`content-visibility` and find-in-page still reaches folded text, firing `beforematch` and removing
+the attribute itself. The handler therefore syncs the caret and `aria-expanded` *without* touching
+the attribute. A browser without support treats the value as plain `hidden`. Note `body.hidden =
+true` must never be used again here: the IDL setter writes `hidden=""`, which is `display:none`,
+and the downgrade is invisible unless you read the attribute's value.
+
+**Deep links open their section first.** A programmatic `scrollIntoView` into a hidden subtree
+does nothing and — unlike find-in-page — gets no `beforematch` rescue, so `revealSection()` is
+called before the scroll in `page-guide.js` (`#ipo-stages`, `#macro-exposure`) and before the
+portfolio's thesis editor scroll.
+
+**The control is a `<button>` inside the `<h2>`,** not `role="button"` on the heading. With every
+section folded the headings are the only structural navigation on the page, and putting
+`role="button"` on the `h2` removes the heading from the accessibility tree — deleting the exact
+landmark a screen-reader user would navigate by.
+
+Still not done, and still for the reasons §27.15 gives: no page-level "expand all", and nothing
+ever folds itself on scroll or a timer.
 
 ### 27.16 An empty column is a claim, and it has to be one of three things ✅ *(new 2026-09-10)*
 

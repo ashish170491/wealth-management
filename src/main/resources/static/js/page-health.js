@@ -13,7 +13,7 @@
  */
 
 import { initChrome, registerRefresh } from './nav.js';
-import { el, section, card, table, kpi, alert, mount, empty } from './ui.js';
+import { el, section, card, table, kpi, alert, mount, empty, withCount, withSummary} from './ui.js';
 import { get } from './api.js';
 
 const view = document.getElementById('view');
@@ -132,11 +132,17 @@ function paint(data) {
     .filter(Boolean);
 
   mount(view,
-    section('Where the data stands',
+    withSummary(section('Where the data stands',
       `Checked ${data.today}. ${data.note}`,
       summaryRow(data.summary)),
+    // The headline verdict. This whole screen exists because a value nobody measured can look
+    // exactly like a measured one — so its own heading must not be where that happens. Folded,
+    // this chip is the entire answer to "is anything broken?".
+    data.summary.problems ? `${data.summary.problems} failing`
+      : data.summary.watch ? `${data.summary.watch} to watch` : 'All clear',
+    { type: data.summary.problems ? 'danger' : data.summary.watch ? 'warning' : 'success' }),
 
-    section('What needs your attention',
+    withCount(section('What needs your attention',
       'Ordered by how much it matters: things that are failing, then things worth watching, '
       + 'then things that look odd for a reason already recorded in BUGS.md.',
       acting.length
@@ -144,15 +150,16 @@ function paint(data) {
         : empty('Nothing is failing a check',
           'Every automated check passed. Read the list below to see what that covered — and '
           + 'the gaps underneath it, which no check can close.')),
+    findings.filter((f) => ORDER.slice(0, 3).includes(f.severity)).length),
 
-    section('Every check that ran',
+    withCount(section('Every check that ran',
       'Including the ones that passed. The figure column is the number each verdict was '
       + 'reached on, so you can disagree with it.',
-      allChecksTable(findings)),
+      allChecksTable(findings)), findings.length),
 
-    section('What this screen cannot check',
+    withCount(section('What this screen cannot check',
       'The honest limits.',
-      notCheckedCard(data.notChecked || [])));
+      notCheckedCard(data.notChecked || [])), (data.notChecked || []).length));
 }
 
 async function render() {

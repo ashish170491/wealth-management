@@ -64,6 +64,10 @@ export function el(tag, props = {}, ...children) {
 export function section(title, explain, ...content) {
   const wrap = el('section.section');
   const heading = el('h2.section-title', {}, title);
+  // The fold key is derived from the title HERE, while it is still just the title. Deriving it
+  // later from the heading's textContent would fold the count pill into the key, so a section
+  // would forget the reader's choice every time its row count changed.
+  heading.dataset.foldKey = slugify(title);
   wrap.append(heading);
   if (explain) wrap.append(whatThisMeans(explain));
   wrap.append(...content.flat().filter(Boolean));
@@ -71,9 +75,25 @@ export function section(title, explain, ...content) {
   return wrap;
 }
 
-const COLLAPSE_PREFIX = 'dash:collapse:';
+// `v2` because the DEFAULT changed (SPEC 27.15): sections used to be open unless stored
+// otherwise, and now fold unless stored otherwise. A value written under the old rule means
+// something different under the new one, so the old keys are abandoned rather than misread.
+const COLLAPSE_PREFIX = 'dash:collapse:v2:';
+
+/**
+ * In-memory mirror of every fold choice made this page-load.
+ *
+ * Not an optimisation — a correctness fix. The filter boxes on the screener, the watchlist, the
+ * portfolio and the macro page live INSIDE a section, and every keystroke re-runs the page's
+ * render and re-mounts that section from scratch. The reader's "I opened this" is what has to
+ * survive that, and when localStorage is unavailable (private window, site data blocked — the
+ * case the try/catch below exists for) it would not: the section would re-fold on the first
+ * keystroke and take the box and the cursor with it.
+ */
+const foldMemory = new Map();
 
 function readCollapsed(key) {
+  if (foldMemory.has(key)) return foldMemory.get(key);
   try {
     const raw = localStorage.getItem(COLLAPSE_PREFIX + key);
     return raw === null ? null : raw === '1';
@@ -83,11 +103,21 @@ function readCollapsed(key) {
 }
 
 function writeCollapsed(key, collapsed) {
+  foldMemory.set(key, collapsed);
   try {
     localStorage.setItem(COLLAPSE_PREFIX + key, collapsed ? '1' : '0');
   } catch (e) {
     /* the page works without a remembered choice */
   }
+}
+
+/** Title -> storage-key slug. Stable, lower-case, punctuation-free. */
+function slugify(title) {
+  return String(title == null ? '' : title)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
 }
 
 /**
@@ -107,6 +137,11 @@ function writeCollapsed(key, collapsed) {
 export function collapse(sectionNode, { key, open = false } = {}) {
   const title = sectionNode.querySelector('.section-title');
   if (!title) return sectionNode;
+  // Self-guard. `collapse()` is destructive — a second pass would sweep the first pass's own
+  // .section-body into a new one and prepend a second caret. The guard lives HERE rather than in
+  // each caller because every future caller would otherwise have to remember it, and because the
+  // page-wide pass in mount() deliberately runs over sections that already fold themselves.
+  if (title.classList.contains('collapsible')) return sectionNode;
 
   const body = el('div.section-body');
   body.append(...[...sectionNode.childNodes].filter((n) => n !== title));
@@ -115,19 +150,39 @@ export function collapse(sectionNode, { key, open = false } = {}) {
   const stored = key ? readCollapsed(key) : null;
   let isOpen = stored === null ? open : !stored;
 
+  // The control is a real <button> INSIDE the <h2>, not a role="button" on the heading itself.
+  // With every section folded, the headings are the only structural navigation on the page, and
+  // putting role="button" on the h2 replaces the heading in the accessibility tree — removing
+  // exactly the landmark a screen-reader user would navigate by.
+  const toggleBtn = el('button.section-toggle', { type: 'button' });
+  toggleBtn.append(...[...title.childNodes]);
   const caret = el('span.caret', {});
-  title.prepend(caret);
+  toggleBtn.prepend(caret);
+  title.append(toggleBtn);
   title.classList.add('collapsible');
-  title.setAttribute('role', 'button');
-  title.setAttribute('tabindex', '0');
 
-  const apply = () => {
-    // `hidden`, not a style: the CSP blocks nothing here, but a display rule in app.css would
-    // silently win over an inline one and this has to stay legible from the DOM.
-    body.hidden = !isOpen;
+  // Split in two on purpose — see the beforematch handler below, which must update one and NOT
+  // the other.
+  const applyChrome = () => {
     caret.textContent = isOpen ? '▾' : '▸';
-    title.setAttribute('aria-expanded', String(isOpen));
+    toggleBtn.setAttribute('aria-expanded', String(isOpen));
+    // A class rather than `:has(.section-body[hidden])`, so the folded spacing is a plain
+    // selector every browser resolves and does not silently depend on `:has()` support.
+    sectionNode.classList.toggle('folded', !isOpen);
   };
+
+  const applyBody = () => {
+    // An attribute, never a style: a `display` rule in app.css would silently win over an inline
+    // one, and this has to stay legible from the DOM. `until-found` rather than a bare `hidden`
+    // so the browser's own Ctrl+F still reaches folded text — with every section folded by
+    // default, find-in-page is the reader's main way back to something they half-remember.
+    // NOTE: never assign `body.hidden = true` here. The IDL setter writes hidden="", which is
+    // plain display:none, and the downgrade is invisible unless you read the attribute VALUE.
+    if (isOpen) body.removeAttribute('hidden');
+    else body.setAttribute('hidden', 'until-found');
+  };
+
+  const apply = () => { applyBody(); applyChrome(); };
 
   const toggle = () => {
     isOpen = !isOpen;
@@ -135,20 +190,132 @@ export function collapse(sectionNode, { key, open = false } = {}) {
     if (key) writeCollapsed(key, !isOpen);
   };
 
-  title.addEventListener('click', toggle);
-  title.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  toggleBtn.addEventListener('click', toggle);
+
+  // Chrome fires this when find-in-page (or a scroll-to-text fragment) matches inside a folded
+  // section, and then removes the `hidden` attribute ITSELF. So the caret and aria state have to
+  // catch up while the attribute is deliberately left alone — calling applyBody() here would
+  // fight the browser. Without this the section is open while its heading still says closed, and
+  // the reader's next click appears to do nothing.
+  body.addEventListener('beforematch', () => {
+    isOpen = true;
+    applyChrome();
+    if (key) writeCollapsed(key, false);
   });
+
+  // How revealSection() opens this section from the outside, for a deep link that lands inside it.
+  body.openSection = () => { if (!isOpen) { isOpen = true; apply(); if (key) writeCollapsed(key, false); } };
 
   apply();
   return sectionNode;
 }
 
+/**
+ * Opens whatever folded section `target` sits inside, so a deep link can scroll to it.
+ *
+ * Needed because a programmatic `scrollIntoView` into a hidden subtree silently does nothing —
+ * and, unlike find-in-page, does not fire `beforematch` for the browser to rescue it.
+ * Returns the resolved element so callers can chain the scroll.
+ */
+export function revealSection(target) {
+  const node = typeof target === 'string' ? document.getElementById(target) : target;
+  if (!node || !node.closest) return node || null;
+  // Walk outwards: a target can sit inside more than one folded wrapper.
+  let body = node.closest('.section-body');
+  while (body) {
+    if (typeof body.openSection === 'function') body.openSection();
+    body = body.parentElement ? body.parentElement.closest('.section-body') : null;
+  }
+  return node;
+}
+
+/**
+ * Where a heading chip goes.
+ *
+ * Once a section has folded, its heading's children live inside the toggle button, so a chip
+ * appended to the heading itself would sit outside the control and read as detached. This finds
+ * the button when there is one and the heading when there is not, so chips can be added before
+ * or after folding and land in the same place either way.
+ */
+function headingHost(sectionNode) {
+  const title = sectionNode.querySelector('.section-title');
+  if (!title) return null;
+  return title.querySelector('.section-toggle') || title;
+}
+
 /** Adds a count pill to a section heading, e.g. "Holdings (14)". */
 export function withCount(sectionNode, count) {
-  const title = sectionNode.querySelector('.section-title');
-  if (title) title.append(el('span.count', {}, String(count)));
+  const host = headingHost(sectionNode);
+  if (host) host.append(el('span.count', {}, String(count)));
   return sectionNode;
+}
+
+/**
+ * Adds a verdict or headline figure to a section heading — "Can this business compound? [Yes]".
+ *
+ * The sibling of `withCount` for a section that is not a list. Both exist for one reason (SPEC
+ * 27.15): with the section folded, the heading is all the reader has, and it has to separate
+ * "I chose not to look at this" from "I did not know there was anything to look at". A count
+ * answers that for a list; for a single-verdict panel a count of 1 answers nothing and the
+ * verdict itself is the honest summary.
+ *
+ * Routed through `badge()` rather than a chip of its own so this inherits the app's existing
+ * vocabulary: `badgeType` already tones every verdict word here, `humanLabel` turns HIGH_QUALITY
+ * into human words, and — the reason that matters — a missing value renders as the explicit
+ * striped "not measured" marker instead of a blank or a confident-looking guess. A folded heading
+ * is the last place in this app where an unmeasured value should be allowed to look measured.
+ */
+export function withSummary(sectionNode, value, { label, type } = {}) {
+  const host = headingHost(sectionNode);
+  if (!host) return sectionNode;
+  if (missing(value) && !label) {
+    host.append(unmeasured('This could not be measured — open the section to see why'));
+    return sectionNode;
+  }
+  // An ENUM_LIKE token gets humanised; anything else is already written for a reader and is
+  // passed through untouched. Without this, humanLabel title-cases a phrase the caller composed
+  // — "5 to watch" came out as "5 To Watch" — and a figure like "+18.3%" is not a word at all.
+  const enumLike = typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value);
+  host.append(badge(value, { type, label: label || (enumLike ? undefined : String(value)) }));
+  return sectionNode;
+}
+
+/**
+ * Folds every section on the page (SPEC 27.15), from inside `mount()`.
+ *
+ * Deliberately central rather than 13 per-page call sites. Each of those would have needed its
+ * own import edit across 13 differently-shaped import blocks, and that exact edit is what blanked
+ * a page last time: a missed import is a runtime ReferenceError that the page's own .catch()
+ * turns into a friendly error box, so every file still returns 200 and the failure is invisible
+ * outside a browser. An import nobody has to add cannot be got wrong.
+ *
+ * Two things are left alone. A section that already folds itself keeps its own key (the guard in
+ * `collapse()`), so the hand-written keys on discovery, accuracy and macro are not orphaned. And
+ * a view holding a single foldable section is not folded at all — one section is not navigation,
+ * and that single section is usually an error or a loading state, which folded would leave the
+ * page looking like it had loaded fine.
+ */
+function foldSections(host) {
+  const foldable = [...host.querySelectorAll('.section')]
+    .filter((s) => s.querySelector('.section-title'));
+  if (foldable.length < 2) return;
+
+  const file = (window.location.pathname.split('/').pop() || 'index.html').replace(/\.html?$/i, '');
+  const page = file || 'index';
+  const seen = new Map();
+
+  for (const node of foldable) {
+    const title = node.querySelector('.section-title');
+    if (title.classList.contains('collapsible')) continue;   // already folds, keeps its own key
+    const base = title.dataset.foldKey || slugify(title.textContent);
+    if (!base) continue;
+    // Several pages render an empty-state twin of a section under the same title, and only one of
+    // a pair ever appears — so sharing a key is right. The suffix is only for the case where two
+    // genuinely different sections collide, which would otherwise silently share one choice.
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    collapse(node, { key: `${page}:${base}${n > 1 ? `:${n}` : ''}`, open: false });
+  }
 }
 
 /**
@@ -499,4 +666,5 @@ export function mount(target, ...nodes) {
   if (!host) return;
   host.replaceChildren(...nodes.flat().filter(Boolean));
   glossify(host);
+  foldSections(host);
 }

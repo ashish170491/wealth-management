@@ -352,15 +352,41 @@ main { max-width: var(--page-max); margin: 0 auto; padding: var(--section-gap) 2
   100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
 }
 
-/* Collapsible sections (SPEC 27.15). The heading becomes the control; the count pill stays in
-   it when folded, because a collapsed section with no count hides its own findings. */
-.section-title.collapsible { cursor: pointer; user-select: none; }
-.section-title.collapsible:hover { color: var(--navy-light); }
-.section-title.collapsible:focus-visible { outline: 2px solid var(--navy-light); outline-offset: 3px; }
+/* Collapsible sections (SPEC 27.15). The heading becomes the control; the count pill or verdict
+   chip stays in it when folded, because a collapsed section with no summary hides its own
+   findings.
+
+   Do NOT add a `.section-body { display: ... }` rule. Folding is done with the `hidden`
+   attribute precisely so a stylesheet cannot silently overrule it, and the attribute's value is
+   `until-found` so the browser's own Ctrl+F can still reach folded text. A `display` rule here
+   would break both, with no visible symptom. */
+.section-title.collapsible { cursor: pointer; }
+.section-title .section-toggle {
+  /* A real button inside the h2, so the heading keeps its place in the accessibility tree.
+     Everything here is undoing the browser's button chrome so it still reads as a heading. */
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  flex: 1 1 auto; min-width: 0; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; letter-spacing: inherit;
+  text-align: left; cursor: pointer; user-select: none;
+}
+.section-title .section-toggle:hover { color: var(--navy-light); }
+.section-title .section-toggle:focus-visible { outline: 2px solid var(--navy-light); outline-offset: 3px; }
+/* The summary chip sits at the far end of the heading, so a folded page reads as a two-column
+   contents list: question on the left, answer on the right. */
+.section-title .count, .section-title .badge { margin-left: auto; }
+.section-title .count ~ .badge, .section-title .badge ~ .badge,
+.section-title .badge ~ .count { margin-left: 0; }
+.section-title .badge { font-size: 11px; padding: 2px 8px; }
 .section-title .caret {
-  display: inline-block; width: 15px; color: var(--ink-faint); font-size: 12px;
+  display: inline-block; width: 15px; flex: 0 0 15px; color: var(--ink-faint); font-size: 12px;
   vertical-align: middle;
 }
+/* A folded section is a row in a contents list, so it gets a row's spacing. Left at the open
+   section's 30px gap plus the heading's own 15px margin, eight headings fill a screen and the
+   list stops being scannable — which is the thing folding was for. */
+.section.folded { margin-bottom: 4px; }
+.section.folded .section-title { margin-bottom: 0; padding-bottom: 7px; border-bottom-width: 1px; }
 
 /* The count under a chip bar, with its Clear control (SPEC 27.13). */
 .filter-count { font-size: 12.5px; color: var(--ink-muted); margin: 2px 0 10px; }
