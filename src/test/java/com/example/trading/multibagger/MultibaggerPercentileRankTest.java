@@ -31,7 +31,9 @@ class MultibaggerPercentileRankTest {
     void setUp() {
         config = new MultibaggerConfig();
         screener = new MultibaggerScreenerService(
-                null, null, null, null, null, null, null, null, null, null, config, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, config, null, null, null, null, null, null, null, null, null, null, null,
+                // SPEC 50: the quarterly-result ledger and its config, unused by these pure tests.
+                null, null);
     }
 
     private static MultibaggerScore score(String symbol, int composite) {

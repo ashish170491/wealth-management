@@ -68,6 +68,13 @@ public class MultibaggerScreenerService {
     private final com.example.trading.learning.ScoringVersionRegistry scoringVersionRegistry;
     private final com.example.trading.learning.ScreeningCoverageService screeningCoverageService;
     private final com.example.trading.learning.ShadowCompositeService shadowCompositeService;
+    /**
+     * SPEC 50. Persists the quarterly figures this run has already fetched for the earnings
+     * bonus below — zero extra NSE requests, and the reason result tracking needs no scheduler
+     * of its own (Gotcha 28).
+     */
+    private final com.example.trading.earnings.QuarterlyResultService quarterlyResultService;
+    private final com.example.trading.earnings.EarningsConfig earningsConfig;
 
     /** Composite score at or above which a pick is recorded for accuracy tracking (SPEC.md §23). */
     private static final int RECOMMENDATION_THRESHOLD = 65;
@@ -694,6 +701,7 @@ public class MultibaggerScreenerService {
         try {
             String earningsTradingSymbol = symbol.contains(":") ? symbol.substring(symbol.indexOf(":") + 1) : symbol;
             NseDataService.EarningsGrowthData earnings = nseDataService.analyzeEarningsGrowth(earningsTradingSymbol);
+            captureQuarterlyResults(earningsTradingSymbol);
             if (earnings != null && earnings.getGrowthVerdict() != null) {
                 earningsVerdict = earnings.getGrowthVerdict();
                 yoyRevGrowth = earnings.getYoyRevenueGrowth();
@@ -2435,4 +2443,34 @@ public class MultibaggerScreenerService {
             return 0.0;
         }
     }
+
+    /**
+     * Keep the quarterly figures this run just fetched (SPEC 50).
+     *
+     * <p>{@code analyzeEarningsGrowth} above has already pulled these filings and
+     * {@code NseDataService} caches them for 30 minutes, so this call costs <b>no NSE
+     * requests at all</b>. Until it existed the figures were computed on every screening run and
+     * discarded, which is why nothing in the app could say what a company had reported or notice
+     * a result landing — the same shape as the analyst targets B-109 recovered and the growth
+     * columns B-098 recovered.
+     *
+     * <p>Never throws: a ledger of the run must not be able to break the run.
+     */
+    private void captureQuarterlyResults(String tradingSymbol) {
+        if (!earningsConfig.isCaptureDuringScreening()) {
+            return;
+        }
+        try {
+            quarterlyResultService.capture(tradingSymbol,
+                    nseDataService.fetchQuarterlyResults(tradingSymbol));
+        } catch (Exception e) {
+            // Name what the absence will look like (Gotcha 52): a missing quarter reads later as
+            // "this company did not report", which is a claim about the business rather than
+            // about our capture.
+            log.warn("Quarterly result capture failed for {} ({}). Its latest quarter will read as "
+                    + "'not captured', which must not be taken as 'did not report'.",
+                    tradingSymbol, e.getMessage());
+        }
+    }
+
 }

@@ -299,6 +299,71 @@ public class HoldingsEntity {
     @Transient
     private String analystNote;
 
+    // ---- Quarterly result (SPEC 50.5). Attached on every holdings read path by
+    // HoldingsViewDecorator, so no screen can compute its own answer (SPEC 6.6). All nullable
+    // wrappers: a primitive would collapse "no filed quarter captured" into a measured zero, and
+    // those are different facts (Gotcha 21). Contributes zero points to any score.
+
+    /** STRONG / IN_LINE / WEAK / CONCERNING / NOT_MEASURED. Never an instruction to transact. */
+    @Transient
+    private String resultVerdict;
+
+    /** The quarter judged, e.g. {@code Q1 FY27}. */
+    @Transient
+    private String resultQuarter;
+
+    /** One plain-English sentence, per SPEC 21 — the investor is not an analyst. */
+    @Transient
+    private String resultHeadline;
+
+    /**
+     * The day the company published, not the quarter end.
+     *
+     * <p>Carried so a screen can say how old the reading is. A result six weeks old is a
+     * different thing from one that landed this morning, and the quarter end cannot tell them
+     * apart (Gotcha 100).
+     */
+    @Transient
+    private java.time.LocalDate resultPublishedOn;
+
+    @Transient
+    private Double resultRevenueYoyPercent;
+
+    @Transient
+    private Double resultProfitYoyPercent;
+
+    /** Net-margin change in percentage points against the same quarter last year. */
+    @Transient
+    private Double resultMarginDeltaPp;
+
+    /**
+     * How many of the four checks produced an answer, and out of how many.
+     *
+     * <p>Both are carried so a surface can print "3 of 4" rather than implying a completed
+     * screen — the discipline Gotcha 44 exists for, applied to a quarter.
+     */
+    @Transient
+    private Integer resultMeasuredSignals;
+
+    @Transient
+    private Integer resultTotalSignals;
+
+    /** True when the company restated figures it had already published. News in its own right. */
+    @Transient
+    private Boolean resultRevised;
+
+    /** Which symbol spelling carried the filings, so a reading can be traced (Gotcha 84). */
+    @Transient
+    private String resultFrom;
+
+    /** AWAITING_QUARTER_END / EXPECTED / PAST_DUE / NOT_MEASURED. */
+    @Transient
+    private String nextResultStatus;
+
+    /** The expected-window sentence, including why it is a window and not a date. */
+    @Transient
+    private String nextResultText;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

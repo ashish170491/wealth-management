@@ -51,6 +51,8 @@ public class HoldingsReportService {
     private final com.example.trading.multibagger.MultibaggerReportService multibaggerReportService;
     private final AiService aiService;
     private final NseDataService nseDataService;
+    /** SPEC 50: the stored quarterly ledger. DB-only - this section makes no network calls. */
+    private final com.example.trading.earnings.QuarterlyResultService quarterlyResultService;
     private final HoldingsDecayService holdingsDecayService;
     private final com.example.trading.macro.MacroExposureService macroExposureService;
     private final com.example.trading.macro.MacroReportRenderer macroReportRenderer;
@@ -258,7 +260,7 @@ public class HoldingsReportService {
         content.append(buildForensicFlagsSection(holdings));
 
         // Earnings Trend-Break Attention Items (SPEC §24)
-        content.append(buildTrendBreakAttention(holdings));
+        content.append(buildQuarterlyResultsSection(holdings));
 
         return templateService.buildEmailTemplate(
             "Holdings Report 1/2: Action Items",
@@ -371,7 +373,7 @@ public class HoldingsReportService {
         content.append(buildForensicFlagsSection(holdings));
 
         // Earnings Trend-Break Attention Items (SPEC §24)
-        content.append(buildTrendBreakAttention(holdings));
+        content.append(buildQuarterlyResultsSection(holdings));
 
         // Fundamental Wealth Signals — pricing power, earnings consistency, real accumulation (SPEC §12.7)
         content.append(buildWealthSignalsSection(holdings));
@@ -1737,74 +1739,146 @@ public class HoldingsReportService {
     }
 
     /**
-     * Flag any holding whose latest-quarter earnings broke the trend downward.
-     * Uses {@link NseDataService#analyzeEarningsTrendBreak} — a proxy for analyst
-     * surprise computed from the 3-quarter linear trend (SPEC §24). Not a
-     * substitute for real consensus data; explain that in the intro box.
+     * "Latest quarterly results" - what the businesses you own actually reported (SPEC 50.5).
+     *
+     * <p>This replaced a live-fetch trend-break scan that made one NSE request per holding on
+     * every send, showed only negative breaks, and had no memory - so the same bad quarter was
+     * re-announced every day for six weeks, which is how a reader learns to skip a section. It
+     * now reads the ledger the screening already captured: no network calls, four checks rather
+     * than one, and a result is flagged as new exactly once (SPEC 6.4's known gap, closed here).
+     *
+     * <p>Two things are shown: results that landed since the last send, and any holding whose
+     * last reported quarter went backwards. The coverage line is mandatory - an empty section
+     * must not read as "nothing to worry about" when it may mean "nothing was captured"
+     * (Gotcha 44).
      */
-    private String buildTrendBreakAttention(List<HoldingsEntity> holdings) {
-        List<String> rows = new ArrayList<>();
-        for (HoldingsEntity h : holdings) {
-            if (h.getSymbol() == null) continue;
-            try {
-                String tradingSymbol = h.getSymbol().contains(":")
-                        ? h.getSymbol().substring(h.getSymbol().indexOf(":") + 1)
-                        : h.getSymbol();
-                NseDataService.EarningsTrendBreakData tb = nseDataService.analyzeEarningsTrendBreak(tradingSymbol);
-                if (tb == null || tb.getVerdict() == null) continue;
-                if (!"NEGATIVE_BREAK".equals(tb.getVerdict()) && !"BIG_NEGATIVE_BREAK".equals(tb.getVerdict())) continue;
+    private String buildQuarterlyResultsSection(List<HoldingsEntity> holdings) {
+        if (holdings == null || holdings.isEmpty()) return "";
 
-                String verdictColor = "BIG_NEGATIVE_BREAK".equals(tb.getVerdict()) ? "#c0392b" : "#d68910";
-                String profitDelta = tb.getProfitSurprisePercent() != null
-                        ? String.format("%+.1f%%", tb.getProfitSurprisePercent())
-                        : "n/a";
-                String revenueDelta = tb.getRevenueSurprisePercent() != null
-                        ? String.format("%+.1f%%", tb.getRevenueSurprisePercent())
-                        : "n/a";
-                rows.add(String.format(
-                        "<tr>" +
-                        "<td style='padding:8px;border:1px solid #eee;'><strong>%s</strong></td>" +
-                        "<td style='padding:8px;border:1px solid #eee;color:%s;'><strong>%s</strong></td>" +
-                        "<td style='padding:8px;border:1px solid #eee;'>%s</td>" +
-                        "<td style='padding:8px;border:1px solid #eee;'>%s</td>" +
-                        "<td style='padding:8px;border:1px solid #eee;'>%s</td>" +
-                        "</tr>",
-                        h.getSymbol(),
-                        verdictColor,
-                        humanizeTrendBreak(tb.getVerdict()),
-                        tb.getLatestPeriod() != null ? tb.getLatestPeriod() : "n/a",
-                        revenueDelta,
-                        profitDelta));
-            } catch (Exception e) {
-                log.debug("Trend-break attention: skipped {}: {}", h.getSymbol(), e.getMessage());
-            }
+        Map<String, com.example.trading.earnings.QuarterlyResultService.Reading> readings;
+        List<com.example.trading.earnings.QuarterlyResultEntity> fresh;
+        try {
+            List<String> symbols = holdings.stream().map(HoldingsEntity::getSymbol).toList();
+            readings = quarterlyResultService.forSymbols(symbols);
+            fresh = quarterlyResultService.newResultsFor(symbols);
+        } catch (Exception e) {
+            // Say what the absence will be mistaken for (Gotcha 52).
+            log.warn("Quarterly results section skipped ({}). The email will carry no result "
+                    + "information, which must not be read as 'no holding reported anything'.",
+                    e.getMessage());
+            return "";
         }
 
-        if (rows.isEmpty()) return "";
+        java.util.Set<String> freshKeys = fresh.stream()
+                .map(r -> r.getSymbol() + "|" + r.getQuarterEnd())
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<String> rows = new ArrayList<>();
+        List<com.example.trading.earnings.QuarterlyResultEntity> shown = new ArrayList<>();
+        int measured = 0;
+
+        for (HoldingsEntity h : holdings) {
+            com.example.trading.earnings.QuarterlyResultService.Reading reading =
+                    readings.get(h.getSymbol());
+            if (reading == null) continue;
+            com.example.trading.earnings.QuarterlyResultRead.Result r = reading.result();
+            if (!r.measured()) continue;
+            measured++;
+
+            String key = reading.symbolAnswered() + "|" + r.quarterEnd();
+            boolean isNew = freshKeys.contains(key);
+            // A quarter that was fine and is already known about is not news and earns no row.
+            if (!isNew && !r.needsAttention()) continue;
+            if (isNew) {
+                fresh.stream().filter(x -> (x.getSymbol() + "|" + x.getQuarterEnd()).equals(key))
+                        .findFirst().ifPresent(shown::add);
+            }
+
+            String colour;
+            String label;
+            switch (r.verdict()) {
+                case CONCERNING -> { colour = "#c0392b"; label = "Concerning"; }
+                case WEAK -> { colour = "#d68910"; label = "Weak"; }
+                case STRONG -> { colour = "#1e8449"; label = "Strong"; }
+                case IN_LINE -> { colour = "#555555"; label = "In line"; }
+                default -> { colour = "#999999"; label = "Not measured"; }
+            }
+
+            rows.add(String.format(
+                    "<tr>"
+                    + "<td style='padding:8px;border:1px solid #eee;'><strong>%s</strong>%s</td>"
+                    + "<td style='padding:8px;border:1px solid #eee;'>%s</td>"
+                    + "<td style='padding:8px;border:1px solid #eee;color:%s;'><strong>%s</strong></td>"
+                    + "<td style='padding:8px;border:1px solid #eee;'>%s</td>"
+                    + "<td style='padding:8px;border:1px solid #eee;'>%s</td>"
+                    + "<td style='padding:8px;border:1px solid #eee;font-size:12px;color:#555;'>%s</td>"
+                    + "</tr>",
+                    h.getSymbol(),
+                    isNew ? " <span style='background:#1e8449;color:#fff;border-radius:3px;"
+                            + "padding:1px 5px;font-size:10px;'>NEW</span>" : "",
+                    r.fiscalLabel() != null ? r.fiscalLabel() : "n/a",
+                    colour, label,
+                    signedPercent(r.revenueYoyPercent()),
+                    signedPercent(r.profitYoyPercent()),
+                    r.measuredSignals() + " of " + r.totalSignals() + " checks"));
+        }
+
+        if (rows.isEmpty() && measured == 0) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append("<h3 style='margin-top:20px;'>&#128200; Earnings Trend-Break Alerts</h3>");
-        sb.append("""
-                <div style='background:#fff6e0;border-left:4px solid #f5a623;padding:12px 14px;margin-bottom:10px;border-radius:4px;'>
-                  <strong>💡 What this means</strong><br/>
-                  These holdings reported quarterly numbers <em>meaningfully below</em> what their own recent 3-quarter trend
-                  would have projected. The "surprise %" shows how far actual revenue/profit missed a simple linear extrapolation.
-                  This is <strong>not</strong> a comparison to paid analyst consensus (which we don't have access to) —
-                  it's a trend-deviation proxy. A negative break can be a one-off (lumpy business, raw-material spike)
-                  or an early sign of thesis breakdown. Re-check the story before adding.
-                </div>
-                """);
-        sb.append("<table style='width:100%;border-collapse:collapse;font-size:13px;'>");
-        sb.append("<thead><tr style='background:#f2f4f8;text-align:left;'>");
-        sb.append("<th style='padding:8px;border:1px solid #ddd;'>Holding</th>");
-        sb.append("<th style='padding:8px;border:1px solid #ddd;'>Verdict</th>");
-        sb.append("<th style='padding:8px;border:1px solid #ddd;'>Quarter</th>");
-        sb.append("<th style='padding:8px;border:1px solid #ddd;'>Revenue vs trend</th>");
-        sb.append("<th style='padding:8px;border:1px solid #ddd;'>Profit vs trend</th>");
-        sb.append("</tr></thead><tbody>");
-        for (String row : rows) sb.append(row);
-        sb.append("</tbody></table>");
+        sb.append("<h3 style='margin-top:20px;'>&#128202; Latest Quarterly Results</h3>");
+        sb.append("<div style='background:#eef5ff;border-left:4px solid #3f7fd0;padding:12px 14px;"
+                + "margin-bottom:10px;border-radius:4px;'>"
+                + "<strong>&#128161; What this means</strong><br/>"
+                + "Every three months a company publishes what it actually earned. That is the one "
+                + "regular event that can confirm or break a long-term view on <em>evidence</em> "
+                + "rather than on the share price. Four checks are made against the same quarter a "
+                + "year earlier &mdash; sales, profit, margin, and whether the quarter landed where "
+                + "the company's own recent trend pointed. Year-on-year rather than against last "
+                + "quarter, because Indian businesses are seasonal.<br/><br/>"
+                + "<strong>A weak quarter is not a reason to sell.</strong> It is how you tell a "
+                + "business that is deteriorating from a share price that is merely falling. One "
+                + "hard quarter for a reason you can name is a very different thing from a thesis "
+                + "breaking. None of this changes any score in the app."
+                + "</div>");
+
+        if (rows.isEmpty()) {
+            sb.append(String.format("<p style='font-size:13px;color:#1e8449;'>No holding reported a "
+                    + "weak quarter, and nothing new has landed since the last report.</p>"));
+        } else {
+            sb.append("<table style='width:100%;border-collapse:collapse;font-size:13px;'>");
+            sb.append("<thead><tr style='background:#f2f4f8;text-align:left;'>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Holding</th>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Quarter</th>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Verdict</th>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Sales YoY</th>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Profit YoY</th>");
+            sb.append("<th style='padding:8px;border:1px solid #ddd;'>Measured</th>");
+            sb.append("</tr></thead><tbody>");
+            for (String row : rows) sb.append(row);
+            sb.append("</tbody></table>");
+        }
+
+        sb.append(String.format("<p style='font-size:12px;color:#777;margin-top:8px;'>"
+                + "A reported quarter was read for <strong>%d of %d</strong> holdings. A holding "
+                + "missing here has no filed quarter captured yet &mdash; that is a gap in what "
+                + "the app has collected, never a statement that the company did not report.</p>",
+                measured, holdings.size()));
+
+        // Stamp only what this email actually showed, so nothing is silently marked as reported.
+        try {
+            quarterlyResultService.markAnnounced(shown);
+        } catch (Exception e) {
+            log.warn("Could not stamp quarterly results as reported ({}). They will be flagged NEW "
+                    + "again in the next email.", e.getMessage());
+        }
         return sb.toString();
+    }
+
+    /** A signed percentage, or an explicit marker when the comparison could not be made. */
+    private static String signedPercent(Double value) {
+        return value == null ? "<span style='color:#999;'>not measured</span>"
+                : String.format("%+.1f%%", value);
     }
 
     /**
@@ -2172,18 +2246,6 @@ public class HoldingsReportService {
         if (newGrade == null) return oldGrade;
         if (oldGrade.equals(newGrade)) return newGrade;
         return oldGrade + " &rarr; " + newGrade;
-    }
-
-    private static String humanizeTrendBreak(String verdict) {
-        if (verdict == null) return "—";
-        return switch (verdict) {
-            case "BIG_POSITIVE_BREAK" -> "Big Positive Break";
-            case "POSITIVE_BREAK" -> "Positive Break";
-            case "IN_LINE" -> "In Line";
-            case "NEGATIVE_BREAK" -> "Negative Break";
-            case "BIG_NEGATIVE_BREAK" -> "Big Negative Break";
-            default -> verdict;
-        };
     }
 
     private static String humanizeVerdict(String verdict) {

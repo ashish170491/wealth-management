@@ -22,7 +22,10 @@ class BuyabilityGuardTest {
 
     private final MultibaggerScreenerService service = new MultibaggerScreenerService(
             null, null, null, null, null, null, null, null, null, null,
-            new MultibaggerConfig(), null, null, null, null, null, null, null, null, null, null, null);
+            new MultibaggerConfig(), null, null, null, null, null, null, null, null, null, null, null,
+            // SPEC 50: the quarterly-result ledger and its config. Null here because these tests
+            // exercise pure scoring only, and capture is guarded by the config being consulted first.
+            null, null);
 
     private static List<Map<String, Object>> candles(int n, double close, double volume) {
         List<Map<String, Object>> out = new ArrayList<>();

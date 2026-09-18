@@ -764,6 +764,11 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 - `GET /api/analyst/recent?days=` — recently recorded targets across every stock. DB-only
 - `POST /api/analyst/capture` — mine the stored headline feed now (DB-only, but it writes)
 - `POST /api/analyst/measure` — measure the open book now; **refused from 14:00 with a 409 carrying its reason**
+- `GET /api/earnings/result?symbol=` — what a company reported last quarter, judged against the same quarter a year earlier, with every filed quarter on record and the next-result window (§50.6). 200 carrying `NOT_MEASURED` rather than 404 when nothing is captured. DB-only
+- `GET /api/earnings/portfolio` — every active holding's result read plus the mandatory coverage line. DB-only
+- `GET /api/earnings/recent?days=` — results published across the book, ordered by the day the **company** published. DB-only
+- `GET /api/earnings/coverage` — how many companies have a captured quarter at all. DB-only
+- `POST /api/earnings/capture?symbol=` — live NSE; **refused 09:40-10:15 and from 14:00 with a 409 carrying its reason**
 - `GET /api/multibagger/*` — scores, candidates, holdings, screen, trend, history
 - `GET /api/fiidii/*` — flows, deals, sectors, trend
 - `POST /api/trading/morning-briefing` — manual trigger
@@ -865,6 +870,7 @@ Table names below are the `@Table(name = …)` values in code (reconciled 2026-0
 | `dynamic_universe` | Expansion-funnel rows incl. retired ones (§30) |
 | `ipo_issues` | One row per mainboard public issue NSE lists: offer structure, category book, quotas, links, post-listing measurements. Rows are never deleted; `captured_at` is stamped on every row a capture saw (§45) |
 | `holding_classification` | Core-holding tier, gates, durability, observed alerts per holding per day (§35.6) |
+| `quarterly_results` | One row per (bare NSE symbol x quarter end): reported revenue, profit, EPS, margins, the reporting basis, and `available_from` — the filing's own broadcast date, which is what makes a point-in-time back-test of any result-based signal possible (§50.7). Retained forever; `announced_at` is the once-only alert dedup |
 | `market_impact_news` | 30 days |
 
 ### Portfolio tables (✅ — listed as "planned" until 2026-09-05; all have existed since the 2026-04-18 MVP)
@@ -1089,7 +1095,7 @@ Profit surprise is primary; revenue surprise is the fallback when profit is flat
 ### 24.3 Integrations
 - **Multibagger Screener** — post-composite bonus of up to ±5 points (half-scaled from the aggregate score so news noise can't dominate the 7-dimension scoring). Verdict surfaced in bullish/bearish factors.
 - **Deep Research** (`/api/research/{symbol}`) — new data dimension 18 "ANALYST SIGNAL" fed to the AI, with a methodology disclaimer that this is NOT paid consensus.
-- **Holdings report** — any holding with verdict `NEGATIVE_BREAK` or `BIG_NEGATIVE_BREAK` appears in a new "Earnings Trend-Break Alerts" section (daily + weekly).
+- **Holdings report** — **superseded 2026-09-17 by §50.** The "Earnings Trend-Break Alerts" section was replaced by "Latest Quarterly Results": DB-only rather than one live NSE call per holding, four checks rather than one, and a result flagged as new exactly once. The trend-break is now one of those four checks; its threshold table moved to `earnings/TrendBreak` and `NseDataService` delegates to it, so the §24 bonus and the §50 read cannot drift apart (Gotcha 85).
 - **REST** — `GET /api/research/analyst/{symbol}` returns both proxies + aggregate with methodology note.
 - **Analyst target ledger (§49, 2026-09-12)** — the brokerage scan's rupee target used to be counted
   and then discarded. It is now recorded, attributed and measured. The two features share one house
@@ -3091,7 +3097,7 @@ where a new research feature is classified before it is designed (§20 rule 9).
 | Pillar | Measured by | Honest caveat | Gap |
 |---|---|---|---|
 | Business quality | Financial Quality (§12.5, 16% of composite); forensic red flags (§32.4) | Forensics need ≥3 years of `annual_fundamentals`; "no flags" usually means *nothing was checked* (Gotcha 44) | Coverage, not method |
-| Growth | Earnings analysis (§12.4), wealth signals (§12.7), capex cycle (§31), turnarounds (§32.3) | Integrated-filing history begins ~Mar-2025, so 8-quarter CAGR fills in by ~2027; capex is shadow-mode | Coverage |
+| Growth | Earnings analysis (§12.4), wealth signals (§12.7), capex cycle (§31), turnarounds (§32.3), **quarterly result tracking (§50)** | Integrated-filing history begins ~Mar-2025, so 8-quarter CAGR fills in by ~2027; capex is shadow-mode. §50 keeps what was previously fetched and discarded, so the thesis monitor no longer rests solely on a composite that is 59% price behaviour — but it scores nothing, and its coverage follows the screening universe | Coverage |
 | Cash generation | Capital efficiency (§12.8) — ROCE, ROE, ROA, D/E, real operating cash conversion | Banks and NBFCs use a separate taxonomy; ROCE and D/E are deliberately not computed for them | — |
 | Management quality | Insider Pulse (§28, shadow); concall guidance ledger (§34) | The ledger's value is in what it refuses to say, and resolution is **manual** by design (§34.3). Insider Pulse scores zero points | **No capital-allocation record** — see 40.3 |
 | Competitive advantage | **Compounding lens (§41)** — five gates over return on capital, cash conversion, leverage, steadiness and margin trend | Reads the **latest year only**. Multi-year history exists for ~19 of 288 stocks, so persistence — the actual evidence of a moat — is unmeasured for 93% of the universe | Persistence. Closed by 40.3 item 1 |
@@ -4631,3 +4637,207 @@ Rendered by `analyst-cells.js` — the same file the stock page and the accuracy
 a fix that lands on one screen has to be walked to every screen that shares the data (B-099). A
 failed lookup leaves every field null and logs at WARN naming what the absence will be mistaken
 for. DB-only, page-load safe, no broker call.
+
+---
+
+## 50. Quarterly Result Tracking ✅ Active (lens, 2026-09-17)
+
+### 50.1 Why this exists
+
+A quarterly result is the only regular, scheduled, company-specific event that can confirm or
+break a multi-year thesis on **evidence** rather than on price. Four times a year a company either
+delivered or it did not.
+
+Until this section shipped, the app fetched those figures from NSE on every screening run — for
+the §12.4 earnings-growth bonus — and **threw them away**. There was no `quarterly_results` table.
+Nothing could answer "what did this company report, and when". Nothing noticed a result *landing*.
+The only surviving read was `analyzeEarningsTrendBreak`, recomputed live on every email,
+holdings-only, negative-only, absent from all 39 `screening_coverage` signals — which by §38.2's
+own standard means it had never been measured on anything.
+
+That mattered because of what the app was using instead. §6.2 detects a breaking thesis from drift
+in the multibagger composite, and §40.2 records that the live weight vector gives **59% of its
+weight to price behaviour**. A thesis alarm built on that is, in the main, a price alarm wearing a
+fundamentals badge — and B-064 had already had to subtract the universe's own move from it to stop
+broad selloffs reading as thesis failure, which is the tell.
+
+This is the other half: what the business actually did. The pattern is familiar — §49.11 found
+analyst targets parsed and discarded since §24, B-098 found growth and promoter holding computed
+every run and dropped for want of a column. Third instance.
+
+### 50.2 §20 rule 9 declarations
+
+| Required | This feature |
+|---|---|
+| **(a) Pillar** | **Growth**, primarily; **business quality** secondarily (§40.1) |
+| **(b) Horizon judged at** | **180 and 365 days.** A quarter is an input to a multi-year read, never a 30-day trade (§19's short-horizon bar) |
+| **(c) Coverage row** | `QuarterlyResult` in `screening_coverage` — MEASURED when at least one filed quarter is captured. **NOT_APPLICABLE is never emitted**: every listed company files quarterly results, so an absence is this app's blind spot rather than an exemption the business earned (the rule §48 applies to `MacroExposure`) |
+| **(d) Shadow mode** | **Not applicable, and there is nothing to switch on.** It contributes **zero points** to any score, feeds no verdict, adjusts no weight. Shadow mode exists for a signal that would otherwise steer the portfolio before it could be judged (Gotcha 30); a ledger that steers nothing has nothing to shadow. `EarningsSurfaceContractTest` asserts that `EarningsConfig` carries no `actionable`, `bonus` or `weight` field, so the claim is checkable rather than asserted in a comment |
+
+The fiscal calendar is its own pure class (`FiscalQuarter`). India's financial year runs
+April–March, so a quarter ending 30-Jun-2026 is **Q1 FY27**. Getting that wrong is not cosmetic: a
+reader comparing "Q1" against last year's "Q1" is comparing the same season, which is the whole
+point of a year-on-year read for a business with a monsoon, a festive quarter or a March push.
+
+### 50.3 The verdict — `QuarterlyResultRead` (pure)
+
+Four checks against the **same quarter one year earlier**: sales, profit, net margin, and whether
+the quarter landed where the company's own last three quarters pointed (`TrendBreak`, §24's proxy
+for the analyst estimate this app does not have). Output vocabulary:
+
+**`STRONG` / `IN_LINE` / `WEAK` / `CONCERNING` / `NOT_MEASURED`** — and nothing else. No price, no
+target, no instruction to transact (§19, §20 rule 10), pinned by test.
+
+**It counts, it does not average** (Gotcha 103). `WEAK` is two of four going backwards,
+`CONCERNING` is three, `STRONG` is three strong with none weak. An average lets one enormous
+revenue line carry a quarter in which profit halved — which is not hypothetical: the first live
+run read **RELIANCE Q1 FY27 at sales +25.4%, profit −24.6%, margin −4.9pp**. Counting called it
+`WEAK`; averaging would have called it fine.
+
+**A loss outranks the count.** Swinging from profit to loss is `CONCERNING` even when revenue grew
+strongly, because that case is exactly what a growth-weighted count misses. A narrowing loss is
+`WEAK`; a widening one `CONCERNING`; a loss with nothing to compare against `WEAK`, not
+`CONCERNING`.
+
+**Three refusals carry the feature:**
+
+1. **Year-on-year decides; quarter-on-quarter is shown and is never a signal.** Indian businesses
+   are seasonal, so a QoQ fall is usually the calendar rather than the company.
+2. **A comparison across reporting bases is refused, not converted.** Standalone revenue can be
+   half the group figure, so a consolidated quarter measured against a standalone one manufactures
+   a collapse every downstream reader takes as real (Gotcha 73). The leg reads `NOT_MEASURED` and
+   names the two bases. A basis NSE did not state is assumed comparable and **says so** — an
+   assumption may be acted on, never presented as a fact.
+3. **Fewer than two measured checks is `NOT_MEASURED`, not `IN_LINE`.** "We could not tell" and
+   "it was unremarkable" are different facts, and the second is the more reassuring — which is
+   precisely why they must not render alike (Gotcha 44, 121). Every read reports **N of 4**.
+
+A recovery from a loss quotes **no growth rate**: −100 to +10 is not "110% growth", and both the
+negative and the enormous answers the arithmetic gives are wrong about good news (B-113's rule).
+
+### 50.4 When is the next one due — `EarningsCalendar` (pure)
+
+**A window, never a date.** The board-meeting date is announced by the company days beforehand and
+this app does not read that feed, so quoting a date would be inventing precision nobody has (§21
+rule 7, B-119's failure). The window is built from the quarter end (fixed by the calendar) and the
+company's **own measured filing habit**; the far edge is SEBI LODR Reg 33(3) — 45 days for a
+quarter, **60 for the audited March year-end**.
+
+- **Median, not mean.** One quarter delayed by an auditor dispute would drag a mean by weeks and
+  push every future window with it.
+- **An estimated `available_from` never counts as evidence of a habit** — it is derived from the
+  quarter end, so a lag measured from it is this app's own assumption reported as the company's.
+- **A measured habit outranks the population default.** Found on the first live run: Infosys files
+  around day 20, and flooring its window at the 25-day default opened it *after* the company would
+  already have reported — an estimate contradicted by the record it was built from. The floor
+  applies to the no-history case only.
+- **`PAST_DUE` says in words which of two things it means**: either the company has not published
+  or this app has not captured it. One is a fact about the business, the other about the app, and
+  collapsing them lets a gap in our own coverage read as a red flag against a company (Gotcha 121).
+
+### 50.5 Where it appears
+
+`HoldingsViewDecorator` attaches thirteen `@Transient` `result*` / `nextResult*` fields to **every**
+holdings read path (§6.6), so a screen can only render what it is given and a new screen inherits
+it. One bulk query for the whole table: per row it would be ~120 lookups on a page load (B-115's
+shape). All nullable wrappers — a primitive would collapse "no filed quarter captured" into a
+measured zero.
+
+One renderer, `static/js/earnings-cells.js`, serves the portfolio column, the filter chips, the
+mandatory coverage line and the stock-page panel — because a fix that lands on one screen has to
+be walked to every screen that shares the data (B-099). `NOT_MEASURED` and `IN_LINE` are drawn as
+visibly different things.
+
+**The daily holdings email** (§14) replaced its trend-break section with this one. The old section
+made one live NSE request *per holding* on every send, showed only negative breaks, and had no
+memory — so the same bad quarter was re-announced daily for six weeks, which is how a reader learns
+to skip a section. The new one is DB-only, shows four checks, and flags a result as new **exactly
+once**: `quarterly_results.announced_at` is the persisted dedup §6.4 listed as out of scope, closed
+for this surface. Only rows the email actually showed are stamped.
+
+`EarningsSurfaceContractTest` pins every field name the renderer dereferences. There is no build
+step for that file and nothing type-checks the wire, so a rename fails nothing: the cell finds
+`undefined` and draws the unmeasured marker for ever, on a company the app measured perfectly well.
+
+### 50.6 API
+
+`symbol` is a query parameter throughout. Nothing here changes a score, a weight or a signal.
+
+- `GET /api/earnings/result?symbol=NSE:X` — the latest quarter read against its history, every
+  filed quarter on record, and the next-result window. **200 with a `NOT_MEASURED` reading rather
+  than 404** when nothing is captured. DB-only, page-load safe.
+- `GET /api/earnings/portfolio` — every active holding with its read, plus the mandatory coverage
+  line. DB-only.
+- `GET /api/earnings/recent?days=30` — results published across the book, ordered by **the day the
+  company published**, not the day this app read it, so a backfill of old quarters can never
+  present itself as a week of fresh results. DB-only.
+- `GET /api/earnings/coverage` — how many companies have a captured quarter at all. DB-only.
+- `POST /api/earnings/capture?symbol=NSE:X` — live NSE. **Refused 09:40–10:15 and from 14:00 to
+  the close with a 409 carrying its reason** (B-049; a thrown status alone arrives bare).
+
+Dashboard: `Result` column on the portfolio with its own filter chips and coverage line; a panel
+plus a quarter-by-quarter table on the stock page. Freshness key `quarterlyResults`, stamped when
+the **capture last ran** rather than when a company last published — results arrive in a cluster
+and then stop for two months, so a publication stamp would read amber every inter-season week and
+train the eye past the colour (Gotcha 125).
+
+### 50.7 Capture, and why there is no new scheduler
+
+Capture runs **inside the existing screening run**, from filings it has already fetched for the
+§12.4 bonus and which `NseDataService` caches for 30 minutes. It costs **zero extra NSE requests**
+and adds **no `@Scheduled` method** — the count stays at 28 and §3.4 is untouched (Gotcha 28: a
+third Saturday caller turns an exception into a convention). `/api/dashboard/data-health` checks
+the table against the screening's own cron, and it is **not** marked sparse: the capture touches
+every screened company every run whatever the reporting calendar is doing, so an old stamp really
+does mean the job did not run.
+
+Storage rules, each inherited from a defect this codebase has already paid for:
+
+- **Keyed on the bare NSE symbol** (`RELIANCE`, not `NSE:RELIANCE`). A filing is a fact about the
+  *company*, not a listing venue, and the feed is NSE's alone — so the prefix carries no
+  information here and only re-creates the B-061 resolution problem. Callers normalise through
+  `SymbolVariants.base()`.
+- **Merged field by field, never row by row** (B-046). A field NSE did not tag arrives null, and
+  an unconditional setter would erase a figure an earlier fetch got right, permanently.
+- **`available_from` is the filing's own `broadcast_Date`**, a fact rather than an estimate — the
+  integrated-filing index carries it, along with `consolidated`, `audited`, `seq_Id` and
+  `revised_Date`, all of which were on the wire and discarded. It is **not** the quarter end: SEBI
+  allows 45 days and companies use them, so filing a result under its period end leaks up to six
+  weeks of look-ahead in the flattering direction (Gotcha 100). This column is what makes a
+  point-in-time back-test of any future result-based signal possible at all.
+- **The estimate, when a date cannot be parsed, sits exactly on the regulatory deadline** — and
+  deliberately not further. `annual_fundamentals` errs five months late against a 60-day rule
+  because erring early is the bias; the same instinct here would be wrong, because quarter ends
+  are ~91 days apart and filings land around day 45, so an estimate much past the deadline would
+  place one quarter's assumed publication *after* the next quarter's real one and silently reorder
+  the series. `available_from_estimated` records which it is.
+- **A revision clears `announced_at` once, on the transition.** A restatement is news in its own
+  right; a row already known to be revised is not re-announced every run.
+
+### 50.8 Configuration
+
+```yaml
+trading:
+  earnings:
+    capture-during-screening: true  # zero extra NSE requests; a switch only for isolating a run
+    new-result-window-days: 14      # results arrive in a fortnightly cluster each season
+    max-quarters-per-symbol: 12
+    recent-limit: 200
+```
+
+### 50.9 What this deliberately does not do
+
+- **No consensus comparison.** §24 says plainly that this app has no paid analyst-estimate feed,
+  and the trend-break is the honest substitute rather than a stand-in for one. (§49.11's structured
+  broker feed *does* carry FY26/FY27E earnings estimates. Comparing a reported quarter against them
+  is a recorded follow-up, not done — and it is a new dimension needing its own §20 rule 9 pass.)
+- **No verdict on the share price.** A weak quarter is not a sell and a strong one is not a buy.
+  The use is the opposite: when a holding falls, this is how the investor tells a business that is
+  deteriorating from a price that merely is.
+- **No management commentary, guidance or order book.** Guidance has its own ledger (§34), whose
+  value is in what it refuses to say, and resolution there is manual by design.
+- **No score.** Should a result-based signal ever be proposed, §38.10's promotion gate is the only
+  route, and the coverage row and `available_from` shipped with this section so the evidence for
+  it exists before the argument starts.
+
+---

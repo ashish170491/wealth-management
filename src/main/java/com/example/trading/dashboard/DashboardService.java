@@ -124,6 +124,8 @@ public class DashboardService {
     private final com.example.trading.macro.MacroEventRepository macroEventRepository;
     private final com.example.trading.intelligence.MarketImpactNewsRepository marketImpactNewsRepository;
     private final com.example.trading.analyst.AnalystTargetRepository analystTargetRepository;
+    /** SPEC 50: the freshness stamp for quarterly result capture. Read-only, like every field here. */
+    private final com.example.trading.earnings.QuarterlyResultRepository quarterlyResultRepository;
     private final com.example.trading.learning.ScreeningCoverageService screeningCoverageService;
     private final com.example.trading.fundamentals.FundamentalsBackfillService fundamentalsBackfillService;
     private final com.example.trading.fundamentals.FundamentalsBackfillStatusRepository
@@ -189,6 +191,11 @@ public class DashboardService {
         // colour. The measurement pass runs every weekday whatever the news did.
         out.put("analystTargets", asString(quietly("analystTargets", () -> null,
                 analystTargetRepository::findLatestMeasuredAt)));
+        // Quarterly results (SPEC 50). Stamped when the capture last ran, not when a company last
+        // published: results arrive in a cluster and then stop for two months, so a publication
+        // stamp would read amber every inter-season week for no fault at all.
+        out.put("quarterlyResults", asString(quietly("quarterlyResults", () -> null,
+                quarterlyResultRepository::findLatestCapturedAt)));
 
         return out;
     }

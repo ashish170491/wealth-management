@@ -49,6 +49,9 @@ public class HoldingsViewDecorator {
     /** SPEC 49.14. DB-only: the ledger the 13:20 pass already wrote, never a live fetch. */
     private final com.example.trading.analyst.AnalystTargetViewService analystTargetViewService;
 
+    /** SPEC 50.5. DB-only: the quarters the screening already captured, never a live NSE fetch. */
+    private final com.example.trading.earnings.QuarterlyResultService quarterlyResultService;
+
     /** Decorates every row in place and returns the same list, for use inline in a controller. */
     public List<HoldingsEntity> decorate(List<HoldingsEntity> holdings) {
         if (holdings == null || holdings.isEmpty()) {
@@ -100,6 +103,22 @@ public class HoldingsViewDecorator {
                     e.getMessage());
         }
 
+        // One query for the whole table (SPEC 50.5), for the same reason as the three above:
+        // each holding resolves through up to four symbol spellings, so a per-row lookup is
+        // ~120 queries on a page load (the B-115 shape).
+        Map<String, com.example.trading.earnings.QuarterlyResultService.Reading> earnings = Map.of();
+        try {
+            earnings = quarterlyResultService.forSymbols(
+                    holdings.stream().map(HoldingsEntity::getSymbol).toList());
+        } catch (Exception e) {
+            // Name what the absence will look like. A blank result column reads as "this company
+            // has not reported anything worrying", which is the one thing a failed lookup must
+            // never be mistaken for (Gotcha 44).
+            log.warn("Quarterly result lookup failed - every holding will read 'not measured' in "
+                    + "the results column, which must not be read as 'nothing to report': {}",
+                    e.getMessage());
+        }
+
         for (HoldingsEntity h : holdings) {
             try {
                 decorateOne(h, timing.get(h.getSymbol()));
@@ -108,6 +127,7 @@ public class HoldingsViewDecorator {
                 applyIpo(h);
                 applyMacro(h, macro.get(h.getSymbol()));
                 applyAnalyst(h, analyst.get(h.getSymbol()));
+                applyEarnings(h, earnings.get(h.getSymbol()));
                 h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
             } catch (Exception e) {
                 log.warn("Could not decorate {} — its row falls back to the raw stored signal: {}",
@@ -129,6 +149,7 @@ public class HoldingsViewDecorator {
             applyIpo(h);
             applyMacro(h, macroExposureService.forSymbol(h.getSymbol()));
             applyAnalyst(h, analystTargetViewService.forSymbolCoverage(h.getSymbol()));
+            applyEarnings(h, quarterlyResultService.forSymbol(h.getSymbol()));
             h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
         } catch (Exception e) {
             log.warn("Could not decorate {}: {}", h.getSymbol(), e.getMessage());
@@ -189,6 +210,42 @@ public class HoldingsViewDecorator {
         h.setAnalystLastCallOn(c.lastCallOn());
         h.setAnalystTargetsFrom(c.symbolAnswered());
         h.setAnalystNote(c.note());
+    }
+
+    /**
+     * Attach the latest quarterly result read (SPEC 50.5).
+     *
+     * <p>A null reading, or one carrying NOT_MEASURED, leaves the verdict fields as they are, so
+     * the column renders the striped not-measured marker. That means <b>no filed quarter has been
+     * captured for this company</b> — a gap in what the app has collected — and never that the
+     * company reported nothing or reported badly. The next-result window is still attached where
+     * one could be worked out, because "we have not captured a result and one is overdue" is
+     * exactly the state worth seeing.
+     *
+     * <p>Contributes zero points to any score and is not an input to any verdict.
+     */
+    private static void applyEarnings(HoldingsEntity h,
+                                      com.example.trading.earnings.QuarterlyResultService.Reading r) {
+        if (r == null) {
+            return;
+        }
+        var result = r.result();
+        h.setResultVerdict(result.verdict().name());
+        h.setResultHeadline(result.headline());
+        h.setResultMeasuredSignals(result.measuredSignals());
+        h.setResultTotalSignals(result.totalSignals());
+        if (result.measured()) {
+            h.setResultQuarter(result.fiscalLabel());
+            h.setResultPublishedOn(result.availableFrom());
+            h.setResultRevenueYoyPercent(result.revenueYoyPercent());
+            h.setResultProfitYoyPercent(result.profitYoyPercent());
+            h.setResultMarginDeltaPp(result.marginDeltaPp());
+            h.setResultRevised(result.revised());
+            h.setResultFrom(r.symbolAnswered());
+        }
+        var next = r.expectation();
+        h.setNextResultStatus(next.status().name());
+        h.setNextResultText(next.text());
     }
 
     private void decorateOne(HoldingsEntity h, HoldingsBuyTimingService.HoldingBuyTiming t) {

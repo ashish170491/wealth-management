@@ -91,6 +91,21 @@ public class SchemaMigrationRunner {
             // Analyst target ledger, structured research feed (SPEC 49.11). Gotcha 74 again: both
             // are added to a table that already has rows, and a write that silently fails here
             // would report "wrote 0 rows" from a backfill that ran perfectly.
+            // Quarterly result tracking (SPEC 50). quarterly_results is created by Hibernate on
+            // first boot, so these only matter on an upgrade where the table exists but a later
+            // column does not - the Gotcha 74 case, where the feature writes nothing while
+            // appearing to run. available_from is the one that must not be missing: without it
+            // every stored quarter silently loses the date it became public, which is the whole
+            // defence against look-ahead bias in any future result-based signal (Gotcha 100).
+            new String[]{"quarterly_results", "available_from", "date"},
+            new String[]{"quarterly_results", "available_from_estimated", "boolean"},
+            new String[]{"quarterly_results", "consolidated", "boolean"},
+            new String[]{"quarterly_results", "audited", "boolean"},
+            new String[]{"quarterly_results", "revised", "boolean"},
+            new String[]{"quarterly_results", "revision_remark", "varchar(500)"},
+            new String[]{"quarterly_results", "filing_seq_id", "varchar(32)"},
+            new String[]{"quarterly_results", "announced_at", "timestamp"},
+            new String[]{"quarterly_results", "first_seen_at", "timestamp"},
             new String[]{"analyst_targets", "called_on", "date"},
             new String[]{"analyst_targets", "broker_stated_price", "double precision"},
             new String[]{"multibagger_scores", "support20d", "double precision"},

@@ -43,6 +43,7 @@ import { macroExposureCol, macroFilterGroup, macroCoverageLine } from './macro-c
 import {
   analystCoverageCol, analystFilterGroup, analystCoverageLine, analystCoveragePanel,
 } from './analyst-cells.js';
+import { resultCol, resultFilterGroup, resultCoverageLine } from './earnings-cells.js';
 
 const view = document.getElementById('view');
 
@@ -741,6 +742,7 @@ const HOLDING_FILTERS = chipFilters([
   },
   macroFilterGroup(),
   analystFilterGroup(),
+  resultFilterGroup(),
   {
     label: 'Position:',
     key: 'pnl',
@@ -791,6 +793,10 @@ function holdingsTable(rows, matrix) {
     // into it: a brokerage target is somebody else's opinion recorded so it can be scored later,
     // and it contributes zero points to anything here.
     analystCoverageCol(),
+    // What the business actually did last quarter (SPEC 50). Beside the app's own score and
+    // never blended into it: the composite is 59% price behaviour (SPEC 40.2), so this is the
+    // column that can disagree with it — which is the whole reason it is here.
+    resultCol(),
     { key: 'recommendation', label: 'Signal', render: signalCell },
     { key: 'rsi14', label: 'RSI', align: 'r', render: (h) => (missing(h.rsi14) ? unmeasured() : h.rsi14.toFixed(0)) },
     { key: 'stockPe', label: 'P/E', align: 'r', render: (h) => (missing(h.stockPe) ? unmeasured('No P/E computed for this stock') : h.stockPe.toFixed(1)) },
@@ -1039,7 +1045,10 @@ function renderAnalysis() {
     macroCoverageLine(data.holdings || []),
     // Same rule for the Analysts column: a column full of "None on file" must not read as "the
     // market has no view on what I own" when it means this app's ledger is thin (SPEC 49.7).
-    analystCoverageLine(data.holdings || [])));
+    analystCoverageLine(data.holdings || []),
+    // And for the Result column: an empty one reads as "none of my holdings reported anything
+    // worrying", when it may mean no filed quarter has been captured at all (Gotcha 44).
+    resultCoverageLine(data.holdings || [])));
 
   const analyst = analystCoveragePanel(data.holdings || []);
   if (analyst) {

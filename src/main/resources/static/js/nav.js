@@ -39,7 +39,7 @@ const PAGES = [
 /** Which freshness keys each page actually depends on — no point stamping the rest. */
 const RELEVANT = {
   'index.html': ['holdingsSynced', 'holdingsHistory'],
-  'holdings.html': ['holdingsSynced', 'holdingsAnalyzed', 'holdingsHistory'],
+  'holdings.html': ['holdingsSynced', 'holdingsAnalyzed', 'holdingsHistory', 'quarterlyResults'],
   'screener.html': ['multibaggerScores'],
   'discovery.html': ['multibaggerScores'],
   'accuracy.html': ['recommendationOutcomes', 'analystTargets'],
@@ -67,6 +67,7 @@ const FRESHNESS_LABELS = {
   macroEvents: 'Events read',
   marketImpactNews: 'Headlines',
   analystTargets: 'Analyst targets',
+  quarterlyResults: 'Results',
 };
 
 /** Past this many days a timestamp is called out in amber. */

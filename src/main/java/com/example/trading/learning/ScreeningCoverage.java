@@ -264,6 +264,18 @@ public final class ScreeningCoverage {
                         ? Status.MEASURED : Status.NOT_MEASURED,
                 null, false));
 
+        // Quarterly results (SPEC 50.7). MEASURED means at least one filed quarter has been
+        // captured for this company. NOT_APPLICABLE is never emitted - every listed company files
+        // quarterly results, so an absence is this app's blind spot rather than an exemption the
+        // business earned, exactly as for MacroExposure above. This row is what makes a future
+        // result-based signal reviewable at all: three signals here produced a value measured on
+        // nothing at all and each ran for months looking fine (B-060, B-074).
+        s.add(new Spec("QuarterlyResult",
+                x -> com.example.trading.earnings.QuarterlyResultCoverage.available()
+                        && com.example.trading.earnings.QuarterlyResultCoverage.hasResult(x.getSymbol())
+                        ? Status.MEASURED : Status.NOT_MEASURED,
+                null, false));
+
         // --- Verdicts ------------------------------------------------------------------
         s.add(new Spec("DcfVerdict",
                 x -> verdict(x.getDcfVerdict(), Set.of("NOT_APPLICABLE"), Set.of("INSUFFICIENT_DATA")), null, false));
