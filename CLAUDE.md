@@ -981,6 +981,54 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 
 119. **A collapsible section is only safe if its heading carries a count, and that count must describe the list underneath it** (SPEC 27.15, 2026-09-10). Discovery measured **30,976px, about 31 screens**, and 84% of it was three tables — Recent Listings 14,017px/238 rows, Universe Expansion 7,261px/120, Insider Activity 4,926px/60. Folding every section via `collapse()` in `ui.js` took the default to **4,296px**. The rule that makes it safe: once sections fold, **the heading row is the navigation**, so a folded section is one whose findings the reader cannot see, and the count is the only thing separating "I chose not to look" from "I did not know there was anything to look at". `collapse()` therefore always wraps `withCount()`. Building it surfaced a live instance of Gotcha 98: Recent Listings printed **54** in its pill while the table held **238**, because the pill was fed `ready.length` (past the six-month mark) instead of `rows.length` — harmless while you could scroll past it, not once it is the only thing on screen. Second rule: **the default open section is data-driven, not positional.** "All folded except the first" opens *Under the Radar*, which reads 0, while folding the lanes that found something — so the first section with a non-zero count opens instead. State is per section in `localStorage`, never a page-level "collapse all", and nothing ever auto-folds on scroll or a timer. Filter placement follows Gotcha 117's split: the three *stock lanes* keep sharing one universe-level bar (three questions, one screening run — three near-identical bars would be three things to keep in step), while the three tables that are **not** screening rows get their own chips, since their rows share no fields with a screening row. Those three were also 84% of the length, which is not a coincidence.
 
+    **Extended to all thirteen pages on 2026-09-18, and two of its own rules moved.** The default
+    is now **everything folded on every page** — the "first section with findings" rule existed to
+    avoid opening an empty section while folding the ones that found something, and opening
+    nothing satisfies that equally while giving the reader a page that starts as one screen of
+    headings. Measured expanded→folded at 1600px: screener 34,783→900px, discovery 25,614→985,
+    accuracy 21,502→1,333, guide 8,032→1,389. The storage prefix moved to `dash:collapse:v2:`,
+    because a value stored under "open unless told otherwise" means the opposite under the new
+    default. And **a heading may now carry a verdict instead of a count** — `withSummary()` beside
+    `withCount()` — because half the sections on the stock and portfolio screens are single-verdict
+    panels where a count of `1` says nothing: *Can this business compound? [Partial]*, *What did it
+    report last quarter? [Weak]*. It routes through the existing `badge()` so a missing value draws
+    the striped "not measured" marker rather than a blank (§21 rule 7); a folded heading is the
+    last place an unmeasured value may look measured. The third case is the limit of the rule and
+    is deliberate: **prose, a control or a link list gets nothing**, because it hides no finding —
+    which is what lets the guide's thirteen prose sections fold at all.
+
+    Five things that are load-bearing in the implementation. **The fold is applied inside
+    `mount()`**, once, not at ~87 call sites — every page calls `mount(view, …)` and nothing else,
+    so no page module needed an import, and an import nobody has to add cannot be got wrong
+    (Gotcha 41/82: a missed import is a `ReferenceError` the page's own `.catch()` renders as a
+    tidy error box, so every file still returns 200 and only a browser shows it). **`collapse()`
+    now self-guards** on `.collapsible`, because it is destructive — a second pass nests a second
+    `.section-body` — and that guard is what leaves the hand-written keys on discovery, accuracy
+    and macro un-orphaned. **Keys come from the title alone**, stamped by `section()` into
+    `dataset.foldKey`; deriving them from the heading's `textContent` later would fold the count
+    pill into the key and lose the reader's choice whenever a row count changed. **The store is
+    mirrored in memory**, which is a correctness fix rather than an optimisation: the filter boxes
+    on the screener, watchlist, portfolio and macro pages live *inside* a section and every
+    keystroke re-mounts it, so with localStorage unavailable (private window, blocked site data)
+    the section would re-fold on the first keystroke and take the cursor with it. **And the control
+    is a `<button>` inside the `<h2>`**, not `role="button"` on the heading — with everything
+    folded the headings are the page's only structural navigation, and `role="button"` on an `h2`
+    removes it from the accessibility tree.
+
+    Two traps found by running it rather than in review. `hidden="until-found"` keeps Ctrl+F
+    working, but **Chrome removes the attribute itself** on a match, so the `beforematch` handler
+    must sync the caret and `aria-expanded` *without* touching the attribute — otherwise the
+    section is open while its heading says closed and the reader's next click appears to do
+    nothing. (Also: never assign `body.hidden = true` again; the IDL setter writes `hidden=""`,
+    which is plain `display:none`, and the downgrade is invisible unless you read the attribute's
+    *value*.) And **a deep link must open its section before scrolling** — `scrollIntoView` into a
+    hidden subtree silently does nothing and gets no `beforematch` rescue — hence `revealSection()`
+    in `page-guide.js` and before the portfolio's thesis-editor scroll. Adding the chips *before*
+    turning folding on was also deliberate and paid immediately: with the tables still visible you
+    can check a pill against the list beneath it, which is how the Overview's "Today's biggest
+    moves" was caught reading **30** above a chart of six (Gotcha 98 again). Afterwards you would
+    have to open ninety-nine sections to find it.
+
     Process note from the same pass: a `.replace()` without an assert silently did nothing when the `ui.js` import line did not match the shape I assumed, and the page died with `collapse is not defined` — HTTP 200 on every file, error only in a browser (Gotcha 41/82). **Assert on every scripted edit**, and load the page after touching `static/js/**` rather than trusting `check_js_syntax.py`, which balances brackets but cannot see an unresolved name.
 
 118. **A control that leaves the building asks first, and a timeout shorter than the measured run is a bug** (SPEC 27.14, 2026-09-10). "Capture from NSE now" on the IPO page is the one dashboard click that is not a database read — dozens of live NSE calls plus a paced broker quote per recent listing, measured at 5m13s — so it shows what it costs and waits. Its panel names what it fetches, that it writes, the refusal windows, **and what it will not do**: a mid-issue capture updates subscription figures and prices but cannot make the structure read decide sooner, because that waits for `subscriptionFinal` by design (Gotcha 108a). Without that line the button silently promises an earlier verdict. Two defects fixed with it. It was called **"Refresh from NSE now"**, which became wrong the moment Gotcha 116 put a control reading "Refresh" just above it — one word, two meanings, one screen, Gotcha 85 in miniature; refresh re-reads, capture goes out. And its client timeout was **4 minutes against a 5m13s run**, so an ordinary capture aborted in the browser with "that took too long" while the server finished it regardless — now 7. Per-row live actions (IPO analyse, watchlist/holdings re-analyse) deliberately keep firing on one click: they are seconds long and clicked repeatedly, and confirming each one trains the reader to dismiss confirmations, which is what makes the one on the expensive action worthless.

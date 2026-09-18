@@ -35,6 +35,8 @@ import {
 } from './format.js';
 import {
   el, section, kpi, card, alert, empty, skeleton, mount, badge, table, scoreBar, unmeasured, costNote,
+  withCount, withSummary,
+  revealSection,
 } from './ui.js';
 import { donut, gauge, barChart, sparkline, lineChart, legend, scatter, COLORS } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
@@ -215,13 +217,13 @@ function coreSection() {
         + 'annual history is imported and as these stocks enter the weekly screening.')));
   }
 
-  return section('Which stocks should you never sell?',
+  return withCount(section('Which stocks should you never sell?',
     'A core holding is one whose business has passed every quality check the app can run on it — '
     + 'how well it earns on the money invested in it, how solid its balance sheet is, how steady '
     + 'its earnings are, whether its accounts throw up red flags, and whether your original reason '
     + 'for buying still holds. Price is deliberately not one of the checks: a good business having '
     + 'a bad six months is the exact situation this is for. Nothing here is executed.',
-    body);
+    body), protectedRows.length);
 }
 
 // ------------------------------------------------------------ ACTION ITEMS
@@ -440,13 +442,13 @@ function youngListingsSection() {
     { key: 'pnl', label: 'Your Gain / Loss', align: 'r', value: (h) => h.pnlPercent, render: pnlCell },
   ], rows, { sortKey: 'weight' });
 
-  return section('Recently listed holdings and their supply calendar',
+  return withCount(section('Recently listed holdings and their supply calendar',
     `${rows.length} of your holdings listed within the last three years, together ${pct(share, { signed: false })} of your money. `
     + 'A new listing has a queue of sellers on a fixed timetable — anchor investors at 30 and 90 days, '
     + 'pre-IPO holders at six months, promoters at 18 months. "Washout" means the stock is still below '
     + 'its listing-day high after the six-month wave; "base forming" means it has recovered and is holding. '
     + 'Nothing here is a verdict on the business — that is the quality column on the Analysis tab.',
-    tbl);
+    tbl), rows.length);
 }
 
 function renderActions() {
@@ -455,20 +457,22 @@ function renderActions() {
   const core = coreSection();
   if (core) nodes.push(core);
 
-  nodes.push(section('Stocks flagged to exit',
+  nodes.push(withCount(section('Stocks flagged to exit',
     'Holdings the app currently rates Sell or Strong Sell. This is a prompt to review your reasoning, not an instruction to sell — and it ignores tax, so check the holding period before acting.',
-    exitTable(data.exitCandidates)));
+    exitTable(data.exitCandidates)), (data.exitCandidates || []).length));
 
-  nodes.push(section('Is your reason for buying still true?',
+  nodes.push(withCount(section('Is your reason for buying still true?',
     'Thesis drift compares each holding’s score today against its score 30 and 60 days ago. A falling score often shows up before the price does, which is exactly why it is worth watching. Holdings the app cannot score are left out rather than shown as zero.',
-    decayTable(data.decay)));
+    // Holdings whose thesis is NOT intact — the list this section exists to surface. A count
+    // of every holding would be a number describing a different list from the one below it.
+    decayTable(data.decay)), (data.decay || []).filter((d) => d.verdict && d.verdict !== 'INTACT').length));
 
   const young = youngListingsSection();
   if (young) nodes.push(young);
 
-  nodes.push(section('Holdings the app would add to',
+  nodes.push(withCount(section('Holdings the app would add to',
     'Stocks you already own that currently rate Buy or Strong Buy. Worth a look if you were planning to invest more anyway.',
-    accumulateTable(data.accumulateCandidates)));
+    accumulateTable(data.accumulateCandidates)), (data.accumulateCandidates || []).length));
 
   return nodes;
 }
@@ -483,9 +487,11 @@ function renderActions() {
 function performanceSection() {
   const p = data.performance;
   if (!p) {
-    return section('Is your money actually growing?',
+    // No chip value on purpose: with no snapshots there is no return to report, and the
+    // heading says "not measured" rather than implying a flat one.
+    return withSummary(section('Is your money actually growing?',
       'The headline gain compares today’s value with what you paid, and it cannot move when you add or withdraw money. This section removes those flows so the return can be compared with an index.',
-      empty('Performance unavailable', 'Could not read the daily snapshots.'));
+      empty('Performance unavailable', 'Could not read the daily snapshots.')), null);
   }
 
   const tone = (v) => (missing(v) ? 'neutral' : v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral');
@@ -563,10 +569,14 @@ function performanceSection() {
   el('div', {}, p.method || ''),
   caveats);
 
-  return section('Is your money actually growing?',
+  return withSummary(section('Is your money actually growing?',
     'The headline gain compares today’s value with what you paid, and it cannot move when you add or withdraw money — it read +17% in February and +17% in September while seven months went by. '
     + 'The return below removes your deposits and withdrawals day by day, so it measures what the holdings did and can be set against an index. Beating the index is the whole point of picking stocks yourself.',
-    kpis, ddRow, chartNode, totalReturnCard(p.totalReturn, p.lotCoverage), method);
+    kpis, ddRow, chartNode, totalReturnCard(p.totalReturn, p.lotCoverage), method),
+  // Time-weighted, not gain on cost — the distinction this whole section exists to draw. Gain
+  // on cost read +17% in February and +17% in September while the money went nowhere.
+  missing(p.twrPercent) ? null : pct(p.twrPercent),
+  { type: p.twrPercent >= 0 ? 'success' : 'danger' });
 }
 
 function cashTile(cash, p) {
@@ -665,11 +675,14 @@ function weightVsQualitySection() {
       '. These are the ones where adding on weakness has historically paid.'));
   }
 
-  return section('Are your biggest bets your best businesses?',
+  return withCount(section('Are your biggest bets your best businesses?',
     'Each dot is a holding: how much of your money is in it against how the app scores it, coloured by whether the business looks like it can compound. Top-right is where you want your money. Bottom-right — big positions in weak businesses — is where portfolios get hurt.',
     card(chart || empty('Nothing to chart', 'No scored holdings yet.'), legendRow),
     el('div', { style: 'margin-top:12px' }, tbl),
-    notes.length ? el('div', { style: 'font-size:13.5px;line-height:1.6;margin-top:10px' }, ...notes) : null);
+    notes.length ? el('div', { style: 'font-size:13.5px;line-height:1.6;margin-top:10px' }, ...notes) : null),
+    // The dots actually plotted. A holding the app has never scored has no y value and is not
+    // on the chart, so counting every holding would describe a different list (Gotcha 98).
+    scored.length);
 }
 
 /** Portfolio-weighted fundamentals with coverage (SPEC 46.3). */
@@ -684,9 +697,12 @@ function portfolioQualitySection() {
   }));
   const notes = el('ul', { style: 'margin:10px 0 0;padding-left:18px;font-size:12.5px' },
     ...q.metrics.map((m) => el('li.muted', {}, el('strong', {}, `${m.label}: `), m.note || '')));
-  return section('What does the whole book cost, and how well does it earn?',
+  return withCount(section('What does the whole book cost, and how well does it earn?',
     `The same numbers you would read for one stock, weighted across everything you own by what each holding is worth. Screening data as of ${q.screeningDate ? shortDate(q.screeningDate) : NOT_MEASURED}. A figure measured on under half your money is withheld rather than shown as if it covered all of it.`,
-    el('div.grid.kpis', {}, ...tiles), notes);
+    el('div.grid.kpis', {}, ...tiles), notes),
+    // Metrics that survived the coverage gate. One withheld for thin coverage is not on screen,
+    // so it must not be in the count either.
+    tiles.length);
 }
 
 /**
@@ -1024,18 +1040,19 @@ function renderAnalysis() {
 
   const compounding = compoundingSummary(data.holdings);
   if (compounding) {
-    nodes.push(section('Can the businesses you own compound?',
+    nodes.push(withCount(section('Can the businesses you own compound?',
       'Quality, not price. This asks whether each holding earns well on the money it employs, '
       + 'turns profit into cash, and stays out of trouble — the things that decide a '
       + 'ten-year return. It changes no score and is deliberately separate from the buy/sell '
       + 'signal.',
-      compounding));
+      compounding),
+    (data.holdings || []).filter((h) => h.compounding === 'COMPOUNDER').length));
   }
 
   const pq = portfolioQualitySection();
   if (pq) nodes.push(pq);
 
-  nodes.push(section('Everything you own',
+  nodes.push(withCount(section('Everything you own',
     'Your full holdings, sortable by any column — click a heading to re-sort, or a stock to open its history. "Held" comes from your purchase lots and reads "not measured" when none is on file. The 90-day trend line is real recorded prices.',
     HOLDING_FILTERS.bar(data.holdings || [],
       HOLDING_FILTERS.apply(data.holdings || []).length, 'holdings'),
@@ -1048,29 +1065,39 @@ function renderAnalysis() {
     analystCoverageLine(data.holdings || []),
     // And for the Result column: an empty one reads as "none of my holdings reported anything
     // worrying", when it may mean no filed quarter has been captured at all (Gotcha 44).
-    resultCoverageLine(data.holdings || [])));
+    // The FILTERED count — this heading sits above the filtered table, and the chip bar
+    // immediately under it reports the same narrowing in words.
+    resultCoverageLine(data.holdings || [])), HOLDING_FILTERS.apply(data.holdings || []).length));
 
   const analyst = analystCoveragePanel(data.holdings || []);
   if (analyst) {
-    nodes.push(section('Who else is covering what you own',
+    nodes.push(withCount(section('Who else is covering what you own',
       'Which brokerages have a price target running on each of your holdings, and what they are '
       + 'quoting. This is other people’s opinion, recorded so it can be scored later — it is not '
       + 'this app’s view and it changes no score here. A stock with no target on file is usually '
       + 'one no published note reached, not one nobody follows.',
-      analyst));
+      analyst),
+    (data.holdings || []).filter((h) => h.analystHouses).length));
   }
 
-  nodes.push(section('How spread out is your money?',
+  nodes.push(withCount(section('How spread out is your money?',
     'Your holdings grouped by sector. A single slice dominating means your portfolio rises and falls with one part of the economy. Holdings with no sector on record are named, not hidden in a slice.',
-    sectorMix(data.holdings)));
+    sectorMix(data.holdings)),
+    new Set((data.holdings || []).map((h) => h.sector).filter(Boolean)).size));
 
-  nodes.push(section('Concentration risk',
+  nodes.push(withSummary(section('Concentration risk',
     'HHI is a single concentration number: under 1,500 is well spread, above 2,500 means a few positions drive most of your outcome. Neither is right or wrong — it just needs to be deliberate. The opposite problem, positions too small to matter, is shown beside it.',
-    riskCard(data.risk)));
+    riskCard(data.risk)), data.risk && data.risk.hhi && data.risk.hhi.classification));
 
-  nodes.push(section('Are you still following your plan?',
+  nodes.push(withSummary(section('Are you still following your plan?',
     'Drift compares what you actually hold against the target percentages you set, by sector and by company size. "Over Tolerance" means a bucket has moved further from target than the wiggle room you allowed.',
-    driftPanel(data.drift)));
+    driftPanel(data.drift)),
+    data.drift && data.drift.buckets
+      ? (data.drift.buckets.filter((b) => b.status === 'OVER_TOLERANCE').length
+        ? `${data.drift.buckets.filter((b) => b.status === 'OVER_TOLERANCE').length} off target` : 'On target')
+      : null,
+    { type: data.drift && data.drift.buckets
+      && data.drift.buckets.some((b) => b.status === 'OVER_TOLERANCE') ? 'warning' : 'success' }));
 
   return nodes;
 }
@@ -1160,21 +1187,25 @@ function sectorPerformance(holdings) {
 function renderTrends() {
   const nodes = [];
 
-  nodes.push(section('Best and worst holdings',
+  nodes.push(withCount(section('Best and worst holdings',
     'Your six strongest and six weakest positions by percentage return since you bought. Bars to the right are gains, to the left are losses.',
-    topMoversChart(data.holdings)));
+    topMoversChart(data.holdings)), (data.holdings || []).length));
 
-  nodes.push(section('Which positions actually moved your wealth?',
+  nodes.push(withCount(section('Which positions actually moved your wealth?',
     'The same idea in rupees. A 60% gain on a small position and a 10% gain on a large one can be the same money — this is the chart that shows which of your decisions mattered.',
-    contributionChart(data.holdings)));
+    contributionChart(data.holdings)), (data.holdings || []).length));
 
-  nodes.push(section('Which sectors are working for you?',
+  nodes.push(withCount(section('Which sectors are working for you?',
     'Average return of your holdings grouped by sector. This shows where your gains are actually coming from, which is often not where you think.',
-    sectorPerformance(data.holdings)));
+    sectorPerformance(data.holdings)),
+    new Set((data.holdings || []).map((h) => h.sector).filter(Boolean)).size));
 
-  nodes.push(section('Quality spread of what you own',
+  nodes.push(withCount(section('Quality spread of what you own',
     'How your holdings’ scores are distributed. A cluster on the left means most of what you own currently rates poorly on the app’s own measures.',
-    scoreDistribution(data.holdings)));
+    // Holdings the app has actually scored. One it has never screened has no place in a
+    // distribution of scores, so it must not be in the count either (SPEC 21 rule 7).
+    scoreDistribution(data.holdings)),
+    (data.holdings || []).filter((h) => Number.isFinite(h.overallScore)).length));
 
   return nodes;
 }
@@ -1246,7 +1277,14 @@ function openThesisEditor(symbol, d) {
   };
   paint('plan');
   const host = document.getElementById('thesis-editor');
-  if (host) host.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (host) {
+    // The editor lives inside a section that is folded by default, so it has to be revealed
+    // before it can be scrolled to — otherwise clicking Edit appears to do nothing at all.
+    revealSection(host);
+    // Next frame: the section has just gone from hidden to laid out, and a smooth scroll
+    // started in the same tick measures against the old layout and lands short.
+    requestAnimationFrame(() => host.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }
 }
 
 function thesisEditor() {
@@ -1574,13 +1612,16 @@ function renderPlan() {
   const nodes = [];
   if (planNotice) { nodes.push(alert(planNotice)); planNotice = null; }
 
-  nodes.push(section('Why you own what you own',
+  nodes.push(withCount(section('Why you own what you own',
     'Your written reason (thesis) for each holding, and whether the numbers still back it up. "Score at buy" versus "score now" is the honest test of whether your original case is holding together. Only theses you wrote count — the app’s generated placeholders are listed as waiting for yours.',
-    convictionPanel(data.conviction)));
+    // Theses the INVESTOR wrote. The app seeds a placeholder for every holding, and counting
+    // those would report the app agreeing with itself as a record of your own reasoning (B-097).
+    convictionPanel(data.conviction)),
+    (data.conviction && data.conviction.statedCount) || 0));
 
-  nodes.push(section('Staged purchases you have planned',
+  nodes.push(withCount(section('Staged purchases you have planned',
     'An accumulation plan splits a purchase into dated instalments or price rungs, so the buying happens on a schedule you set in a calm moment. A tranche past its date and still pending is overdue: record it or cancel the plan.',
-    accumulationPanel(data.plans)));
+    accumulationPanel(data.plans)), (data.plans || []).length));
 
   nodes.push(section('Tax-aware selling',
     'Selling shares held under 365 days triggers STCG at 20%; held longer, LTCG applies at a lower rate with an annual exemption. This shows which lots are worth waiting on and which losses could offset gains you have already booked.',
@@ -1590,9 +1631,13 @@ function renderPlan() {
     'A proposed set of trades to bring your holdings back to the target weights you set. Nothing is executed — treat it as a shopping list to review.',
     rebalancePanel()));
 
-  nodes.push(section('Dividend income',
+  nodes.push(withSummary(section('Dividend income',
     'Cash your holdings have paid you this financial year (April to March), and what is announced but not yet received. Dividends are real return that price charts do not show — and the app cannot see them, so what you log here is what counts.',
-    dividendPanel(data.dividendSummary, data.dividends)));
+    dividendPanel(data.dividendSummary, data.dividends)),
+    // Received this financial year. Projected income is a forecast and does not belong in the
+    // one line the reader uses to decide whether to open the section.
+    data.dividendSummary ? inr(data.dividendSummary.totalReceived) : null,
+    { type: 'info' }));
 
   return nodes;
 }

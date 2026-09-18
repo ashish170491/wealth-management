@@ -24,6 +24,7 @@ import {
 } from './format.js';
 import {
   el, section, kpi, card, empty, skeleton, mount, badge, table, scoreBar, unmeasured, alert,
+  withCount, withSummary,
 } from './ui.js';
 import { barChart, radar } from './charts.js';
 import { loadWatchedSet, watchButton } from './watch-button.js';
@@ -502,8 +503,13 @@ function paint(opts = {}) {
   const stale = age !== null && age > 2;
   const compounders = rows.filter(isCompounder).length;
   const fairCompounders = rows.filter((r) => isCompounder(r) && atFairPrice(r)).length;
+  // The commonest grade in this run - one word for whether the universe is strong today.
+  const gradeTally = new Map();
+  for (const r of data) if (r.grade) gradeTally.set(r.grade, (gradeTally.get(r.grade) || 0) + 1);
+  const topGrade = gradeTally.size
+    ? [...gradeTally.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
 
-  nodes.push(section('The screening universe',
+  nodes.push(withCount(section('The screening universe',
     'Every stock the app scores out of 100 across seven dimensions — momentum, volume, relative strength, price structure, valuation, institutional interest and financial quality. A high score is a reason to look closer, not a reason to buy: the business numbers beside it are what to read next.',
     el('div', {},
       screeningDate
@@ -523,28 +529,34 @@ function paint(opts = {}) {
         kpi({ label: 'Strong Candidates', value: num(rows.filter((r) => r.verdict === 'STRONG_MULTIBAGGER').length), tone: 'positive', sub: 'composite 80 or more' }),
         kpi({ label: 'Compounders', value: num(compounders), tone: 'positive', sub: 'pass the five business checks' }),
         kpi({ label: 'At a Fair Price', value: num(fairCompounders), tone: fairCompounders > 0 ? 'positive' : 'neutral', sub: 'compounders with a reasonable entry' }),
-        kpi({ label: 'You Own', value: num(rows.filter((r) => r.inHoldings).length), tone: 'neutral' })))));
+        kpi({ label: 'You Own', value: num(rows.filter((r) => r.inHoldings).length), tone: 'neutral' })))), rows.length));
 
-  nodes.push(section('Compounders at a fair price',
+  nodes.push(withCount(section('Compounders at a fair price',
     'The businesses that passed the five compounding checks — return on capital, real cash, self-funded growth, steady earnings, margins — and whose entry does not look stretched today. Each card shows the business figures first and the seven-dimension shape second. Dimensions the app could not measure are left out of the shape rather than drawn as zero.',
-    headline(data)));
+    headline(data)), fairCompounders));
 
-  nodes.push(section('All screened stocks',
+  nodes.push(withCount(section('All screened stocks',
     'Sort by any column, or filter by sector, size, grade, risk and whether you own it. The default columns are the business: quality, return on capital, debt, growth, promoter holding, valuation and red flags. The seven scoring dimensions are one chip away. A striped marker means that figure could not be measured for that stock — it is never a zero.',
     FILTERS.bar(rows, data.length, 'stocks'),
-    scoreTable(data)));
+    // The FILTERED count, because that is the list directly underneath this heading. The chip on
+    // "The screening universe" above carries the unfiltered total, so both numbers are on screen
+    // and each one describes its own list (Gotcha 98).
+    scoreTable(data)), data.length));
 
-  nodes.push(section('Grade spread',
+  nodes.push(withSummary(section('Grade spread',
     'How the screened universe breaks down by grade. A+ is a composite of 85 or more, D is under 35.',
-    gradeDistribution(data)));
+    gradeDistribution(data)), topGrade, { type: 'info' }));
 
-  nodes.push(section('Which dimensions can the app actually measure?',
+  nodes.push(withCount(section('Which dimensions can the app actually measure?',
     'Average score per dimension, plus how many stocks each one could be measured for. Coverage matters as much as the average: a dimension measured for a fraction of the universe is one the screener is mostly blind on. The same count is given for each business column.',
-    dimensionCoverage(data)));
+    dimensionCoverage(data)), DIMENSIONS.length));
 
-  nodes.push(section('Does the score predict your own returns?',
+  nodes.push(withCount(section('Does the score predict your own returns?',
     'For stocks you both own and the app screens, this lines the score up against your actual return. Rank agreement near zero means the two are unrelated on this sample.',
-    scoreVsReturn(rows)));
+    // The SAMPLE, not a correlation. A rank agreement computed on a handful of stocks is the
+    // kind of figure this app exists not to quote without its n beside it (SPEC 38), and folded
+    // there is no room for both.
+    scoreVsReturn(rows)), rows.filter((r) => r.inHoldings && r.compositeScore != null).length));
 
   mount(view, nodes);
 

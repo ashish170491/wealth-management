@@ -19,6 +19,7 @@ import {
 import {
   el, section, kpi, card, empty, skeleton, mount, table, alert, unmeasured, costNote, badge,
   collapse, withCount, scoreBar,
+  withSummary,
 } from './ui.js';
 import { barChart } from './charts.js';
 import {
@@ -647,44 +648,57 @@ async function boot() {
   analystRecentDays = (recentData && Number.isFinite(recentData.days)) ? recentData.days : 365;
   overlap = (overlapRes && overlapRes.data) || null;
 
+  const usableStats = stats.filter((s) => s.sampleSize >= MIN_SAMPLE);
+  const bestExcess = usableStats.length
+    ? usableStats.reduce((a, b) => ((b.meanExcessReturnPercent ?? -1e9) > (a.meanExcessReturnPercent ?? -1e9) ? b : a)).meanExcessReturnPercent
+    : null;
   const nodes = [];
 
-  nodes.push(section('Is the app any good at picking stocks?',
+  nodes.push(withSummary(section('Is the app any good at picking stocks?',
     'This is the app marking its own homework. Every time a scoring engine recommends a stock, the pick is recorded; on its 30, 90, 180 and 365-day anniversary the actual return is measured and compared against the Nifty 50. What matters is excess return — beating the index, not just going up.',
-    headline()));
+    headline()),
+    // Best excess return over the Nifty, across the engine/horizon cells that have enough picks
+    // to say anything. Null until one does — below MIN_SAMPLE this page deliberately shows no
+    // number at all, and its own heading must not be the exception.
+    bestExcess === null ? null : pct(bestExcess),
+    { type: bestExcess > 0 ? 'success' : 'danger' }));
 
-  nodes.push(section('Full results by engine and holding period',
+  nodes.push(withCount(section('Full results by engine and holding period',
     'One row per engine and holding period. "Hit rate" is the share of picks that made money; "vs Nifty" is how much better or worse than simply buying the index; "IC" measures whether a higher score genuinely led to a better return. Combinations with fewer than 10 measured picks show no numbers at all — a hit rate from a handful of picks is noise dressed up as evidence.',
-    statsTable()));
+    statsTable()), stats.filter((s) => s.sampleSize > 0).length));
 
-  nodes.push(section('Beating the index, or not',
+  nodes.push(withCount(section('Beating the index, or not',
     'Average excess return for each engine and holding period. Anything left of zero underperformed simply buying the Nifty 50 — which is the honest benchmark for whether all this analysis is worth doing.',
-    excessChart()));
+    excessChart()), usableStats.length));
 
-  nodes.push(section('Is a higher score actually a better stock?',
+  nodes.push(withCount(section('Is a higher score actually a better stock?',
     'IC measures whether the app’s scores line up with real returns. Above +0.10 — the dashed line — is the conventional bar for a genuinely useful signal. Near zero means the score and the outcome are unrelated.',
-    icChart()));
+    icChart()), usableStats.length));
 
-  nodes.push(section('Which parts of the score are earning their keep?',
+  nodes.push(withCount(section('Which parts of the score are earning their keep?',
     'The composite blends seven dimensions. This breaks it apart and scores each one separately, so a dimension that adds nothing (or actively misleads) becomes visible instead of hiding inside the average.',
-    dimensionIcPanel()));
+    // The weighted dimensions the section's own blurb names. The panel itself loads on demand
+    // from the engine/horizon chips, so there is no row count at render time — this counts the
+    // thing the heading is actually about.
+    dimensionIcPanel()), WEIGHTED.size));
 
   if (coverage.length > 0) {
-    nodes.push(section('Could the app even measure these signals?',
+    nodes.push(withCount(section('Could the app even measure these signals?',
       'Read this beside the panel above. A dimension can score near zero for two completely different reasons — it genuinely does not predict returns, or it was never calculated for most of the universe — and they look identical in an IC number. This is the second reason, made visible. "Measured for" is the share of screened stocks the signal produced a real value for; anything at or below half is a signal the app is mostly blind on. "Does not apply" is separated out because a bank with no return-on-capital figure is not a gap — that measure is suppressed for banks on purpose.',
       coverageHeadline(),
-      el('div', { style: 'margin-top:14px' }, coverageTable())));
+      el('div', { style: 'margin-top:14px' }, coverageTable())), coverage.length));
   }
 
 
   // The analysts' record (SPEC 49). Same question as everything above it, asked of somebody
   // else, on the same yardstick. The caveat block is mandatory rather than decorative: the
   // sample is the desks that publish into this feed, not a census of Indian equity research.
-  nodes.push(section('And how have the analysts done?',
+  nodes.push(withCount(section('And how have the analysts done?',
     'Brokerages publish price targets on the stocks they cover. This app records each published target — which firm, what price, what date — and then checks what the share price actually did: whether it ever reached the target, how long that took, and how the stock fared against the Nifty 50 over exactly the same dates. That last part is the point, because a target reached during a market-wide rally is not skill. None of it changes any score in this app — it is here to be scored, not followed.',
     caveatBlock(analystRecord && analystRecord.caveat),
     analystCoverage(),
-    el('div', { style: 'margin-top:14px' }, analystHouses())));
+    el('div', { style: 'margin-top:14px' }, analystHouses())),
+    (analystRecord && Array.isArray(analystRecord.houses)) ? analystRecord.houses.length : 0));
 
   if (analystRecent.length > 0) {
   // Where our own screening and the brokerages point different ways (SPEC 49.12). It sits under
@@ -696,18 +710,18 @@ async function boot() {
     const none = overlap.goodWithoutTarget || [];
     const agreed = overlap.strongestAgreement || [];
 
-    nodes.push(section('Do the analysts like the same stocks we do?',
+    nodes.push(withCount(section('Do the analysts like the same stocks we do?',
       'Our screening score and the brokerages’ live price targets are two independent readings of the same companies. This compares them. It is not a view on whether any target will be reached — the two mostly disagree for a mechanical reason, and the notes below say what that reason is.',
       overlapKpis(),
       el('div', { style: 'margin-top:14px' }, overlapActions()),
       el('div', { style: 'margin-top:14px' }, overlapNotes()),
-      el('div', { style: 'margin-top:14px' }, overlapBands())));
+      el('div', { style: 'margin-top:14px' }, overlapBands())), overlap.screenedStocks || 0));
 
     if (agreed.length > 0) {
       nodes.push(collapse(withCount(section('Both sides rate these',
         `This app scores the business highly and at least ${overlap.minHousesForAgreement || 3} separate firms are quoting a live target on it. It is the shortest list here and the one carrying the most evidence, because two unrelated methods arrived at the same company. Sorted by how many firms are quoting — that column, not the claimed upside, is what makes one row stronger than another. A negative upside here is not a row to skip: it means several firms follow the company and still think the price has run ahead of it.`,
         table(overlapColumns(), agreed, { sortKey: 'houses', sortDir: 'desc' })), agreed.length),
-        { key: 'accuracy:overlap-agreed', open: true }));
+        { key: 'accuracy:overlap-agreed', open: false }));
     }
 
     if (good.length > 0) {
@@ -721,7 +735,7 @@ async function boot() {
       nodes.push(collapse(withCount(section('Already past every target on them',
         'The share price has passed the highest target the quoted firms published and have not revised. That is the sharpest form the disagreement takes — our score is high because the stock has performed, and the sell-side thinks it has gone far enough. A reason to look harder before adding, not an instruction to sell.',
         table(overlapColumns(), above, { sortKey: 'upsideToMedianPct', sortDir: 'asc' })), above.length),
-        { key: 'accuracy:overlap-above', open: true }));
+        { key: 'accuracy:overlap-above', open: false }));
     }
 
     if (none.length > 0) {

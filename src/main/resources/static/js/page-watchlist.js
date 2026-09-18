@@ -20,6 +20,7 @@ import {
 } from './format.js';
 import {
   el, section, kpi, empty, skeleton, mount, badge, table, alert, unmeasured, scoreBar, costNote,
+  withCount,
 } from './ui.js';
 import { sparkline } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
@@ -382,9 +383,9 @@ function render(opts = {}) {
 
   if (notice) nodes.push(el('div.section', {}, alert(notice)));
 
-  nodes.push(section('Your watchlist at a glance',
+  nodes.push(withCount(section('Your watchlist at a glance',
     'Stocks you are considering but do not yet own (or want to add to). Each one records the day you added it and the price and Nifty level that day, so "return since added" measures what you would have made — and whether waiting cost you anything against the index. Nothing here places orders.',
-    kpis(active)));
+    kpis(active)), active.length));
 
   nodes.push(section('Add a stock',
     'Type the NSE symbol (Zerodha spelling). The app records today as the added date, prices it live, and runs its chart analysis straight away.',
@@ -392,11 +393,11 @@ function render(opts = {}) {
 
   const shown = FILTERS.apply(active);
 
-  nodes.push(section('Still a good time to buy?',
+  nodes.push(withCount(section('Still a good time to buy?',
     'Two separate questions, never blended: Quality asks whether this is a business worth owning for years (the 0-100 composite score from the daily screening — earnings, balance sheet, ownership). Timing asks whether today is a sensible day to pay this price (trend, RSI, distance from the 50-day average). "Buy now" needs both. "Accumulate" means the business is good but there is no entry trigger, so buy in small tranches. "Wait for a dip" means it has run — RSI is high, or it is stretched above its average. "Avoid" means a red flag on the books, a thinly traded stock, or a quality score under 50, and no chart fixes that. "Not measured" is exactly that: nothing has been analysed yet. Actions sit next to each name: ↻ re-analyses the stock now, ↻Q also computes an ad-hoc quality score, ✕ removes it (history kept).',
     FILTERS.bar(active, shown.length, 'stocks'),
     mainTable(shown),
-    removedTable(removed)));
+    removedTable(removed)), shown.length));
 
   mount(view, nodes);
 

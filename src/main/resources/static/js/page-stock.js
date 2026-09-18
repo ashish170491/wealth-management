@@ -24,6 +24,7 @@ import {
 } from './format.js';
 import {
   el, section, kpi, card, empty, skeleton, mount, badge, table, scoreBar, unmeasured, alert, costNote,
+  withCount, withSummary,
 } from './ui.js';
 import { lineChart, legend, radar, COLORS } from './charts.js';
 import { compoundingPanel } from './compounding.js';
@@ -565,48 +566,56 @@ function resultHistoryTable(earnings) {
   ]);
 
   const score = (trend && trend.length) ? trend[trend.length - 1] : null;
+  const measuredDimensions = score
+    ? DIMENSIONS.filter((d) => score[d.key] !== null && score[d.key] !== undefined).length : 0;
   const nodes = [];
 
   nodes.push(el('div.section', {}, header(holding, score)));
 
   if (watch && watch.active) {
-    nodes.push(section('On your watchlist',
+    nodes.push(withSummary(section('On your watchlist',
       'You added this stock to your watchlist on the date shown. The return is measured from the price that day; the verdict combines the business-quality score with today’s chart. Manage it on the Watchlist page.',
-      watchCard(watch)));
+      watchCard(watch)), watch.verdict));
   }
 
-  nodes.push(section('Price and score over time',
+  nodes.push(withSummary(section('Price and score over time',
     'The app’s own daily record of this stock: closing price on the left axis, its overall score on the right. When price and score move apart it is worth asking which one is early.',
     priceHistory(series),
-    returnHistory(series)));
+    returnHistory(series)),
+    // The score itself, which is what this chart is a history OF.
+    // Labelled, not bare. Every other chip on this page is a count, and an unlabelled "22"
+    // beside "Has the score been holding up? 114" reads as one more of them.
+    score && score.compositeScore != null ? `Score ${score.compositeScore}` : null,
+    { type: 'info' }));
 
   if (holding) {
-    nodes.push(section('Key price levels',
+    nodes.push(withSummary(section('Key price levels',
       'Support is a level where buyers have stepped in before; resistance is where sellers have. Price sitting just under resistance often stalls; clearing it on strong volume is usually a better entry than buying into it.',
-      levelsPanel(holding)));
+      levelsPanel(holding)), holding.buyTimingVerdict && holding.buyTimingVerdict.verdict));
   }
 
   if (holding) {
     const latestCore = (coreHistory && coreHistory.length) ? coreHistory[coreHistory.length - 1] : null;
-    nodes.push(section('Should you ever sell this one?',
+    nodes.push(withSummary(section('Should you ever sell this one?',
       'Seven checks on the business behind the stock — how well it earns on the capital in it, how '
       + 'solid the balance sheet is, how steady earnings are, whether the accounts throw up red '
       + 'flags, whether your reason for buying still holds, what insiders are doing, and the '
       + 'horizon you recorded. Price is deliberately not among them. A check marked not measured '
       + 'is not a pass: it means there was nothing to look at, and it earns the stock nothing.',
-      coreStatus(latestCore)));
+      coreStatus(latestCore)), latestCore && latestCore.effectiveTier));
   }
 
-  nodes.push(section('Can this business compound?',
+  nodes.push(withSummary(section('Can this business compound?',
     'The question this app exists for, and the one the score above is worst at answering — most '
     + 'of that score is about how the share price has behaved. These five checks are about the '
     + 'business instead: what it earns on the money in it, whether that profit is real cash, '
     + 'whether growth is self-funded, and whether it is steady. A check that could not be '
     + 'measured is shown as such and counts for nothing, either way.',
     compoundingPanel(compounding)
-      || empty('Never screened', 'This stock is not in the screening universe, so its accounts have not been read.')));
+      || empty('Never screened', 'This stock is not in the screening universe, so its accounts have not been read.')),
+    compounding && compounding.compounding));
 
-  nodes.push(section('What did it report last quarter?',
+  nodes.push(withSummary(section('What did it report last quarter?',
     'Every three months a company publishes what it actually earned. That is the one regular '
     + 'event that can confirm or break a long-term view on evidence rather than on the share '
     + 'price. Four checks are made against the same quarter a year earlier — sales, profit, '
@@ -618,9 +627,9 @@ function resultHistoryTable(earnings) {
       || empty('No result captured',
         'No filed quarter is on record for this company yet. The app stores these during its '
         + 'daily screening run, so this fills in once the stock has been screened.'),
-    resultHistoryTable(earnings)));
+    resultHistoryTable(earnings)), earnings && earnings.resultVerdict));
 
-  nodes.push(section('Which recent events matter to this business?',
+  nodes.push(withSummary(section('Which recent events matter to this business?',
     'Things that happen outside a company — an interest-rate decision, a tariff, the oil price, '
     + 'the rupee, the monsoon — make the next few quarters easier or harder for whole industries. '
     + 'This is what the app has recorded recently and which of it reaches this particular '
@@ -630,9 +639,10 @@ function resultHistoryTable(earnings) {
     macroExposurePanel(macro)
       || empty('Never screened',
         'This stock is not in the screening universe, so the app has not classified its business '
-        + 'and cannot look it up in the exposure map.')));
+        + 'and cannot look it up in the exposure map.')),
+    macro && macro.macroExposure));
 
-  nodes.push(section('Has it actually compounded?',
+  nodes.push(withSummary(section('Has it actually compounded?',
     'The section above asks whether this business CAN compound, from its most recent year. This '
     + 'one asks whether it HAS, across every year of accounts on file. They are different '
     + 'questions: one good year is what every cyclical business shows at the top of its cycle, so '
@@ -642,9 +652,10 @@ function resultHistoryTable(earnings) {
     trackRecordPanel(longHorizon, compounding)
       || empty('No accounts on file',
         'The app has not read this company’s annual accounts yet. It works through the list a few '
-        + 'stocks a day, so this should fill in over the coming weeks.')));
+        + 'stocks a day, so this should fill in over the coming weeks.')),
+    longHorizon && longHorizon.trackRecord && longHorizon.trackRecord.verdict));
 
-  nodes.push(section('What has management done with your money?',
+  nodes.push(withSummary(section('What has management done with your money?',
     'Profits a company keeps are yours, reinvested on your behalf. This is the record of what was '
     + 'done with them: whether new shares were issued and watered down your stake, how much was '
     + 'paid out versus kept, whether it kept building, whether growth was funded with borrowing, '
@@ -653,19 +664,23 @@ function resultHistoryTable(earnings) {
     capitalAllocationPanel(longHorizon)
       || empty('No accounts on file',
         'This needs at least five years of annual accounts, which have not been read for this '
-        + 'company yet.')));
+        + 'company yet.')),
+    longHorizon && longHorizon.capitalAllocation && longHorizon.capitalAllocation.verdict));
 
-  nodes.push(section('How it scores across seven dimensions',
+  nodes.push(withCount(section('How it scores across seven dimensions',
     'The screener’s breakdown. A lopsided shape means the overall score rests on just a few dimensions. Anything the app could not measure for this stock is left out entirely rather than scored as zero — which would understate it.',
     dimensionRadar(score),
-    factors(score)));
+    factors(score)),
+    // Dimensions actually MEASURED for this stock, out of seven. An unmeasured dimension is left
+    // out of the shape rather than drawn as zero, so the count must say so too (SPEC 21 rule 7).
+    measuredDimensions));
 
-  nodes.push(section('Has the score been holding up?',
+  nodes.push(withCount(section('Has the score been holding up?',
     'The composite score over the last year. A steady decline is thesis drift — the app’s reasons for liking the stock weakening, which often shows before the price reacts.',
-    scoreTrend(trend)));
+    scoreTrend(trend)), (trend || []).length));
 
   if (recs && recs.length) {
-    nodes.push(section('Times the app recommended this stock',
+    nodes.push(withCount(section('Times the app recommended this stock',
       'Every past recommendation, with the score and price at the time. Useful for checking whether the app has been consistently right or consistently early on this one.',
       table([
         { key: 'issuedDate', label: 'Date', render: (r) => shortDate(r.issuedDate) },
@@ -675,12 +690,14 @@ function resultHistoryTable(earnings) {
         { key: 'verdict', label: 'Verdict', render: (r) => badge(r.verdict) },
         { key: 'issuedPrice', label: 'Price Then', align: 'r', render: (r) => inrExact(r.issuedPrice, true) },
         { key: 'targetPrice', label: 'Target', align: 'r', render: (r) => (missing(r.targetPrice) ? unmeasured('This engine sets no target') : inrExact(r.targetPrice, true)) },
-      ], recs, { sortKey: 'issuedDate' })));
+      ], recs, { sortKey: 'issuedDate' })), recs.length));
   }
 
-  nodes.push(section('What have the brokerages said, and were they right?',
+  nodes.push(withCount(section('What have the brokerages said, and were they right?',
     'Price targets published by brokerages, with what the share price actually did afterwards. A target is one firm’s opinion on a one-year view — it is recorded here so it can be checked, and it changes nothing in this app’s own scoring.',
-    analystPanel(analyst)));
+    // Firms with a LIVE target, not notes on file: one house revising three times is one
+    // opinion (B-041), and a stale target is not somebody's current view.
+    analystPanel(analyst)), (analyst && analyst.live && analyst.live.houses) || 0));
 
   nodes.push(section('Dig deeper',
     'Fresh research pulled on demand from NSE filings and news. Each button fetches live data, so they run only when you ask.',

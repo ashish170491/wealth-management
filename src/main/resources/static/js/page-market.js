@@ -13,7 +13,7 @@
 import { get, getList } from './api.js';
 import { initChrome, registerRefresh } from './nav.js';
 import { inr, inrExact, pct, num, humanLabel, displaySymbol, stockHref, missing, sign, dateTimeIst, shortDate } from './format.js';
-import { el, section, kpi, card, empty, skeleton, mount, badge, table, alert, unmeasured, scoreBar } from './ui.js';
+import { el, section, kpi, card, empty, skeleton, mount, badge, table, alert, unmeasured, scoreBar, withCount, withSummary} from './ui.js';
 import { barChart } from './charts.js';
 
 const view = document.getElementById('view');
@@ -96,14 +96,22 @@ async function boot() {
 
   const nodes = [];
 
-  nodes.push(section('Where the big money went',
+  nodes.push(withSummary(section('Where the big money went',
     'FII means foreign institutional investors, DII means Indian ones (mutual funds, insurers). These are the largest buyers and sellers in the market, so sustained flows in one direction tend to move prices. Figures are in crore — one crore is ten million rupees.',
-    fiiDiiPanel(fii)));
+    fiiDiiPanel(fii)),
+    // Who was net buying - the one thing this panel gets opened to find out.
+    fii && fii.fiiNet != null && fii.diiNet != null
+      ? (fii.fiiNet >= 0 && fii.diiNet >= 0 ? 'Both buying'
+        : fii.fiiNet < 0 && fii.diiNet < 0 ? 'Both selling'
+          : fii.fiiNet >= 0 ? 'Foreign buying' : 'Indian buying')
+      : null,
+    { type: fii && fii.fiiNet != null && fii.diiNet != null
+      ? (fii.fiiNet + fii.diiNet >= 0 ? 'success' : 'danger') : undefined }));
 
 
-  nodes.push(section('Stocks on the watchlist',
+  nodes.push(withCount(section('Stocks on the watchlist',
     'Stocks you are tracking as possible buys, with the date you added each, how it has done since, and whether now is still a sensible time to buy. Quality is the business score from the screening; timing is the chart. The full list, with add and remove, is on the Watchlist page.',
-    watchlistPanel(watchlist)));
+    watchlistPanel(watchlist)), (watchlist || []).length));
 
   mount(view, nodes);
 }
