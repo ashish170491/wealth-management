@@ -364,6 +364,33 @@ public class HoldingsEntity {
     @Transient
     private String nextResultText;
 
+    /**
+     * What today's move is worth on this position, in rupees - {@code dayChange} times quantity.
+     *
+     * <p>{@link #getDayChange()} is <b>per share</b> ({@code lastPrice - closePrice}, written in
+     * {@code HoldingsAnalysisService}), and that is correct for {@link #getDayChangePercent()}
+     * because the ratio is the same either way. It is <b>not</b> money, and summing it across a
+     * portfolio produces a number in no unit at all - which is exactly what the landing page did:
+     * on 2026-09-17 the Overview's "Today's Change" tile read <b>-Rs 52.23 (-0.02%)</b> on a book
+     * that had actually gained <b>+Rs 4,607.90 (+1.90%)</b>. Wrong sign, 89x the magnitude, because
+     * per-share deltas are dominated by share price rather than position size and roughly cancel
+     * across thirty names: CPPLUS (1 share at Rs 3,375) contributed -Rs 172 while LCCPROJECT
+     * (102 shares, +Rs 2,728 of real money) contributed +Rs 26.75. B-120, and the same family as
+     * B-047 and B-113 - a figure quoted on a scale it was not measured on.
+     *
+     * <p>Derived here rather than at each call site so the portfolio total and the per-row figure
+     * cannot drift apart (Gotcha 85), and stored nowhere: it is two columns and a multiplication.
+     *
+     * <p><b>Null, never zero, when there is no previous close.</b> A holding listed today, or one
+     * whose close has not synced, has an <i>unknown</i> move - and a zero would silently drag a
+     * portfolio total toward nothing while looking measured (SPEC 21 rule 7).
+     */
+    @Transient
+    public Double getDayChangeValue() {
+        if (closePrice <= 0 || currentPrice <= 0) return null;
+        return (currentPrice - closePrice) * quantity;
+    }
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

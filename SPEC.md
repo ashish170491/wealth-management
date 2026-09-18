@@ -1236,7 +1236,7 @@ Reverses the §19 non-goal recorded until 2026-08-24 (see §25.7 for the decisio
 
 | Screen | Covers |
 |---|---|
-| `index.html` | Triage — portfolio KPIs, value-over-time, "what needs your attention today" |
+| `index.html` | Triage — portfolio KPIs, value-over-time, "what needs your attention today", concentration + track record, biggest moves. **Two numbers answer two different questions and the page must say so** (2026-09-18): gain-on-cost heads "Where you stand" while the §46 time-weighted return heads "Is your money growing?", and where they diverge by more than 5 pp a callout names the divergence in both directions rather than reconciling them (Gotcha 105). **Both benchmarks are drawn, never one** — rendering only the Nifty 50 turned an 8.2 pp shortfall against the Midcap 150 into a 3.8 pp win on a mid/small-tilted book. The §46 `caveats[]` and the track record's overlap caveat are **mandatory**, not optional: a row count of overlapping picks is not a sample size (§38.9, Gotcha 92) |
 | `holdings.html` | Holdings table + sparklines, sector/market-cap mix, HHI, drift, thesis decay, conviction, dividends, accumulation, tax lots |
 | `screener.html` | The business first (2026-09-09, B-098): financial quality, ROCE (ROA for a lender), debt/equity, profit growth YoY, promoter holding + change + pledge, valuation (reverse-DCF verdict, P/E vs sector), red flags (forensic, HIGH_RISK, pledge > 20%), market cap in crore, sector from NSE's index classification; plus composite (with grade, rank and the 30-day change *vs the universe shift* folded under it), the compounding gate, the timing verdict and entry ladder, under-radar and buyability. The seven dimension bars are opt-in ("Show the seven scores"). Filters: shortlist (compounder ∧ fair entry ∧ not owned), sector, size, grade, owned, compounding, risk (hide red flags / not yet checked), free-text search. Headline panel is "Compounders at a fair price" with its funnel counts |
 | `discovery.html` | Early-stage view: under-the-radar candidates, buyability, insider activity, universe expansion funnel, recent-listing watch (§12.9, §12.10, §28, §30) |
@@ -1246,6 +1246,26 @@ Reverses the §19 non-goal recorded until 2026-08-24 (see §25.7 for the decisio
 | `watchlist.html` | Watchlist tracking (§37): add/remove, date added, return since added, vs Nifty, sector, quality + timing, 90-day trend, "still a good time to buy?" verdict, removed-stocks history |
 | `stock.html?symbol=` | Per-stock drill-down: price/score history, 7-dimension radar, research endpoints |
 | `reports.html` | In-page previews of the actual report HTML (see §27.6) |
+
+### 27.2a A default is not a finding (2026-09-18, B-121)
+
+The attention list on `index.html` is the app's action surface, and what it raises is a claim that
+something needs looking at. **A value the app seeded on the investor's behalf may not produce one.**
+
+Allocation targets are the case that proved it: a profile seeded at first boot put *ten* permanent
+drift warnings on the landing page — half the entire list — against weights the investor had never
+seen, including an `OTHER` bucket with a 15% target that can never be satisfied now that every
+holding resolves to a real sector (Gotcha 110). Alerts that fire daily and can never clear train the
+reader to skip the section on the day it matters (the §50 dedup lesson, one surface up).
+
+`portfolio_profile.targets_stated` records whether the investor set the targets themselves, the same
+way `holding_conviction.thesis_stated` (B-097) and `horizon_stated` (B-057) do for a thesis and a
+horizon. **Null means unknown and is never read as stated.** While targets are unstated the list
+raises one `INFO` row naming how many buckets breach and what would make the comparison meaningful;
+the drift table itself is untouched and still renders in full on `holdings.html`.
+
+The general rule for any new attention source: if the input can be a default, the item must either
+carry the provenance or not be raised. Reporting the gap in one row is not the same as discarding it.
 
 ### 27.3 Technical constraints (binding)
 

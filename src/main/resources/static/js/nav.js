@@ -116,6 +116,22 @@ export function registerRefresh(fn) {
   reloadFn = typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * The freshness stamps this page already fetched, for a page that needs to DATE its own figures.
+ *
+ * Overview renders "Today's Change" and "Today's biggest moves" from the holdings table, and at
+ * 09:13 on a weekday those come from yesterday's 15:18 sync - the word "today" naming data that
+ * is not today's (B-119's family: a figure quoted on a scale it was not measured on). Deriving
+ * the label from `holdingsSynced` fixes that without a fifth request, and without a second
+ * reader of health that could disagree with the strip about what the app last did.
+ *
+ * Null before `initChrome()` resolves, or when health could not be read - callers must degrade
+ * to a wording that claims no date rather than assuming today.
+ */
+export function currentFreshness() {
+  return (lastHealth && lastHealth.freshness) || null;
+}
+
 function currentPage() {
   const file = window.location.pathname.split('/').pop();
   return !file || file === '' ? 'index.html' : file;

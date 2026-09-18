@@ -60,6 +60,15 @@ public final class AllocationDto {
             int holdingsCount,
             List<DriftBucket> buckets,
             double unclassifiedWeightPercent,
-            List<String> unclassifiedSymbols
+            List<String> unclassifiedSymbols,
+            /**
+             * True when the investor set these targets themselves; false when they are the ones
+             * seeded at first boot, or when the profile predates the flag and cannot say.
+             *
+             * <p>Readers must not raise a finding against unstated targets. A default is not a
+             * statement (Gotcha 68), and treating one as a statement put ten permanent warnings
+             * on the landing page against weights nobody chose.
+             */
+            boolean targetsStated
     ) {}
 }

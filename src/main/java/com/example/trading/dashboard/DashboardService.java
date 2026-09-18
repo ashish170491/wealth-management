@@ -370,7 +370,16 @@ public class DashboardService {
         double invested = active.stream().mapToDouble(HoldingsEntity::getInvestedValue).sum();
         double value = active.stream().mapToDouble(HoldingsEntity::getCurrentValue).sum();
         double pnl = active.stream().mapToDouble(HoldingsEntity::getPnl).sum();
-        double dayChange = active.stream().mapToDouble(HoldingsEntity::getDayChange).sum();
+
+        // getDayChangeValue(), NOT getDayChange(): the stored column is per share, so summing it
+        // across a portfolio produces a number in no unit at all. It read -Rs 52.23 against a real
+        // +Rs 4,607.90 on 2026-09-17 - wrong sign, 89x the magnitude (B-120). A holding with no
+        // previous close returns null and is left OUT of the sum rather than contributing zero.
+        double dayChange = active.stream()
+                .map(HoldingsEntity::getDayChangeValue)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .sum();
 
         long winners = active.stream().filter(h -> h.getPnl() > 0).count();
         long losers = active.stream().filter(h -> h.getPnl() < 0).count();
@@ -430,7 +439,9 @@ public class DashboardService {
      * Merges the four "something is off" sources into one triage list, worst first, so the
      * landing page answers "is anything wrong?" without the user visiting four screens.
      */
-    private List<DashboardDto.AttentionItem> attention(
+    // Package-private and static so the composition rules can be pinned directly. It reads only
+    // its arguments, and what it does NOT raise is as load-bearing as what it does (B-121).
+    static List<DashboardDto.AttentionItem> attention(
             List<HoldingsEntity> active,
             List<HoldingsDecayService.DecayAlert> decay,
             AllocationDto.DriftResponse drift,
@@ -471,18 +482,47 @@ public class DashboardService {
         }
 
         if (drift != null && drift.buckets() != null) {
-            for (AllocationDto.DriftBucket b : drift.buckets()) {
-                if (!AllocationService.ALERT_OVER_TOLERANCE.equals(b.alertLevel())) {
-                    continue;
+            long over = drift.buckets().stream()
+                    .filter(b -> AllocationService.ALERT_OVER_TOLERANCE.equals(b.alertLevel()))
+                    .count();
+
+            if (!drift.targetsStated()) {
+                // A default is not a statement (Gotcha 68). These targets were seeded, never
+                // chosen, so every bucket breaches and TEN warnings landed here every day - half
+                // the attention list, against weights the investor has never seen. Alerts that
+                // fire daily and can never clear are what train a reader to skip the section
+                // that matters (Gotcha 132), and this is the app's main action surface.
+                //
+                // The information is not discarded: one row, lowest severity, saying exactly
+                // what is unknown and what would make it meaningful. The drift table itself is
+                // untouched and still renders in full on My Portfolio.
+                if (over > 0) {
+                    items.add(new DashboardDto.AttentionItem(
+                            "ALLOCATION_TARGETS_UNSET",
+                            "INFO",
+                            null,
+                            "Your allocation targets have never been set",
+                            String.format("%d of your %d allocation buckets sit outside tolerance, but against "
+                                    + "the targets seeded when the app first started - not ones you chose. Until "
+                                    + "you set your own, this comparison says nothing about your portfolio. "
+                                    + "Set them on My Portfolio.",
+                                    over, drift.buckets().size()),
+                            null));
                 }
-                items.add(new DashboardDto.AttentionItem(
-                        "ALLOCATION_DRIFT",
-                        "WARNING",
-                        null,
-                        "Allocation drift: " + b.bucketKey(),
-                        String.format("%s is %.1f%% of your portfolio against a %.1f%% target (%+.1f pp).",
-                                b.bucketKey(), b.actualWeight(), b.targetWeight(), b.driftPp()),
-                        null));
+            } else {
+                for (AllocationDto.DriftBucket b : drift.buckets()) {
+                    if (!AllocationService.ALERT_OVER_TOLERANCE.equals(b.alertLevel())) {
+                        continue;
+                    }
+                    items.add(new DashboardDto.AttentionItem(
+                            "ALLOCATION_DRIFT",
+                            "WARNING",
+                            null,
+                            "Allocation drift: " + b.bucketKey(),
+                            String.format("%s is %.1f%% of your portfolio against a %.1f%% target (%+.1f pp).",
+                                    b.bucketKey(), b.actualWeight(), b.targetWeight(), b.driftPp()),
+                            null));
+                }
             }
         }
 

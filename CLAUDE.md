@@ -1211,6 +1211,72 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     transition**, because a company changing figures it already published is news, while a row
     already known to be revised is not news again every run.
 
+133. **A per-share delta is not money, and summing thirty of them is a number in no unit at all**
+    (B-120, SPEC §27.2). The Overview's "Today's Change" tile read **-Rs 52.23 (-0.02%)** on a day the
+    portfolio had gained **+Rs 4,607.90 (+1.90%)** - wrong sign, 89x the magnitude - because
+    `holdings.day_change` is `lastPrice - closePrice`, **per share**, and `portfolioKpis` summed it
+    and divided by portfolio value. It is the right field for `dayChangePercent` (a ratio is the same
+    per share or per position) and the wrong one for rupees. Two things made it invisible for months.
+    Per-share deltas are dominated by **share price rather than position size** and roughly cancel
+    across thirty names, so the tile read about zero almost every day - which means it could show
+    neither a good day nor a bad one: a 1-share CPPLUS position contributed **-Rs 172** while 102
+    shares of LCCPROJECT, **+Rs 2,728** of real money, contributed **+Rs 26.75**. And the percentage
+    beside it was independently correct, so the pair looked consistent. `getDayChangeValue()` is now a
+    derived `@Transient` on the entity - **one definition, read by both the portfolio total and the
+    per-row note**, so the tile and the bar chart under it cannot drift (Gotcha 85) - and it returns
+    **null, not zero**, when there is no previous close, because an unknown move summed as zero drags
+    a total toward nothing while looking measured. Same family as B-047 (a quarter filed as a year),
+    B-060 (an RSI whose window could not reach its period) and B-113 (two years against ten): a figure
+    quoted on a scale it was not measured on. **Before summing a stored field across a portfolio, ask
+    what one row of it is denominated in.**
+
+134. **A default is not a finding, and the landing page is where that costs most** (B-121, SPEC §27.2a).
+    Gotcha 68's rule - a default is not a statement - applied one level up, to what the app is willing
+    to *raise an alarm about*. The attention list is the action surface, and **10 of its 20 items were
+    allocation-drift warnings against a profile named "Default Portfolio"** that the investor had never
+    opened: 20% IT against 0.43% held, 25% Banking against 3.77%, every bucket breaching every day and
+    none able to clear. One of them, `OTHER` at a 15% target, was **unsatisfiable by construction** -
+    a placeholder given an allocation goal (Gotcha 110), whose actual weight is 0.0% now that
+    `SectorMapping.resolve` classifies every holding. Ten alerts that fire daily and can never clear
+    are what train a reader to skip the section on the day it matters (Gotcha 132, on the most-read
+    screen). `portfolio_profile.targets_stated` is the `thesis_stated` / `horizon_stated` pattern for
+    allocation: set by the investor's own `PUT /api/portfolio/profile` write, never by the seeder, and
+    **null means unknown, never stated**. Unstated targets raise **one INFO row** saying how many
+    buckets breach and what would make the comparison mean anything - reported, not discarded - while
+    the drift table on My Portfolio renders unchanged. Two more findings from the same load, both filed
+    rather than fixed: **all 20 items were severity `WARNING`**, so `severityRank` sorted a constant
+    while the copy promised "most urgent first" (B-121); and the list draws from four sources that do
+    **not** include forensic flags or financial quality, so a holding reading `CASH_CONVERSION:HIGH`
+    and `HIGH_RISK` with the composite pinned at the 54 cap appears nowhere on it (B-124) - the one
+    signal that ships *armed* (Gotcha 42) is absent from the surface it was armed for.
+
+135. **A row count is not a sample size, and the landing page is the last place to forget it**
+    (B-122). The Overview's track-record panel printed `from 4,979 picks`, hit rate 55.5%, excess
+    +3.21%, IC 0.114 - just over the conventional 0.10 line - with no caveat, while the app's **own**
+    recorded walk-forward review for that same horizon reads `independentPeriods: 1`. The gate was
+    `MIN_SAMPLE_FOR_DISPLAY = 10`, a row count, which is exactly the quantity Gotcha 92 says never to
+    read as a sample size; the panel's own comment warns that "a hit rate from 3 picks looks exactly as
+    authoritative as one from 300" and then enforces the row count. The figures stay on screen with a
+    caveat naming the overlap - **they are real, they are merely not yet distinguishable from luck, and
+    saying so is the discipline**; hiding them would teach the opposite lesson. Still open in the same
+    method: `accuracyHeadline()` takes `max(sampleSize)` across **every** `Source`, so `MACRO_EVENT` -
+    whose own javadoc forbids presenting it as a pick (Gotcha 124) - and the deleted `SECTOR_REVERSAL`
+    engine (IC **-0.167** at 90d) are both eligible to headline it as soon as their rows mature.
+
+136. **Two numbers answering two questions must say so, and one benchmark is a framing choice the
+    reader cannot see** (SPEC §27.2). The Overview headlined **+14.4%** gain-on-cost directly above a
+    **-4.7%** time-weighted return - both correct, 19 pp apart, opposite signs, unexplained. That gap
+    *is* the finding (money moved in or out), so it is named in a callout rather than reconciled, which
+    is Gotcha 105's rule reused verbatim. Beside it, the strip drew only the Nifty 50, which fell 8.52%
+    over the window - **+3.81 pp ahead** - while the Nifty Midcap 150 rose 3.47%, putting a mid/small-
+    tilted book **8.18 pp behind**. `excessVsMidcap150Pp` was computed and dropped, so the page showed
+    the benchmark it beat. Both are drawn now. Same pass: `caveats[]` was on the wire and unrendered
+    while the section's prose claimed deposits and withdrawals were removed - **11 of 24 flow days
+    could not be corrected** - and the curve's "Value moved -Rs 11,730" headline is a flow-contaminated
+    figure printed above the four tiles that exist to replace it, now labelled as market value with the
+    money paid in named beside it. **When a payload carries a coverage or caveat field, rendering it is
+    not optional** - it was written because the figure above it is incomplete without it.
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):
