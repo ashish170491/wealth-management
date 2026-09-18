@@ -163,6 +163,13 @@ public final class DataHealth {
         // measurement pass runs every weekday whatever the news did (SPEC 49.6).
         m.put("analystTargets", ScheduleSpec.fixed("analystTargets", "Analyst targets",
                 "AnalystTargetScheduler.captureAndMeasure", 13, 20, false, false));
+        // Quarterly results are captured inside the 14:00 screening from filings it already
+        // fetches, so they have no cron of their own and are checked against the screening's
+        // (SPEC 50.4). Saturday counts, because the 08:00 weekly screening captures them too.
+        // NOT sparse: the capture touches every screened company every run whatever the reporting
+        // calendar is doing, so an old stamp here really does mean the job did not run.
+        m.put("quarterlyResults", ScheduleSpec.fixed("quarterlyResults", "Quarterly results",
+                "MultibaggerScheduler (capture inside the 14:00 screening)", 14, 0, true, false));
         return Map.copyOf(m);
     }
 

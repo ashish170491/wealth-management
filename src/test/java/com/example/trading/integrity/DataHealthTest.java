@@ -222,11 +222,17 @@ class DataHealthTest {
         // The fifth, since 2026-09-12, is the 13:20 analyst target pass (SPEC 49.6). Checked
         // against the annotation rather than against CLAUDE.md: AnalystTargetScheduler carries
         // cron = "0 20 13 * * MON-FRI" as a literal with no property behind it.
-        // If a sixth appears, check the annotation before adding it here - someone may have copied
-        // a time out of a source file again (B-087).
+        // The sixth, since 2026-09-17, is quarterlyResults (SPEC 50.4). It has no cron of its
+        // own at all: the capture runs inside the screening from filings that run already
+        // fetches, so it is checked against the screening's own times. Verified against the
+        // annotation as this comment instructs - MultibaggerScheduler carries
+        // cron = "0 0 14 * * MON-FRI" and cron = "0 0 8 * * SAT" as literals with no property
+        // behind either, which is why multibaggerScores is hard-coded the same way.
+        // If a seventh appears, check the annotation before adding it here - someone may have
+        // copied a time out of a source file again (B-087).
         long hardCoded = DataHealth.SCHEDULE.values().stream()
                 .filter(sp -> sp.cronProperty() == null).count();
-        assertThat(hardCoded).isEqualTo(5);
+        assertThat(hardCoded).isEqualTo(6);
     }
 
     @Test

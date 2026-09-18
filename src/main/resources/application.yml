@@ -631,6 +631,21 @@ portfolio:
     yellow-drift-threshold: 15.0   # score drop ≥ this = UNDER_REVIEW
     red-drift-threshold: 25.0      # score drop ≥ this = BROKEN
 
+  # ===== Quarterly Result Tracking (SPEC 50) =====
+  # What the businesses you own actually reported, kept rather than thrown away. The screening
+  # already fetches these filings for the earnings bonus, so capture costs ZERO extra NSE
+  # requests and needs no scheduler of its own.
+  #
+  # There is deliberately no `actionable` flag here, because there is no bonus to switch on:
+  # this contributes zero points to any score, feeds no verdict and adjusts no weight. Shadow
+  # mode exists for a signal that would otherwise steer the portfolio before it could be judged;
+  # a ledger that steers nothing has nothing to shadow.
+  earnings:
+    capture-during-screening: true  # Persist quarters the screening has already fetched
+    new-result-window-days: 14      # How long a filing stays "new" for the once-only alert
+    max-quarters-per-symbol: 12     # Quarters returned per company by the API (3 years)
+    recent-limit: 200               # Cap on rows from /api/earnings/recent
+
 # ===== Macro & Geopolitical Event Exposure (SPEC 48) =====
 # Which events change the ground a business stands on, and which of your stocks they touch.
 # A risk-pillar reading over quarters. It is not a market-direction call, it never says buy or

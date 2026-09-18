@@ -15,6 +15,7 @@ import {
   inrExact,
   pct,
   num,
+  crore,
   humanLabel,
   displaySymbol,
   missing,
@@ -27,6 +28,7 @@ import {
 import { lineChart, legend, radar, COLORS } from './charts.js';
 import { compoundingPanel } from './compounding.js';
 import { macroExposurePanel } from './macro-cells.js';
+import { resultPanel, resultHistoryRows } from './earnings-cells.js';
 import { trackRecordPanel, capitalAllocationPanel } from './long-horizon.js';
 import {
   statusCell, statusRank, ratingCell, targetCell, excessCell, daysToReachCell, horizonCell,
@@ -492,8 +494,45 @@ async function boot() {
   await initChrome();
 
   const enc = encodeURIComponent(symbol);
+/**
+ * The quarter-by-quarter table under the result panel.
+ *
+ * Every row shows the basis it was filed on. A series that silently mixes consolidated and
+ * standalone figures shows a collapse and a recovery that never happened (Gotcha 73); the read
+ * above refuses to compare across a change, and this is where the reader can see one.
+ */
+function resultHistoryTable(earnings) {
+  const rows = resultHistoryRows(earnings);
+  if (!rows.length) return null;
+  return table([
+    // Sorted on the quarter END, never the label: a string sort of "Q1 FY27" / "Q4 FY26" puts
+    // Q4 FY25 above Q3 FY26 and the newest quarter in the middle.
+    // `value` is the SORT accessor and `render` is the display; giving only the first shows raw
+    // dates where the fiscal label belongs (Gotcha 117's trap, in the other direction).
+    {
+      key: 'quarter',
+      label: 'Quarter',
+      value: (r) => r.quarterEnd || '',
+      render: (r) => r.quarter || shortDate(r.quarterEnd) || unmeasured(),
+    },
+    { key: 'revenue', label: 'Sales', align: 'r', render: (r) => (missing(r.revenue) ? unmeasured() : crore(r.revenue)) },
+    { key: 'profit', label: 'Profit', align: 'r', render: (r) => (missing(r.profit) ? unmeasured() : crore(r.profit)) },
+    { key: 'netMargin', label: 'Margin', align: 'r', render: (r) => (missing(r.netMargin) ? unmeasured() : pct(r.netMargin, { signed: false })) },
+    { key: 'eps', label: 'EPS', align: 'r', render: (r) => (missing(r.eps) ? unmeasured() : num(r.eps, 2)) },
+    { key: 'basis', label: 'Basis', render: (r) => (r.basis ? r.basis : unmeasured('The filing did not state consolidated or standalone')) },
+    {
+      key: 'published',
+      label: 'Published',
+      render: (r) => (r.published
+        ? el('span', { title: r.publishedEstimated ? 'Assumed from the regulatory deadline, not a filed date.' : 'The filing’s own broadcast date.' },
+          shortDate(r.published) + (r.publishedEstimated ? ' (assumed)' : ''))
+        : unmeasured()),
+    },
+  ], rows, { sortKey: 'quarter', sortDir: 'desc', filter: false });
+}
+
   const [holding, series, trend, recs, coreHistory, watch, compounding, longHorizon,
-    macro, analyst] = await Promise.all([
+    macro, analyst, earnings] = await Promise.all([
     get(`/api/trading/holdings/${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
     get(`/api/dashboard/series/holding?symbol=${enc}&days=1095`, { fallback: [] }).then((r) => r.data).catch(() => []),
     getList(`/api/multibagger/trend/${enc}?days=365`).then((r) => r.data).catch(() => []),
@@ -519,6 +558,10 @@ async function boot() {
     // 404 when nothing has been recorded — "no analyst target reached our feeds" and "this stock
     // is not covered" are different facts, and the panel below says which one it is (SPEC 49.8).
     get(`/api/analyst/targets?symbol=${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
+    // DB-only (quarterly_results), verified by hand. Returns a NOT_MEASURED reading rather than
+    // a 404 when nothing has been captured, so "no filed quarter on record here" never renders
+    // as "the company reported badly" (SPEC 50.6).
+    get(`/api/earnings/result?symbol=${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
   ]);
 
   const score = (trend && trend.length) ? trend[trend.length - 1] : null;
@@ -562,6 +605,20 @@ async function boot() {
     + 'measured is shown as such and counts for nothing, either way.',
     compoundingPanel(compounding)
       || empty('Never screened', 'This stock is not in the screening universe, so its accounts have not been read.')));
+
+  nodes.push(section('What did it report last quarter?',
+    'Every three months a company publishes what it actually earned. That is the one regular '
+    + 'event that can confirm or break a long-term view on evidence rather than on the share '
+    + 'price. Four checks are made against the same quarter a year earlier — sales, profit, '
+    + 'margin, and whether the quarter landed where its own recent trend pointed — and the count '
+    + 'of how many could be made is shown, because a check that could not run is not a pass. '
+    + 'A weak quarter is not a reason to sell; it is how you tell a falling business from a '
+    + 'falling price.',
+    resultPanel(earnings)
+      || empty('No result captured',
+        'No filed quarter is on record for this company yet. The app stores these during its '
+        + 'daily screening run, so this fills in once the stock has been screened.'),
+    resultHistoryTable(earnings)));
 
   nodes.push(section('Which recent events matter to this business?',
     'Things that happen outside a company — an interest-rate decision, a tariff, the oil price, '

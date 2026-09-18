@@ -242,6 +242,24 @@ public class NseDataService {
                 QuarterlyResult qr = new QuarterlyResult();
                 qr.setPeriod(getString(f, "qe_Date", "?"));
 
+                // Filing metadata (SPEC §50). These four were always on the index row and were
+                // discarded; without them a stored result cannot say when it became public, on
+                // what basis it was filed, or whether it superseded an earlier one.
+                qr.setQuarterEnd(parseIntegratedDate(getString(f, "qe_Date", null)));
+                String basis = getString(f, "consolidated", null);
+                qr.setConsolidated(basis == null || basis.isBlank()
+                        ? null : "Consolidated".equalsIgnoreCase(basis));
+                String audited = getString(f, "audited", null);
+                qr.setAudited(audited == null || audited.isBlank()
+                        ? null : audited.toLowerCase().contains("audited"));
+                qr.setAvailableFrom(parseBroadcastDate(getString(f, "broadcast_Date", null)));
+                qr.setFilingSeqId(getString(f, "seq_Id", null));
+                String revisedOn = getString(f, "revised_Date", null);
+                String subType = getString(f, "type_Sub", null);
+                qr.setRevised((revisedOn != null && !revisedOn.isBlank())
+                        || (subType != null && subType.toLowerCase().contains("revis")));
+                qr.setRevisionRemark(getString(f, "revision_Remark", null));
+
                 qr.setRevenue(crore(factC(doc, q, "RevenueFromOperations", "Income", "TotalIncome", "RevenueFromOperationsNet")));
                 qr.setProfit(crore(factC(doc, q, "ProfitLossForPeriod", "ProfitLossForThePeriod",
                         "ProfitLossAfterTaxesMinorityInterestAndShareOfProfitLossOfAssociates")));
@@ -764,6 +782,23 @@ public class NseDataService {
         if (s == null || s.isBlank()) return null;
         try { return java.time.LocalDate.parse(s.trim(), INTEGRATED_DATE_FMT); }
         catch (Exception e) { return null; }
+    }
+
+    /**
+     * Parse a filing's {@code broadcast_Date}, which carries a time of day:
+     * {@code "23-Jul-2026 20:30:01"}.
+     *
+     * <p>Kept separate from {@link #parseIntegratedDate} rather than made tolerant, because
+     * {@code qe_Date} never has a time and a parser that silently accepts trailing rubbish is how
+     * a wrong value gets stored looking right. Returns null on anything unrecognised — the caller
+     * then falls back to a conservative estimate, never to today (Gotcha 100).
+     */
+    private java.time.LocalDate parseBroadcastDate(String s) {
+        if (s == null || s.isBlank()) return null;
+        String date = s.trim();
+        int space = date.indexOf(' ');
+        if (space > 0) date = date.substring(0, space);
+        return parseIntegratedDate(date);
     }
 
     /** "31-MAR-2026" → "01-Apr-2025 To 31-Mar-2026". */
@@ -2314,39 +2349,24 @@ public class NseDataService {
         return d;
     }
 
-    private <T> Double projectLinear(List<QuarterlyResult> quarters, java.util.function.Function<QuarterlyResult, Double> accessor) {
-        // x = 0, 1, 2 ... (chronological index), y = value. Fit y = a + b*x, project at x = quarters.size()
-        double sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-        int n = 0;
-        for (int i = 0; i < quarters.size(); i++) {
-            Double y = accessor.apply(quarters.get(i));
-            if (y == null) continue;
-            sumX += i;
-            sumY += y;
-            sumXY += i * y;
-            sumXX += (double) i * i;
-            n++;
-        }
-        if (n < 2) return null;
-        double denom = n * sumXX - sumX * sumX;
-        if (denom == 0) return null;
-        double b = (n * sumXY - sumX * sumY) / denom;
-        double a = (sumY - b * sumX) / n;
-        return a + b * quarters.size();
+    // The projection, the surprise and the threshold table now live in one place —
+    // com.example.trading.earnings.TrendBreak — because the stored quarterly read (SPEC §50)
+    // asks the identical question of the identical figures. Two copies of a rule table are free
+    // to drift into disagreeing in identical words, which is the defect Gotcha 85 exists to
+    // prevent; these three methods delegate so there is only ever one answer.
+
+    private <T> Double projectLinear(List<QuarterlyResult> quarters,
+                                     java.util.function.Function<QuarterlyResult, Double> accessor) {
+        return com.example.trading.earnings.TrendBreak.project(
+                quarters.stream().map(accessor).toList());
     }
 
     private Double surprise(Double actual, Double projected) {
-        if (actual == null || projected == null || Math.abs(projected) < 1e-6) return null;
-        return (actual - projected) / Math.abs(projected) * 100.0;
+        return com.example.trading.earnings.TrendBreak.surprise(actual, projected);
     }
 
     private String classifyTrendBreak(Double surprisePct) {
-        if (surprisePct == null) return "INSUFFICIENT_DATA";
-        if (surprisePct > 30) return "BIG_POSITIVE_BREAK";
-        if (surprisePct > 15) return "POSITIVE_BREAK";
-        if (surprisePct > -15) return "IN_LINE";
-        if (surprisePct > -30) return "NEGATIVE_BREAK";
-        return "BIG_NEGATIVE_BREAK";
+        return com.example.trading.earnings.TrendBreak.classify(surprisePct);
     }
 
     /**
@@ -2962,6 +2982,37 @@ public class NseDataService {
          * either element.
          */
         private Double sharesOutstandingCr;
+
+        // ---- Filing metadata (SPEC §50). Carried off the integrated-filing index row rather
+        // than the XBRL, because that is where NSE publishes it. Before these existed the
+        // figures above were computed on every screening run and thrown away, so nothing could
+        // say when a result became public or on what basis it was filed.
+
+        /** The quarter end as a date, parsed from {@code qe_Date}. */
+        private java.time.LocalDate quarterEnd;
+
+        /** True consolidated, false standalone, null when NSE did not say (Gotcha 73). */
+        private Boolean consolidated;
+
+        /** True when the filing declares itself audited. */
+        private Boolean audited;
+
+        /**
+         * The filing's {@code broadcast_Date} — when these figures became public.
+         *
+         * <p>Not the quarter end: SEBI allows 45 days and companies use them, so filing a result
+         * under its period end leaks up to six weeks of look-ahead in the flattering direction
+         * (Gotcha 100). Null when NSE published no parseable date.
+         */
+        private java.time.LocalDate availableFrom;
+
+        /** NSE's own filing sequence id, so a stored row can be traced back to the filing. */
+        private String filingSeqId;
+
+        /** True when NSE marked this a revision of an earlier filing. */
+        private Boolean revised;
+
+        private String revisionRemark;
     }
 
     /** Earnings trend-break (proxy for analyst surprise) — see {@link #analyzeEarningsTrendBreak}. */
