@@ -27,6 +27,7 @@ import {
 } from './ui.js';
 import { lineChart, legend, barChart, COLORS } from './charts.js';
 import { pp } from './format.js';
+import { analystCoverageStrip } from './analyst-cells.js';
 
 const view = document.getElementById('view');
 
@@ -462,6 +463,22 @@ async function render() {
     // reader nothing about whether today is worth opening.
     biggestMove === null ? null : pct(biggestMove),
     biggestMove === null ? {} : { type: biggestMove >= 0 ? 'success' : 'danger' }));
+
+  // Who else is covering what you own (SPEC 49.15). The Overview has no table to hang the
+  // portfolio's Analysts column on, so the question is answered as three counts and a link
+  // rather than being left off the landing page entirely. Deliberately NOT a second copy of
+  // the full panel: a duplicate of a table one click away is noise on the surface where noise
+  // costs most (B-121, B-134). Built on the same partition as that panel, so the number here
+  // cannot disagree with the number there (B-098).
+  const analyst = analystCoverageStrip(holdingsRes.data || []);
+  if (analyst) {
+    const coveredNow = (holdingsRes.data || []).filter((h) => h.analystHouses > 0).length;
+    nodes.push(withCount(section('Who else is covering what you own',
+      'How many of your holdings have a brokerage price target running on them right now. This '
+      + 'is other people’s opinion, recorded so it can be scored later — it is not this app’s '
+      + 'view and it changes no score here.',
+      analyst), coveredNow));
+  }
 
   mount(view, nodes);
 }

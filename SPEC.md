@@ -4731,6 +4731,132 @@ for. DB-only, page-load safe, no broker call.
 
 ---
 
+### 49.15 Coverage on the research screens (2026-09-18)
+
+§49.14 answered "who else is covering what I own". The same question is worth asking one step
+earlier — **before** you buy — so the Analysts column now runs on the watchlist, the screener and
+discovery, and the Overview carries a compact summary of it.
+
+**Measured before it was built**, because a column that reads empty is worse than no column
+(B-113's rule). Against the live ledger on 2026-09-18 — 6,986 targets, 722 stocks, 33 brokerages:
+
+| Surface | Rows | Live target | Covered, gone quiet | Nothing on file |
+|---|---|---|---|---|
+| Screener | 274 | **213 (78%)** | 40 | 21 |
+| Discovery — *Good Business, Currently Down* | 26 | **23 (88%)** | 3 | 0 |
+| Watchlist | 23 | 9 | 6 | 8 |
+| Overview (holdings) | 30 | 21 | 3 | 6 |
+
+Every surface discriminates, and the watchlist is the one that matters for review: it is the only
+screen carrying a healthy mix of all three states, so it is where a regression in the §49.14
+distinction would show first.
+
+**Coverage runs opposite to our own score, and that is the finding.** By composite band: 61% of
+stocks scoring 80+ carry a live target, against **84% of those below 50**. The desks quote the
+stocks this app rates worst, most often. That is the same fact §49.12 publishes as a −0.32
+correlation between claimed upside and composite, seen from the other side, and it is the reason
+the coverage line must never be read as endorsement: a densely-covered stock is not a better one.
+
+**The Overview gets a strip, not a column.** That page has no table and no filter chips — it is
+KPI tiles, alert cards and charts — so there is nothing to hang a column on. It shows three counts
+and a link. Deliberately *not* a second copy of the §49.14 panel: a duplicate of a table one click
+away is noise on the surface where noise costs most (B-121, B-134). It costs no new request and no
+Java at all, because `/api/trading/holdings` already returns decorated rows.
+
+**The screener's column is behind a toggle, for width and nothing else.** That table is at the
+20-column budget §27.10 sets and B-098 deliberately cut it to. `Show analyst targets` is a
+display-only chip — no `test`, so it never makes the bar report the table as filtered — exactly
+like the existing "show the seven scores". The *row* filter (`Covered / 3+ firms / Nobody quoting`)
+is always available, because narrowing to the stocks nobody quotes is a real screen. The coverage
+line renders only when the column does: a sentence explaining what blanks in a column mean is noise
+when the column is not drawn.
+
+**One partition, four summaries.** `analystCoverageLine`, `analystCoveragePanel` and the new
+`analystCoverageStrip` computed the four groups independently before this change — and B-117 was
+precisely that bug, a summary re-deriving its own grouping beside a renderer that already
+distinguished the states, telling the investor that three *covered* holdings had no target on file.
+They now share `coveragePartition`, so the count on the Overview and the count on My Portfolio
+cannot disagree (B-098), and the rule from B-117 — when a renderer distinguishes N states, a
+summary over the same rows must distinguish the same N — is enforced by there being one place to
+change rather than by review.
+
+The line also takes a **noun**. It said "of N holdings" unconditionally; reused verbatim on the
+screener that is a plain untruth about the reader's own portfolio, and the cheapest possible way to
+lose their trust in the column above it.
+
+**Where the column is deliberately absent.** Discovery's insider, universe and IPO tables, and its
+buyability lane. Those rows are not screening rows and carry no `analyst*` fields, so the column
+would draw "not measured" on every line — spending column budget to say nothing (§27.16,
+Gotcha 120). The two lanes that do carry it are exactly the two already carrying the macro column,
+which is the same restriction for the same reason.
+
+**Wiring.** `DashboardService.putAnalyst` writes the fifteen keys onto the screening row map beside
+`putMacro`, which serves the screener **and** discovery in one change because both read that map
+(B-099). `WatchlistItemView` gains the same fifteen as record components — `analystHouses` an
+`Integer`, never an `int`, because null is "did not look" and 0 is "looked, found none". One bulk
+query per screen: 274 symbols expand to ~1,100 spellings (Gotcha 84). A null `Coverage` writes
+nothing at all, which is what keeps those two states apart on the wire — a failed lookup must never
+render as "no brokerage covers this stock" (§49.7, Gotcha 44). Measured cost on the screener
+endpoint: 0.65–0.89 s before, 0.72–1.65 s after, against `api.js`'s 8 s timeout (B-115's rule).
+
+Contributes **zero points** to any score, on every surface.
+
+---
+
+### 49.16 A target the price has already passed (2026-09-18)
+
+A brokerage target is a claim about where a share price is going. Once the price has been there,
+the claim has been overtaken by events — and averaging it into "the upside to the median target"
+states a number nobody published.
+
+**The ledger already retires a reached target, but only in the direction the call was made.**
+`direction` is decided by `targetPrice >= priceAtCall`, and the measurement pass marks a target
+REACHED when the price touches it *that way*. A target published at or just below the price of the
+day is therefore filed as a **downward** call. When the price then runs **up** past it, the call
+can never resolve: it is not reached, because the price went the other way, and it is not missed
+until its horizon expires up to a year later. It sits in the live set the whole time.
+
+**Measured across the live book: 43 of 459 running targets, every single one overtaken** — 18 Sell,
+21 Hold, 4 Buy. CPPLUS is the clean case: ICICI Securities published ₹3,100 when the stock was
+₹3,126, the stock is now ₹3,825, and blending that level into the median pulled it from ₹4,200 to
+₹3,650 — *below* the price it is measured against, so the column reported an upside of **−4.6%**.
+
+**The rule.** A live target at or below the ledger's stored price leaves the median, the range and
+the implied upside, and is counted in `overtakenTargets` instead. Three things about that are
+deliberate.
+
+**The firm is not dropped.** A house whose target the price has overtaken is still covering the
+stock. Removing it would shrink the firm count and could take a covered stock to zero, which is
+the one claim this ledger can never support (§49.7) — a worse error than the one being fixed.
+
+**The absence is explained, never merely drawn.** Where nothing is left standing the cell reads
+*"price past its target"* rather than a bare firm count; where some targets remain it appends
+*"N passed"*; the panel carries a Passed column. A median that quietly stops appearing on a stock
+that is plainly covered is the shape of the bug, not of the fix (Gotcha 44, B-117).
+
+**A genuine Sell call is the same shape and gets the same treatment.** It keeps its firm — it is a
+real live claim and the track record still scores it, signed the way it was made (§49.9) — but it
+is not an upside, and averaging it into one is the same misstatement. Note this cuts *against* the
+sell-side's own bias rather than with it: the sample is roughly four-fifths Buy (§49.11), so the
+targets this rule removes are disproportionately the bearish ones, and the median it leaves behind
+is the more optimistic figure. It is still the more honest one, because it is a median over claims
+that are still claims.
+
+**Comparison is against the ledger's stored price, not the live one.** That is the same basis the
+upside is measured from and named in (§49.14), so the two cannot disagree. It follows that a target
+the *live* price has passed but the stored price has not will still be counted until the 13:20 pass
+next measures that stock — the ledger measures on its own schedule and says which close it used.
+**Where there is no stored price at all, nothing is dropped**: treating an unknown price as zero
+would call every target passed, which is exactly the null-is-not-zero error this feature exists to
+avoid (§21 rule 7).
+
+**Verified live.** CPPLUS **−4.6% → +9.8%**. Across the screened universe the three coverage states
+are unchanged — 213 live, 40 quiet, 21 nothing on file, nothing lost its classification — while 34
+stocks carry at least one passed target, 13 have had every running target passed, and **no stock
+reports a negative upside any more**. B-127.
+
+---
+
 ## 50. Quarterly Result Tracking ✅ Active (lens, 2026-09-17)
 
 ### 50.1 Why this exists

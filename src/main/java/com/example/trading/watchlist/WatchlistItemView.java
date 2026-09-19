@@ -117,7 +117,44 @@ public record WatchlistItemView(
         String macroExposureStrength,
         java.util.List<String> macroExposureReasons,
         Integer macroExposureEvents,
-        String macroExposureFrom) {
+        String macroExposureFrom,
+
+        /**
+         * Who else is quoting a price target on this stock (SPEC 49.15).
+         *
+         * <p>Field names match what {@code analyst-cells.js} already reads, so this table reuses
+         * the portfolio's renderer verbatim rather than growing a second one - and so the firm
+         * count here can never disagree with the one on My Portfolio (Gotcha 85).
+         *
+         * <p>{@code analystHouses} is an {@code Integer} and not an {@code int} on purpose:
+         * <b>null means the ledger was not read, 0 means it was read and nothing is running.</b>
+         * A primitive would collapse those two, and the second is a real measurement while the
+         * first is the absence of one (SPEC 21 rule 7). Note a 0 here is a fact about what
+         * reaches this app's feeds, never about whether the company is covered (SPEC 49.7).
+         *
+         * <p>Contributes zero points to any score.
+         */
+        Integer analystHouses,
+        java.util.List<String> analystHouseNames,
+        Integer analystOpenTargets,
+        Double analystMedianTarget,
+        Double analystHighestTarget,
+        Double analystLowestTarget,
+        Double analystUpsidePct,
+        /** The price the upside was measured from - the ledger's stored close, not the live one. */
+        Double analystPriceAsStored,
+        LocalDate analystPriceAsOf,
+        Integer analystHousesEver,
+        java.util.List<String> analystHouseNamesEver,
+        Integer analystTargetsEver,
+        LocalDate analystLastCallOn,
+        String analystTargetsFrom,
+        String analystNote,
+        /**
+         * Live targets the share price has already passed (SPEC 49.16). Excluded from the median
+         * and the upside, counted here so the absence of a figure can be explained.
+         */
+        Integer analystOvertaken) {
 
     public record SeriesPoint(LocalDate date, Double close) {}
 }

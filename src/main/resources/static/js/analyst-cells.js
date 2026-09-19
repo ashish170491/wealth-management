@@ -357,10 +357,29 @@ export function analystCoverageCell(row) {
       ? '. Filed under ' + displaySymbol(row.analystTargetsFrom) + '.' : '');
   node.setAttribute('data-no-gloss', '');
 
+  const passed = row.analystOvertaken || 0;
+
   // The level first, then what it implies. A percentage on its own cannot be checked against a
   // broker's note or a chart; the rupee figure is the thing a house actually published and the
   // move is derived from it. Showing only the derived number is the weaker half of the pair.
-  if (missing(row.analystMedianTarget)) return node;
+  if (missing(row.analystMedianTarget)) {
+    // No standing target left. Say WHY rather than drawing a bare firm count, or the reader is
+    // left to guess whether the app failed to find a number or the number has been overtaken -
+    // the same "explain the absence" rule the coverage line exists for (Gotcha 44, SPEC 49.16).
+    if (passed > 0) {
+      const gone = el('span.faint', { style: 'font-size:11.5px' },
+        passed === 1 ? 'price past its target' : 'price past all ' + num(passed) + ' targets');
+      gone.title = 'The share price has already gone past '
+        + (passed === 1 ? 'the target that was running' : 'every target that was running')
+        + ' on this stock, so there is no upside left to quote against what was published. The '
+        + 'firms are still covering it; nobody has published a higher number yet. Measured '
+        + 'against ' + inr(row.analystPriceAsStored, { abbreviate: false })
+        + (row.analystPriceAsOf ? ', the close this ledger last stored on '
+          + shortDate(row.analystPriceAsOf) : '') + '.';
+      return el('div', { style: 'display:flex;flex-direction:column;gap:2px' }, node, gone);
+    }
+    return node;
+  }
 
   let text = inr(row.analystMedianTarget, { abbreviate: false });
   if (!missing(row.analystUpsidePct)) {
@@ -368,6 +387,9 @@ export function analystCoverageCell(row) {
     // digit buys nothing (SPEC 27.10). The panel below the table carries the precise figure.
     text += ' · ' + pct(row.analystUpsidePct, { digits: 0 });
   }
+  // A median drawn from some but not all of the running targets must say so in the cell, not
+  // only in the tooltip: the count beside it is firms, and the two would otherwise disagree.
+  if (passed > 0) text += ' · ' + num(passed) + ' passed';
 
   const line = el('span.faint', { style: 'font-size:11.5px' }, text);
   line.title = targetBasis(row);
@@ -402,7 +424,16 @@ function targetBasis(row) {
         + shortDate(row.analystPriceAsOf) : '')
       + ' — not the price in the column beside it, which is from a different pass.';
 
-  return head + range + basis
+  const passed = row.analystOvertaken || 0;
+  const gone = passed > 0
+    ? ' A further ' + num(passed) + (passed === 1 ? ' target is' : ' targets are')
+      + ' running but the share price has already gone past '
+      + (passed === 1 ? 'it' : 'them') + ', so ' + (passed === 1 ? 'it is' : 'they are')
+      + ' left out of this median — averaging a level the price has passed states an upside '
+      + 'nobody published (SPEC 49.16).'
+    : '';
+
+  return head + range + basis + gone
     + ' A median over one or two calls is not a consensus, and this app endorses none of it.';
 }
 
@@ -458,27 +489,105 @@ export function analystFilterGroup() {
 }
 
 /**
+ * The four groups every summary of this column must distinguish, computed once.
+ *
+ * There are THREE states a row can be in and the arithmetic for them is fiddly enough that
+ * writing it twice is how they get confused. That is not hypothetical: B-117 was exactly this
+ * bug. The panel re-derived its own grouping from a narrower field, folded the two zero states
+ * together, and told the investor that three *covered* holdings had no target on file —
+ * NATIONALUM has ten targets from three firms, none of them still running.
+ *
+ * So the rule from that entry — when a renderer distinguishes N states, a summary over the same
+ * rows must distinguish the same N — is enforced here by there being only one place to change.
+ *
+ *  - `looked`  : the lookup ran. `analystHouses` is a number, including zero.
+ *  - `covered` : a brokerage target is running right now.
+ *  - `quiet`   : covered at some point, nothing live. A finding.
+ *  - `never`   : nothing on file at all. Mostly a fact about this app's feeds (SPEC 49.7).
+ *
+ * Rows outside `looked` are the fourth state — the lookup did not run — and they are deliberately
+ * absent from all three buckets so they can never be counted as an answer.
+ */
+function coveragePartition(rows) {
+  const all = rows || [];
+  const looked = all.filter((r) => r && r.analystHouses !== null && r.analystHouses !== undefined);
+  return {
+    all,
+    looked,
+    covered: looked.filter((r) => r.analystHouses > 0),
+    quiet: looked.filter((r) => !r.analystHouses && (r.analystHousesEver || 0) > 0),
+    never: looked.filter((r) => !r.analystHouses && !(r.analystHousesEver || 0)),
+  };
+}
+
+/**
  * The coverage line that must sit under any table drawing the Analysts column.
  *
- * Without it a column full of "None on file" reads as "the market has no view on what I own",
+ * Without it a column full of "None on file" reads as "the market has no view on these stocks",
  * when what it actually means is that this app's ledger is thin by construction (SPEC 49.7).
  * Same rule as the macro and forensic coverage lines (Gotcha 44).
+ *
+ * `noun` exists because this now runs on four surfaces and only one of them holds holdings. A
+ * line reading "of 274 holdings" under the screener would be a plain untruth about the reader's
+ * own portfolio — the cheapest possible way to lose their trust in the column above it.
  */
-export function analystCoverageLine(rows) {
-  const all = rows || [];
+export function analystCoverageLine(rows, { noun = 'holdings' } = {}) {
+  const { all, covered, quiet, never } = coveragePartition(rows);
   if (!all.length) return null;
-  const looked = all.filter((r) => r.analystHouses !== null && r.analystHouses !== undefined);
-  const covered = looked.filter((r) => r.analystHouses > 0);
-  const quiet = looked.filter((r) => r.analystHouses === 0 && (r.analystHousesEver || 0) > 0);
-  const never = looked.filter((r) => r.analystHouses === 0 && !(r.analystHousesEver || 0));
 
   return el('div.muted', { style: 'font-size:12.5px;margin-top:10px' },
-    covered.length + ' of ' + all.length + ' holdings have a brokerage target still running; '
+    covered.length + ' of ' + all.length + ' ' + noun + ' have a brokerage target still running; '
     + quiet.length + ' have been covered before but have nothing live; '
     + never.length + ' have no target on file at all. '
     + 'That last group is not a finding about those companies: this app records a target only '
     + 'when a note reaches the feeds it reads (SPEC 49.7), so the ledger is thin by construction. '
     + 'None of this changes any score, and a brokerage target is not this app’s opinion.');
+}
+
+/**
+ * The same answer at a glance, for the Overview (SPEC 49.15).
+ *
+ * The landing page has no table to hang a column on, so the question is answered as three counts
+ * and a link rather than being left off the page entirely. It is built on the same partition as
+ * the line and the panel, so the number here and the number on My Portfolio cannot disagree — a
+ * count rendered beside a list must be derived from that list (B-098), and this one is derived
+ * from the same function that produces the list.
+ *
+ * Deliberately NOT a copy of the panel: a second full copy of a table one click away is noise on
+ * the surface where noise costs most (B-121, B-134).
+ */
+// 'My Portfolio' is served from holdings.html, not portfolio.html -- the first draft of this
+// linked to a 404. Caught by rendering the page, not by any checker (Gotcha 41/119).
+export function analystCoverageStrip(rows, { href = 'holdings.html' } = {}) {
+  const { covered, quiet, never, looked } = coveragePartition(rows);
+  if (!looked.length) return null;
+
+  return el('div', {},
+    el('div.grid.kpis', {},
+      kpi({
+        label: 'Covered right now',
+        value: num(covered.length) + ' of ' + num(looked.length),
+        raw: covered.length,
+        tone: 'neutral',
+        sub: 'have a brokerage target still running',
+      }),
+      kpi({
+        label: 'Gone quiet',
+        value: num(quiet.length),
+        raw: quiet.length,
+        tone: 'neutral',
+        sub: 'covered before, nothing live now',
+      }),
+      kpi({
+        label: 'Nothing on file',
+        value: num(never.length),
+        raw: never.length,
+        tone: 'neutral',
+        sub: 'no target has ever reached this app',
+      })),
+    el('div.muted', { style: 'font-size:12.5px;margin-top:10px' },
+      NONE_ON_FILE + ' None of this changes any score. ',
+      el('a', { href }, 'See which firms, and what they are quoting →')));
 }
 
 /**
@@ -489,25 +598,26 @@ export function analystCoverageLine(rows) {
  * spelled out here, with the spread of what they are quoting beside them. Sorted by how many
  * firms, because that is the question being asked.
  */
-export function analystCoveragePanel(rows) {
-  const all = (rows || []).filter((r) => r.analystHouses !== null && r.analystHouses !== undefined);
-  if (!all.length) return null;
-
-  const covered = all.filter((r) => r.analystHouses > 0)
-    .sort((a, b) => b.analystHouses - a.analystHouses);
+export function analystCoveragePanel(rows, { noun = 'Holdings' } = {}) {
   // The two zero states are NOT one group. A stock the desks have stopped quoting has been
   // covered; a stock with nothing on file has not, as far as this app can see. Folding them
   // together makes the second sentence below false about the first group, which is the whole
   // distinction this feature turns on (Gotcha 121). Found by rendering it, not in review.
-  const quiet = all.filter((r) => !r.analystHouses && (r.analystHousesEver || 0) > 0);
-  const never = all.filter((r) => !r.analystHouses && !(r.analystHousesEver || 0));
+  // That grouping now lives in coveragePartition, so the line, the strip and this panel cannot
+  // drift apart again the way they did in B-117.
+  const part = coveragePartition(rows);
+  const all = part.looked;
+  if (!all.length) return null;
+
+  const covered = part.covered.slice().sort((a, b) => b.analystHouses - a.analystHouses);
+  const { quiet, never } = part;
 
   const houses = new Set();
   for (const r of covered) for (const h of (r.analystHouseNames || [])) houses.add(h);
 
   const head = el('div.grid.kpis', {},
     kpi({
-      label: 'Holdings with a live target',
+      label: noun + ' with a live target',
       value: num(covered.length) + ' of ' + num(all.length),
       raw: covered.length,
       tone: 'neutral',
@@ -595,6 +705,16 @@ export function analystCoveragePanel(rows) {
           + ', to the median target. Not from the live price.';
         return node;
       },
+    },
+    {
+      key: 'analystOvertaken',
+      label: 'Passed',
+      align: 'r',
+      render: (r) => (r.analystOvertaken
+        ? el('span.num', { title: 'Targets still running that the share price has already gone '
+            + 'past. They are left out of the median and the range beside them.' },
+        num(r.analystOvertaken))
+        : el('span.muted', {}, '—')),
     },
     {
       key: 'analystLastCallOn',

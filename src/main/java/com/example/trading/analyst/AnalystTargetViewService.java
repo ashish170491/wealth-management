@@ -255,6 +255,9 @@ public class AnalystTargetViewService {
         out.put("houseNamesEver", c.houseNamesEver());
         out.put("lastCallOn", c.lastCallOn() == null ? null : c.lastCallOn().toString());
         out.put("note", c.note());
+        // Same figure, same name, on the stock page too - or the two screens disagree about how
+        // many of a stock's targets are still standing (Gotcha 85).
+        out.put("overtakenTargets", c.overtakenTargets());
         return out;
     }
 
@@ -316,13 +319,23 @@ public class AnalystTargetViewService {
                            Double medianTarget, Double highestTarget, Double lowestTarget,
                            Double priceAsStored, LocalDate priceAsOf, Double impliedUpsidePct,
                            int targetsEver, int housesEver, List<String> houseNamesEver,
-                           LocalDate lastCallOn, String note) {
+                           LocalDate lastCallOn, String note,
+                           /**
+                            * Live targets the share price has already passed (SPEC 49.16).
+                            *
+                            * <p>Excluded from {@code medianTarget}, the range and
+                            * {@code impliedUpsidePct}, and counted here instead so the absence of a
+                            * figure can be explained rather than merely appearing. Without this the
+                            * column would quietly stop quoting a number on a covered stock, which is
+                            * the shape of every bug SPEC 21 rule 7 exists to prevent.
+                            */
+                           int overtakenTargets) {
     }
 
     /** Nothing on file for this stock, stated as such rather than as a row of zeroes. */
     static Coverage noCoverage(String symbol) {
         return new Coverage(null, 0, 0, List.of(), null, null, null, null, null, null,
-                0, 0, List.of(), null, note(List.of(), List.of(), 0));
+                0, 0, List.of(), null, note(List.of(), List.of(), 0), 0);
     }
 
     /**
@@ -404,15 +417,12 @@ public class AnalystTargetViewService {
 
         Set<String> houses = new TreeSet<>();
         Set<String> housesEver = new TreeSet<>();
-        List<Double> targets = new ArrayList<>();
         Double lastPrice = null;
         LocalDate lastPriceOn = null;
         LocalDate lastCallOn = null;
 
-        for (AnalystTargetEntity r : live) {
-            if (r.getBrokerage() != null) houses.add(r.getBrokerage());
-            if (r.getTargetPrice() != null) targets.add(r.getTargetPrice());
-        }
+        // The stored price must be known BEFORE the targets are partitioned, because it is what
+        // decides which of them the share price has already passed.
         for (AnalystTargetEntity r : rows) {
             if (r.getBrokerage() != null) housesEver.add(r.getBrokerage());
             if (r.getIssuedOn() != null && (lastCallOn == null || r.getIssuedOn().isAfter(lastCallOn))) {
@@ -428,6 +438,39 @@ public class AnalystTargetViewService {
             }
         }
 
+        // A target the share price has already passed is not an upside claim any more (SPEC 49.16).
+        //
+        // The measurement pass retires a target the moment the price touches it - but only in the
+        // direction the call was made. `direction` is decided by `targetPrice >= priceAtCall`, so
+        // a target published at or just below the price of the day is filed as a DOWNWARD call,
+        // and when the price then runs UP past it the call never resolves: not reached (the price
+        // went the other way), not missed until its horizon expires a year later. It sits in the
+        // live set dragging the median down.
+        //
+        // Measured across the live book: 43 of 459 running targets, every one of them overtaken.
+        // CPPLUS is the clean case - ICICI Securities published 3,100 when the stock was 3,126,
+        // the stock is now 3,825, and blending that into the median pulled it to 3,650, BELOW the
+        // stored price, so the column reported an "upside" of MINUS 4.6% to a level nobody is
+        // still arguing for.
+        //
+        // These leave the median, the range and the upside, and are counted instead. They are NOT
+        // removed from the firm count: a house whose target the price has overtaken is still
+        // covering the stock, and reporting it as uncovered would be a worse error than the one
+        // being fixed (SPEC 49.7). A genuine Sell call sitting below the price is the same shape
+        // and is handled the same way - it keeps its firm, because it is a real live claim, but
+        // averaging it into an "upside to the median target" states something nobody published.
+        List<Double> targets = new ArrayList<>();
+        int overtaken = 0;
+        for (AnalystTargetEntity r : live) {
+            if (r.getBrokerage() != null) houses.add(r.getBrokerage());
+            if (r.getTargetPrice() == null) continue;
+            if (lastPrice != null && lastPrice > 0 && r.getTargetPrice() <= lastPrice) {
+                overtaken++;
+                continue;
+            }
+            targets.add(r.getTargetPrice());
+        }
+
         Double median = AnalystTrackRecord.median(targets);
         Double upside = (median != null && lastPrice != null && lastPrice > 0)
                 ? (median - lastPrice) / lastPrice * 100.0 : null;
@@ -439,7 +482,7 @@ public class AnalystTargetViewService {
                 targets.stream().min(Double::compareTo).orElse(null),
                 lastPrice, lastPriceOn, upside,
                 rows.size(), housesEver.size(), List.copyOf(housesEver),
-                lastCallOn, note(rows, live, houses.size()));
+                lastCallOn, note(rows, live, houses.size()), overtaken);
     }
 
     // ------------------------------------------------------------------ the overlap
