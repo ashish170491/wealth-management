@@ -96,6 +96,7 @@ import {
 } from './fundamentals-cells.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
+import { themeCol } from './theme-cells.js';
 import {
   analystCoverageCol, analystFilterGroup, analystCoverageLine,
 } from './analyst-cells.js';
@@ -166,6 +167,9 @@ const compoundingCol = () => ({
  * (SPEC 27.16, Gotcha 120).
  */
 const macroCol = () => macroExposureCol();
+// SPEC 51.5. Only the screening-row lanes get this: the insider, universe and IPO tables carry
+// no theme fields, so the column would say "not measured" on every line (Gotcha 120).
+const themeColumn = () => themeCol();
 
 /**
  * Who else is quoting a price target (SPEC 49.15) — on the screening-row lanes only.
@@ -256,6 +260,7 @@ function underRadarSection(rows) {
     { key: 'compositeScore', label: 'Score', align: 'r', render: scoreCell },
     compoundingCol(),
     macroCol(),
+    themeColumn(),
     analystCol(),
     { key: 'underDiscoveryScore', label: 'Under-radar', align: 'r', render: (r) => scoreBar(r.underDiscoveryScore, { width: 54 }) },
     ...businessCols(),
@@ -460,6 +465,7 @@ function contrarianSection(rows) {
     { key: 'rangePosition52w', label: 'How far down', align: 'r', value: (r) => r.rangePosition52w, render: fallCell },
     compoundingCol(),
     macroCol(),
+    themeColumn(),
     analystCol(),
     { key: 'financialQualityVerdict', label: 'Fin. quality', value: finQualityRank, render: finQualityCell },
     { key: 'turnaroundVerdict', label: 'Turning?', value: (r) => (r.turnaroundVerdict === 'TURNAROUND_CANDIDATE' ? 0 : r.turnaroundVerdict ? 1 : 2), render: turnaroundCell },

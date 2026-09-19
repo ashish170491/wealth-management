@@ -661,6 +661,97 @@ null below 50 candles rather than a short-window average masquerading as a 50-da
 "not measured" marker; they fill in at the next 14:00 run. The watchlist was complete immediately
 because it already stored its own support, ATR and 50-day average.
 
+## 12.13 Scoring the universe symbols that have no score ✅ Active (2026-09-19)
+
+`POST /api/multibagger/screen-unscored?limit=&maxMinutes=`
+
+**Why it exists.** The screening universe grows between runs — a holding is added (§13's A0(b)
+pass), the expansion funnel promotes a name (§30), a policy-backed theme brings in thirty-nine
+(§51.4) — and until the next 14:00 run those stocks are *in* the universe and invisible to every
+screen that reads a screening row. Nothing closed that gap on demand: `runFullScreening()` is all
+366+ symbols and half an hour, and `screenSingleStock` is one symbol at a time with no way to ask
+which ones are missing.
+
+### 12.13.1 "Has no score" is four facts, and only one is a gap
+
+This is the whole design. A universe symbol without a row on the latest screening date got there
+by one of four routes, and collapsing any two of them produces a wrong instrument:
+
+| Outcome | Meaning | Response |
+|---|---|---|
+| `scored` | Never measured; now it has been | The real backfill |
+| `tierRejected` | **Measured**, then discarded by the small/micro-cap quality gate | A decision, not a gap |
+| `failed` | The data could not be fetched or parsed | The one bucket worth investigating |
+| `notReached` | The pass hit its `limit` or its deadline first | Re-run to continue |
+
+**The second row is the one that matters.** `runFullScreening()` computes a full score and *then*
+calls `passesTierGate`, discarding the result for a small or micro-cap below its floor — so ~88 of
+the universe are scored and thrown away on every run, leaving no row. A naive "screen everything
+without a row" would re-screen those 88 on every pass, burn paced broker calls reaching the same
+verdict, and report a permanent coverage "gap" that is actually a rule working. That is Gotcha 44
+and Gotcha 68 in one place, and `UnscoredBackfillResult.caveat()` says so in words wherever the
+counts appear.
+
+Note what is **not** cached: a rejected symbol is re-examined on the next pass, deliberately. Its
+composite can rise above the gate next week, and remembering "rejected" would freeze a verdict that
+is supposed to be recomputed. The cost of that choice is ~92 symbols per pass even when nothing is
+new, which is the honest price of not caching a decision that depends on today's price.
+
+### 12.13.2 The same gate, and a percentile that means the same thing
+
+Two properties it would be easy to get wrong, both load-bearing:
+
+- **It applies `passesTierGate`.** `screenSingleStock` does not — it writes whatever it computes —
+  so using that here would publish rows for stocks the 14:00 run deliberately refuses to write, and
+  the screener would carry names the scheduled job excludes. That is B-035's shape one level up
+  (compute-to-decide versus compute-to-publish, Gotcha 50).
+- **Percentile ranks come from the latest full run, not from the batch.** Ranking thirty-nine
+  stocks among themselves yields a percentile in a thirty-nine-stock sample — a different quantity
+  wearing the same name, the units substitution that files a quarter as a year (B-047). Leaving it
+  null is not neutral either: `isCandidate` treats a null percentile as passing the top-slice test,
+  so an unranked row would qualify on its absolute score alone — the relative-gate bypass that once
+  let 69% of the universe pass (B-019). Ranking against the cross-section these rows *join* is the
+  only reading under which the percentile means what it means on every other row.
+
+### 12.13.3 Guards
+
+- **Refused 14:00–15:30 on a trading day**, 409 with the reason in the body: the daily screening and
+  the close-ramp jobs share the one broker rate limit and abort silently at 15:30 if starved
+  (B-014, B-049). Bounded at both ends — outside a trading day there is no contention to protect
+  (Gotcha 97).
+- **Refused without a valid broker token**, rather than persisting a run of exceptions as screening
+  failures (B-032).
+- **Bounded** by `limit` (default 60, capped 500) and `maxMinutes` (default 12, capped 45), and it
+  reports what it did not reach so a truncated pass is visibly truncated.
+- **Persists per row**, never one save at the end: an expensive paced pass must not lose everything
+  to one bad row (B-116).
+- It does **not** touch the day's coverage vector (§38.2) or shadow composites (§38.7). Both are
+  full-run-only, because a partial cross-section is not a smaller measurement of the same thing.
+
+### 12.13.4 First live run (2026-09-19)
+
+Universe 405, already scored 279, examined 126: **34 newly scored, 88 measured-and-excluded, 4
+failed, 0 not reached.** The screener went 279 → 313 rows. Six of the new rows are
+`STRONG_MULTIBAGGER` — SYRMA 98, NEULANDLAB 94, ACMESOLAR 92, RRKABEL 91, AVALON 88, VOLTAMP 87 —
+and they should be read with §40.2's frame in mind: **54% of the composite is price behaviour**, so
+a 98 today is substantially a statement that the stock has been rising, and none of these names has
+a single day of forward return on record.
+
+**The 4 failures are a finding, filed under B-013** (its fourth instance): NSE:HEG, NSE:HFCL,
+NSE:STLTECH and NSE:MTARTECH each return `{status=success, data={}}` from `/quote`, Gotcha 14's
+signature for a tradingsymbol the broker does not recognise, while every other symbol in the same
+pass resolved. All four are real, liquid companies, so the likely cause is a tradingsymbol change
+the app has not picked up — and Gotcha 14 forbids guessing a replacement. They are left in place
+rather than removed: deleting them would make §51.3's gap list say *"add these"* about stocks the
+app cannot reach, which is a worse claim than the cost of four failed lookups a run.
+
+**Note what surfaced them.** All four had been failing at `log.debug` inside the screening loop for
+as long as they have been in the universe — HEG for months. What made them visible was this pass
+reporting its `failed` list as a first-class outcome rather than a silent skip, which is the
+argument §44 makes for the data-health screen, applied to a job.
+
+---
+
 ## 13. Screening Universe ✅ Active
 
 *(Restored 2026-09-05 — this section, §14, §15 and §16's heading were cited throughout the spec but absent from the file; B-076.)*
@@ -679,6 +770,13 @@ Each symbol carries a category label (`LARGE_CAP` / `MIDCAP_100` / `SMALLCAP_250
 **The screener screens two lists, not one** (B-053, CLAUDE.md Gotcha 57). `resolveUniverse()` unions the tier list with `MultibaggerScreenerService.SCREENING_UNIVERSE`, a second hardcoded ~90-name list, and — when `trading.universe.dynamic-expansion.enabled` is on — with symbols promoted by the expansion funnel (§30). Anything asking *"is this stock already covered?"* must union all three via `getScreeningUniverse()`; reading only the tier list is how the funnel came to "discover" a stock with five months of screening history.
 
 **Known coverage gap** (measured 2026-08-26). NSE lists 2,559 securities, 2,291 of them mainboard `EQ`; the curated universe of ~361 names had **never looked at 1,598 of them**. That gap is the reason the Under-Discovery lens (§12.10) found one candidate on its first run — it was pointed at the well-covered part of the market by construction. §30 exists to close it, in observation mode.
+
+**Policy-backed themes extend the universe deliberately** (§51, 2026-09-19). The theme map named
+101 businesses across twelve government-funded themes and this universe reached 50 of them; 34
+confirmed listings were added to `SCREENING_UNIVERSE` in one pass, taking it 438 → 472. The
+remaining 19 sit outside NSE's index constituent lists so their tickers cannot be confirmed here
+and are deliberately **not** added — an unresolvable symbol burns paced lookups every run for ever
+(Gotcha 22). §51.3 is the instrument that keeps that gap visible rather than implied.
 
 **Trading series `BE` / `BZ` are excluded structurally** — trade-to-trade / surveillance names, and Kite tradingsymbols never carry the suffix (B-013). The universe source is `EQUITY_L.csv`, not the Kite instruments dump, because only it carries series and listing date (§30.1, Gotcha 36).
 
@@ -5056,5 +5154,308 @@ trading:
 - **No score.** Should a result-based signal ever be proposed, §38.10's promotion gate is the only
   route, and the coverage row and `available_from` shipped with this section so the evidence for
   it exists before the argument starts.
+
+---
+
+## 51. Policy-Backed Theme Coverage ✅ Active (lens, 2026-09-19)
+
+### 51.1 §20 rule 9 classification
+
+Declared before design, as the rule requires:
+
+| | |
+|---|---|
+| **Pillar (§1)** | **None, deliberately.** This is a **coverage instrument**, not a pillar measurement — it decides which businesses the seven pillars get to run on, and then gets out of the way. §20 rule 9(a) asks which pillar a research feature measures, and the honest answer here is "it makes the others measurable on part of the market they never reached". A theme that *scored* a stock would be the Sector Tailwind dimension again — deleted 2026-09-03 at 30% coverage, sd 4.7, IC −0.009 (§39.2). |
+| **Horizon (b)** | The tag itself is **never judged**, because it makes no claim that can be right or wrong about a price. What becomes measurable is the newly-screened names: they enter `RecommendationTracker` through the ordinary MULTIBAGGER path at ≥ 65 and are scored at 30/90/180/365d like everything else. **No new recommendation source.** |
+| **Coverage row (c)** | Not a `screening_coverage` signal, because it produces no per-stock number to take a cross-section of. Its coverage instrument is **§51.3**, which is stronger: it counts the businesses the app does *not* reach, which a `screening_coverage` row structurally cannot (that vector is computed over the screening run, so a stock outside the universe is invisible to it). `/api/themes` is the readable form. |
+| **Shadow mode (d)** | **Not applicable, and there is nothing to switch on.** Gotcha 30 gates *promotion to a weighted dimension*; this contributes zero points by construction — no bonus field, no actionable flag, no weight. `ThemeSurfaceContractTest.contributesZeroPointsIsCheckable` fails if a field named `actionable`, `bonus`, `weight` or `points` appears on any class in the package, so the claim is checkable rather than asserted in a comment. |
+
+**The one thing this section must never become.** Government money is a **demand signal with a
+political dependency**, never a quality signal. Subsidised industries have destroyed capital in
+India repeatedly, and a stock does not become a compounder because a scheme was announced. If a
+future change makes a theme worth points, it has re-created the engine §39.3 deleted twice.
+
+### 51.2 The map
+
+`src/main/resources/universe-themes.csv` — hand-kept, classpath-only, no feed, no scheduler, no
+rate-limit budget. 106 rows, 101 businesses, 12 themes. Columns: `symbol,theme,policy,role`.
+
+**Why hand-kept.** No feed publishes this. NSE classifies the market into 22 macro buckets and
+none of them is Semiconductors, Water or Data Centres — a chip assembler reads *Capital Goods*
+and sits indistinguishable from a bearing maker. So the file is the feature, in the same sense
+`macro-exposure.csv` is (§48.3): **a claim the investor cannot read is a claim they cannot
+disagree with**, which is why every row names the actual scheme rather than a mood.
+
+**`role` is load-bearing.** "Semiconductor stock" covers a company building an assembly plant and
+a company writing verification software, and those are not the same investment. Where the exposure
+is a minority of revenue the role says so — HCLTECH's assembly joint venture is immaterial to a
+large IT services P&L, and a reader who treats it as a chip play has been misled by a tag.
+
+| Theme | Policy anchor |
+|---|---|
+| `SEMICONDUCTORS` | India Semiconductor Mission, Modified SPECS, Design-Linked Incentive |
+| `ELECTRONICS_EMS` | Large-Scale Electronics Manufacturing PLI, IT Hardware PLI 2.0, SPECS |
+| `AI_DATA_CENTRES` | IndiaAI Mission, IT Hardware PLI 2.0, state data-centre policies |
+| `WATER_INFRASTRUCTURE` | Jal Jeevan Mission, AMRUT 2.0, Namami Gange, PM-KUSUM |
+| `DEFENCE_INDIGENISATION` | Positive indigenisation lists, DAP 2020, iDEX |
+| `RAILWAY_MODERNISATION` | National Rail Plan, Kavach mandate, Vande Bharat / freight corridors |
+| `SOLAR_MANUFACTURING` | PLI High Efficiency Solar PV Modules, ALMM, customs protection |
+| `WIND_ENERGY` | RLMM, ISTS charge waiver, repowering policy |
+| `GREEN_HYDROGEN` | National Green Hydrogen Mission, SIGHT incentives |
+| `POWER_TRANSMISSION` | National Electricity Plan, Green Energy Corridor, RDSS smart metering |
+| `EV_BATTERY` | PM E-DRIVE, Advanced Chemistry Cell battery PLI, Auto PLI |
+| `PHARMA_API` | PLI for Bulk Drugs and Key Starting Materials, Bulk Drug Parks |
+
+**Every theme carries a written caution** in `ThemeCatalog`, naming the specific structural reason
+it could disappoint — and it is rendered **on screen, not in a tooltip**, because the reader most
+likely to act on a theme list is the one least likely to hunt for its caveat (§21). Railways is
+single-customer risk that no diversification *within* the theme reduces; solar rests on a tariff
+wall that is a policy choice; contract manufacturing earns its return on asset turns, not on the
+growth rate.
+
+**A theme token outside the catalogue fails its row, loudly, naming the line.** A typo would
+otherwise create a thirteenth theme holding one stock, which on screen is indistinguishable from a
+real theme nobody has populated yet — B-074's shape. Same fail-loud contract as `MacroExposureMap`.
+
+### 51.3 Coverage — the half a column cannot do
+
+**A theme column alone could not have answered the question that produced this section.** A column
+describes stocks already in the screening universe, so a theme nobody screens renders as an empty
+column and reads like a theme with no companies in it. That is Gotcha 44 in its most flattering
+form. The only honest answer counts members the universe does **not** reach, which means the
+denominator comes from the map rather than from the screening run.
+
+**Three states, never two** (`ThemeCoverage.Status`):
+
+| Status | Meaning |
+|---|---|
+| `SCREENED` | In the screening universe; every pillar runs on it in the ordinary way |
+| `NOT_SCREENED` | A confirmed NSE listing the universe does not reach — **the actionable gap** |
+| `UNVERIFIED` | Outside NSE's index constituent lists, so this app cannot confirm the ticker |
+
+`UNVERIFIED` counts toward **neither** the numerator nor the denominator of `coveragePercent()`.
+Counting it as covered overstates, counting it as a gap understates, and either way a typo would
+move a coverage figure — which is how a hand-kept file quietly becomes untrustworthy. A theme of
+only unconfirmable names has a **null** percentage, never 0%: "nothing we can count" and "we cover
+none of it" are different statements and only the second is a finding (Gotcha 21, Gotcha 68).
+
+**The caveat travels with the figure.** A bare "8 of 8 covered" reads as a fully-researched sector,
+when all it says is that eight names someone typed into a file are in the universe. The map's own
+completeness is unmeasured *and unmeasurable* — there is no published census of "every Indian
+semiconductor stock" to check it against — and `Coverage.caveat()` says so wherever the number
+appears.
+
+### 51.4 Measured at ship (2026-09-19)
+
+The map named **101 businesses**; the universe reached **50**. Of the 51 it did not:
+
+- **39 confirmed listings were added to `SCREENING_UNIVERSE`** — the change that actually alters
+  what gets analysed. The resolved universe was **366** before the change (measured from the
+  screening log, not from reading the lists) and is 405 after; the legacy hardcoded list went 89
+  → 128. At ~2 paced Kite calls each that is ~30 s added to the 14:00 run, comfortably inside the
+  window (Gotcha 23, B-014). **Five of the 39 were found only by running the coverage screen**:
+  they sit in `MICROCAP_WATCHLIST`, which enters the universe only at `TIER_ALL` while
+  `screening-tier` is `LARGE_MID_SMALL`, so a static reading of the tier file counted them as
+  covered. They are named individually rather than by moving the tier, which would pull in ~100
+  micro-caps and their broker cost for a question nobody asked.
+- **19 were left out on purpose.** They sit outside NSE's index lists so this app cannot confirm
+  the ticker, and an unresolvable symbol in the universe burns paced lookups every run for ever
+  while logging nothing anyone reads (Gotcha 22 — six delisted tickers cost 152 lookups per outcome
+  run for months). They remain in the map reading `UNVERIFIED`, which is a standing invitation to
+  confirm and promote them rather than a silent omission.
+
+Measured after the change: **88 of 106 tagged rows screened, 0 gaps, 18 unverifiable** — every
+confirmable business in every theme is now analysed. The themes the question named went from 3
+screened of 8 to **4 of 4 confirmable** (semiconductors, 4 unverifiable), 4 of 11 to **7 of 7**
+(water, 4 unverifiable) and 2 of 10 to **10 of 10** (AI and data centres, none unverifiable).
+
+**The newly added names carry no scores yet.** The screening runs at 14:00 on a weekday, so their
+first composites arrive on the next run; until then they read `SCREENED` on the coverage screen and
+"not in the latest run" in the score column, which is the honest rendering of a stock the universe
+now reaches but has not yet measured (never a zero).
+
+**Two defects were found by running the screen rather than in review** (Gotcha 126p). `verified`
+was tested *before* `screened`, so CENTUM — a stock this app screens and holds a composite for —
+reported as a ticker that could not be confirmed and dropped out of the coverage denominator;
+being screened is strictly better evidence than a sector table naming the symbol, and the order is
+now pinned by a test. And the page assigned `api.js`'s `get()` envelope straight to its data, so
+it rendered its section shells with nothing inside them — HTTP 200 on the page, on every module and
+on both endpoints, the syntax checker clean and the tests green. Only the screenshot caught it
+(Gotcha 41/82/89).
+
+### 51.5 Surfaces
+
+Four field names — `themes`, `themeLabels`, `themePolicies`, `themeRoles` — written by
+`DashboardService.putTheme` (screener **and** discovery, one change, because both read that map —
+B-099), `HoldingsViewDecorator.applyTheme` (every holdings read path) and `WatchlistItemView`. One
+renderer, `static/js/theme-cells.js`, on all of them plus `themes.html`.
+
+**An empty list and a missing one must never render alike.** `themes: []` means the map was
+consulted and names no tracked theme — a finding, drawn as a plain dash, and the answer for most
+of the market. A missing key means the lookup never ran and draws the striped unmeasured marker.
+Collapsing them lets a blind spot read as an all-clear — Gotcha 121 exactly, which is why the
+holdings fields stay nullable `List`s and are never defaulted at the field.
+
+`putTheme` takes **no batch parameter and does no I/O**, unlike its macro and analyst neighbours:
+the map is a static in-memory table. It also deliberately does **not** write a `screened` flag — a
+row in `multibagger_scores` is screened by construction, so the flag would be the constant `true`,
+and a constant on screen is the shape of a measurement nobody took (B-060).
+
+**A theme badge is never coloured by sentiment.** Every theme gets the same neutral chip, because a
+green badge beside "Semiconductors" is a recommendation wearing a colour.
+
+The screener's column sits behind a display-only toggle purely for width (the 20-column budget of
+§27.10); its **row filter is always on**. Discovery draws it on the two screening-row lanes only —
+the insider, universe and IPO tables carry no theme fields, so the column would read "not measured"
+on every line (Gotcha 120).
+
+### 51.6 Endpoints
+
+All DB- or classpath-only, page-load safe (§20 rule 7). `symbol` is always a query parameter.
+
+- `GET /api/themes` — every populated theme with coverage, members and the latest scores of the
+  ones we screen. The screen behind `themes.html`.
+- `GET /api/themes/catalog` — the catalogue with its cautions. No I/O at all.
+- `GET /api/themes/theme?name=` — one theme; **404** when the name is not in the catalogue.
+- `GET /api/themes/stock?symbol=` — one business's tags. **Always 200**: an untagged stock returns
+  `notInTheme: true`, because a 404 would read as "this stock does not exist".
+- `GET /api/themes/gaps` — the confirmed listings the universe does not reach. The action list.
+
+### 51.8 Analyst coverage on the themes ✅ Active (2026-09-19)
+
+The analyst target ledger (§49) was **already market-wide** — it resolves whatever company a broker
+note or headline names, and is not gated on the screening universe — so the question "can we track
+analyst targets for emerging-sector stocks?" turned out to be a **surfacing** question rather than
+an engine one. Measured across all 101 tagged businesses before anything was built: **48 carried a
+live running target and 18 more had targets on file that had since resolved**. The ledger had them;
+the Themes page was not showing them.
+
+So the same `analystCoverageCol()` and `analystCoverageLine()` the portfolio, screener, watchlist
+and discovery already use are drawn on each theme's table (§49.15's pattern — one renderer, nothing
+to drift, Gotcha 85). One bulk query for every screened member across every theme, not one per row:
+each symbol resolves through up to four exchange spellings (Gotcha 84).
+
+**Measured on the first render, over the 88 screened members: 47 have a live target, 19 are covered
+but quiet, 22 have nothing on file, 0 have the key absent.** Those are four distinct states and the
+cell draws four distinct things — a counted zero means the ledger was searched and found nothing
+running, while an absent key means the lookup did not run, and collapsing them would let a failed
+query render as "no brokerage covers this stock" (SPEC §49.7, B-117).
+
+**The wire writer was extracted while doing this.** The fifteen `analyst*` keys had three separate
+copies of their map; a rename that missed one would blank the column on exactly that screen and
+nowhere else (B-099). `AnalystTargetViewService.wireFields(Coverage)` is now the single writer, and
+the class that owns the record owns its wire form.
+
+**Still zero points.** Nothing here contributes to a score, and a broker's target on a policy-backed
+theme stock is exactly the input shape §39.3 deleted twice — recorded to be scored, not followed.
+
+### 51.9 The map ages, and it ages in the flattering direction ✅ Active (2026-09-19)
+
+Nothing in this app can update `universe-themes.csv`. No feed publishes it, no scheduler touches
+it, no code writes it — it is a classpath file, read once at startup, and it is exactly as current
+as the last person to edit it. §51.7 keeps it that way on purpose: a theme tag is a claim about a
+business, and a scraped claim is one nobody made.
+
+**The problem that creates is not that the file gets old. It is the direction in which it fails.**
+Every coverage figure in §51.3 is counted against the map's *own* denominator. So a map that stops
+growing while the market does not keeps reporting **high** coverage of a shrinking list — a steady
+green number, not a falling one. The instrument built to find a blind spot quietly becomes one.
+That is Gotcha 106(b) — a known cause must expire with its fix — applied to a file rather than to
+an exception list.
+
+Three things age it, at very different speeds:
+
+| What changes | How fast | What it does to a row |
+|---|---|---|
+| A company lists into a theme | Weeks | The map cannot hear about it at all |
+| A scheme is extended, closed or re-funded | With the Budget, 1 February | The row keeps its label while its justification stops being true |
+| A tradingsymbol changes | Rarely, silently | B-013's signature — the row points at nothing |
+
+**The stamp.** The file carries two parsed directives in its header:
+
+```
+# REVIEWED: 2026-09-19
+# POLICY-AS-OF: Union Budget 2026-27 and the PLI/mission outlays announced up to September 2026
+```
+
+`UniverseThemes.reviewedOn()` parses the first; an unparseable value returns **null, never today**,
+because a vintage that cannot be read is an unknown vintage and calling it fresh is the one answer
+that removes the reminder the directive exists for (Gotcha 100, Gotcha 130).
+
+**The check.** `DataHealth.themeMapVintage` reports OK inside 180 days and WATCH past it, and is
+**never PROBLEM** — Gotcha 125: nothing schedules this file, so it cannot be late, and amber that
+meant "a job failed" is a false alarm on the one channel whose entire job is to be believed. It is
+rendered on `health.html` with the other checks and as a line on `themes.html` itself, because the
+reader deciding how much to trust a coverage figure is the one looking at the coverage figure.
+
+**Why 180 days.** The cycle that ages the rows is the Union Budget on 1 February: every row cites a
+scheme whose outlay moves with it, so a map reviewed in one September is a budget behind by the
+next. Twice a year straddles that from whichever month the reviewing happens to start.
+
+`/api/dashboard/data-health` also gains a stated limit: it can check the map's *vintage* and can
+never check its *completeness*, because no published census of "every Indian semiconductor stock"
+exists to check it against. §51.10 is the partial answer, and says how partial.
+
+### 51.10 Candidates — the half of the gap that decays ✅ Active (2026-09-19)
+
+`GET /api/themes/candidates?months=36`
+
+§51.3's gap list answers *"the map names a business the universe does not reach."* This answers the
+other half, and it is the half that actually rots: **the market has a business the map has never
+named.** It proposes; a person accepts by editing the file. §51.7's non-goal is intact — no row is
+ever written automatically — and this is the sanctioned shape of the thing that non-goal forbids.
+
+#### 51.10.1 Two better-sounding designs, both measured dead first
+
+Neither of these was rejected on taste. Both were built as queries against the live data and
+returned nothing:
+
+| Design | Measured | Why |
+|---|---|---|
+| Recent listings in a theme's own NSE industries | **0 of 246** listings resolve to any industry | `universe-sectors.csv` is seeded from index **constituent** lists, and a company that listed recently is not a constituent yet. Zero recall on exactly the population the lane was for. |
+| Name tokens over index constituents | semiconductor **0**, hydrogen **0**, battery **0**, water **0**, aerospace **0**, transmission **0** across ~700 names | Indian company names mostly do not say what the company does. |
+
+The industry lane would have been noise even with data: **"Capital Goods" is an industry of 10 of
+the 12 themes**, so the filter separates almost nothing.
+
+What survived is name matching over **recent listing** names, where the full legal name is on file
+and the recall is modest but real — Vikram Solar, Solarworld Energy, Unimech Aerospace, Juniper
+Green Energy are all found this way.
+
+#### 51.10.2 The rules
+
+- **Every candidate carries the evidence**: which word matched, in which company name. A reader who
+  can see *why* a row was proposed rejects it in one glance; a bare list of tickers must be trusted
+  or ignored wholesale.
+- **The hit rate is computed from the run, not asserted.** `Scan.recall()` says "a hint fired on N
+  of M listings". Without it a short list reads as *"nothing new listed"*, when what it almost
+  always means is *"most companies are not named after what they do"* — the flattering silence this
+  whole section exists to prevent.
+- **A theme with no diagnostic name gets no hint, and is named rather than silently empty.**
+  `PHARMA_API` has none: a company called "…Pharma…" is a pharmaceutical company, which says nothing
+  about whether it makes active ingredients. `themesWithoutHint` is on the wire and on screen
+  (Gotcha 44, Gotcha 121).
+- **Hints respect word shape.** Bare `wind` is absent because it matches Windlas; bare `power` and
+  `energy` are absent because they matched 31 and 9 names and separate nothing. This is Gotcha 53
+  in the positive direction — before matching a word, check what innocently starts with it.
+- **The cost of accepting is shown.** A candidate already in the screening universe costs nothing to
+  add; one outside it adds a symbol the app fetches prices for on every run, for ever (Gotcha 22).
+- **The vocabulary carries no instruction to transact.** Adding a business to the map starts the app
+  analysing it and says nothing about owning it, pinned by `ThemeCandidatesTest`.
+
+DB- and classpath-only: the listings the 12:15 capture already wrote plus two classpath files. No
+fetch, no broker call, no scheduler, nothing written, and zero points to any score.
+
+### 51.7 Non-goals
+
+- **No theme scoring, ranking, weighting or bonus** — §51.1, and there is no field to flip.
+- **No "hot theme" or rotation signal.** Which theme is working *this quarter* is a short-term
+  price question (§19), and it is the question Sector Tailwind was deleted for answering badly.
+- **No automatic map extension.** A theme tag is a claim about a business; a scraper would fill the
+  file with claims nobody made. Adding a row is a deliberate act, which is what keeps it arguable.
+  §51.10 proposes candidates with their evidence and never writes one — that division is the point,
+  not a limitation of the implementation.
+- **No scheduler and no fetch.** The map is a classpath file; §3.4 is untouched, and the 28-row
+  schedule is unchanged.
 
 ---

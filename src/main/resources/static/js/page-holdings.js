@@ -42,6 +42,7 @@ import { donut, gauge, barChart, sparkline, lineChart, legend, scatter, COLORS }
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank, COMPOUNDING } from './compounding.js';
 import { macroExposureCol, macroFilterGroup, macroCoverageLine } from './macro-cells.js';
+import { themeCol, themeFilterGroup, themeCoverageLine } from './theme-cells.js';
 import {
   analystCoverageCol, analystFilterGroup, analystCoverageLine, analystCoveragePanel,
 } from './analyst-cells.js';
@@ -655,6 +656,7 @@ function weightVsQualitySection() {
     // "is the weather against it just now". Adjacent, never blended — a headwind says nothing
     // about quality, and a quality verdict says nothing about the weather (SPEC 48.10).
     macroExposureCol(),
+    themeCol(),
     { key: 'recommendation', label: 'Signal', render: signalCell },
     { key: 'pnl', label: 'Gain / Loss', align: 'r', value: (h) => h.pnl, render: pnlCell },
   ], top, { sortKey: 'weight' });
@@ -757,6 +759,7 @@ const HOLDING_FILTERS = chipFilters([
     ],
   },
   macroFilterGroup(),
+  themeFilterGroup,
   analystFilterGroup(),
   resultFilterGroup(),
   {
@@ -1060,6 +1063,7 @@ function renderAnalysis() {
     // Mandatory beneath the Macro column (Gotcha 44): an empty-looking column must never be
     // read as "nothing is wrong" when it may mean "nothing was checked".
     macroCoverageLine(data.holdings || []),
+    themeCoverageLine(data.holdings || [], 'holdings'),
     // Same rule for the Analysts column: a column full of "None on file" must not read as "the
     // market has no view on what I own" when it means this app's ledger is thin (SPEC 49.7).
     analystCoverageLine(data.holdings || []),

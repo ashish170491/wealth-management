@@ -1277,6 +1277,137 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     money paid in named beside it. **When a payload carries a coverage or caveat field, rendering it is
     not optional** - it was written because the figure above it is incomplete without it.
 
+137. **A column can only describe stocks the app already looks at, so it can never answer "are we
+    looking at the right stocks?"** (SPEC §51, 2026-09-19). The question was whether this app tracks
+    the emerging sectors the government is funding — semiconductors, water, AI data centres. The
+    reflex fix is a Theme column, and it would have been worse than nothing: a column is drawn from
+    screening rows, so a theme the universe never reached renders as an *empty column* and reads as
+    a theme with no companies in it. **Gotcha 44 in its most flattering form** — an absence of
+    findings presented as a clean result — and this time pointing at a hole in the universe rather
+    than at an unmeasured field. The honest instrument takes its **denominator from the map, not
+    from the screening run** (`ThemeCoverage`), so it can count the businesses the app does *not*
+    reach. Measured on the first load: the map named 101 businesses and the universe reached **50**; after
+    the pass it reaches every confirmable one (88 of 106 rows, 0 gaps, 18 unconfirmable).
+    That is also why a `screening_coverage` row was the wrong home for this (§38.2) — that vector is
+    computed *over* the screening run, so a stock outside the universe is structurally invisible to
+    it. **Whenever the question is "is our coverage right", check whether the instrument you are
+    reaching for can see outside the set it is computed over.**
+
+    Five things travel with it. **(a) Three states, never two.** A tagged business is screened, or
+    is a confirmed listing the universe misses, or its ticker cannot be confirmed here at all. The
+    third counts toward **neither** half of the coverage percentage: counting it as covered
+    overstates, counting it as a gap understates, and either way a typo in a hand-kept file would
+    move a published figure. A theme of only unconfirmable names has a **null** percentage, never
+    0% (Gotcha 21, 68). **(b) The 19 unconfirmable names were deliberately NOT added to the
+    universe** while the 34 confirmable ones were — an unresolvable symbol burns paced Kite lookups
+    every run for ever while logging nothing anyone reads (Gotcha 22: six delisted tickers cost 152
+    lookups per outcome run for months). They stay in the map reading `UNVERIFIED`, which is a
+    standing invitation rather than a silent omission. **(c) A theme is a demand signal with a
+    political dependency, never a quality signal**, and the caution saying so is rendered *on
+    screen, not in a tooltip* — the reader most likely to act on a theme list is the one least
+    likely to hunt for its caveat. A theme that scored a stock would be Sector Tailwind again (IC
+    −0.009, 30% coverage, deleted 2026-09-03), which is why there is **no actionable flag to flip**
+    and a test fails if a field named `actionable`/`bonus`/`weight`/`points` appears in the package.
+    **(d) An empty list and a missing one must not render alike**: `themes: []` means the map was
+    consulted and names nothing — a dash, and the ordinary answer for most of the market — while an
+    absent key means the lookup never ran and draws the striped marker (Gotcha 121). **(e) A theme
+    badge is never coloured by sentiment**; a green chip beside "Semiconductors" is a recommendation
+    wearing a colour.
+
+    **Two defects surfaced by running it, neither visible to any check.** `verified` was tested
+    *before* `screened`, so CENTUM - a stock this app screens and has a composite for - reported as
+    a ticker that could not be confirmed and left the coverage denominator; **the screening universe
+    resolving a symbol is strictly better evidence than a sector table naming it**, so that order is
+    now pinned. And the page assigned `api.js`'s `get()` envelope (`{data, stale, cachedAt}`)
+    straight to its data, so it rendered its section shells with nothing inside: HTTP 200 on the
+    page, on all 32 modules and on both endpoints, `check_js_syntax.py` clean, 889 tests green, and
+    a blank screen. **Only the screenshot caught it** (Gotcha 41/82/89 - the checker balances
+    brackets but cannot see a shape mismatch, and a folded-section page looks plausible empty).
+
+    Two process notes. `putTheme` deliberately writes **no `screened` flag** onto a screening row:
+    such a row is screened by construction, so the flag would be the constant `true`, and a constant
+    on screen is the shape of a measurement nobody took (B-060). And the "no instruction to
+    transact" test **caught a real defect in its own first draft** — a bare `" sell"` substring
+    failed on *"whoever **sells** the servers"*, a description of what a company does. That is
+    Gotcha 53 exactly (`"unqualified opinion"` contains `"qualified opinion"`): **before matching a
+    negative keyword, check what innocently contains it** — the guard now uses word boundaries.
+
+    **The map ages, and it ages in the flattering direction** (SPEC §51.9/§51.10, 2026-09-19). Asked
+    whether the theme list would evolve, the honest answer is no: no feed publishes it, no
+    scheduler touches it, no code writes it, so it is exactly as current as the last edit. The
+    danger is not that it gets old but *which way it fails* — coverage is counted against the map's
+    **own denominator**, so a map that stops growing while the market does not keeps reporting
+    **high** coverage of a shrinking list. A steady green number, not a falling one; the instrument
+    built to find a blind spot becomes one. That is Gotcha 106(b) applied to a file. The file now
+    carries a parsed `# REVIEWED:` date (unparseable → **null, never today**, Gotcha 100/130) and
+    `DataHealth.themeMapVintage` reports WATCH past 180 days — the Union Budget cycle, since every
+    row cites a scheme whose outlay moves on 1 February — and **never PROBLEM**, because nothing
+    schedules a classpath file (Gotcha 125).
+
+    **Two better-sounding candidate designs were measured dead before one was built.** (a) *Recent
+    listings in a theme's own NSE industries*: **0 of 246** listings resolve to an industry at all,
+    because `universe-sectors.csv` is seeded from index **constituent** lists and a recent listing
+    is not a constituent — zero recall on exactly the population the lane was for, and it would
+    have been noise anyway since **"Capital Goods" is an industry of 10 of the 12 themes**.
+    (b) *Name tokens over constituents*: semiconductor 0, hydrogen 0, battery 0, water 0 across
+    ~700 names. What survived is name matching over **recent listing** names (8 of 246 fire), and
+    the first live run found three solar module makers the map genuinely missed — Vikram Solar,
+    Emmvee Photovoltaic, Solarworld Energy — alongside visible false positives (a cruise operator
+    on "water", IRCTC on "rail") that the **evidence column** lets a reader reject at a glance.
+    Four rules travel with it: the hit rate is **computed from the run, not asserted**, or a short
+    list reads as "nothing new listed" instead of "most companies are not named after what they
+    do"; a theme with no diagnostic name gets **no hint and is named** (`PHARMA_API` — a "...Pharma..."
+    name says nothing about active ingredients); hints respect **word shape** (bare `wind` matches
+    Windlas, bare `power` matched 31 names and separates nothing — Gotcha 53 in the positive
+    direction); and it **proposes, never writes**, so §51.7's no-automatic-extension non-goal is
+    intact rather than contradicted.
+
+138. **"Has no score" is four facts, and re-screening the ones that were already measured is the
+    obvious implementation** (B-013 fourth instance, SPEC §12.13, 2026-09-19). `runFullScreening()`
+    computes a full composite and *then* calls `passesTierGate`, discarding the result for a small
+    or micro-cap below its floor — so **~88 of the universe are scored and thrown away on every
+    run**, leaving no row. A pass that screens "everything without a row" therefore re-screens those
+    88 for ever, burns paced broker calls reaching the same verdict each time, and reports a
+    permanent coverage gap that is actually a rule working. Measured on the first live run: 126
+    symbols had no row — **34 had genuinely never been measured, 88 had been measured and excluded,
+    4 could not be measured at all.** Only the last is a gap in the app. Gotcha 44 and 68 in one
+    place, and the caveat travels with the counts because "34 scored, 88 rejected" otherwise reads
+    as 88 failures.
+
+    Two things that would be easy to get wrong and are load-bearing. **(a) Apply the same tier
+    gate.** `screenSingleStock` does not — it writes whatever it computes — so using it here would
+    publish rows for stocks the 14:00 run deliberately refuses to write, and the screener would
+    carry names the scheduled job excludes. B-035's shape one level up, compute-to-decide versus
+    compute-to-publish (Gotcha 50). **(b) Take the percentile from the full run, not from the
+    batch.** Ranking 39 stocks among themselves gives a percentile in a 39-stock sample — a
+    different quantity wearing the same name (B-047's family). And null is not neutral either:
+    `isCandidate` treats a null percentile as *passing* the top-slice test, so an unranked row would
+    qualify on its absolute score alone, which is exactly the relative-gate bypass that once let 69%
+    of the universe pass (B-019). Ranking against the cross-section the rows **join** is the only
+    reading where the percentile means what it means everywhere else. Note also what is
+    deliberately **not** cached: a rejected symbol is re-examined next pass, because its composite
+    can clear the gate next week and remembering the rejection would freeze a verdict that is
+    supposed to be recomputed.
+
+    **The failed list is the instrument, and it found a four-month-old silence.** HEG, HFCL,
+    STLTECH and MTARTECH each return `{status=success, data={}}` from `/quote` — Gotcha 14's
+    signature — while every other symbol in the same pass resolves. All four are real, liquid
+    companies, so the cause is almost certainly a tradingsymbol change, and **Gotcha 14 forbids
+    guessing a replacement**. They had been failing at `log.debug` inside the screening loop for as
+    long as they had been in the universe; what made them visible was this pass reporting `failed`
+    as a first-class outcome rather than a silent skip. They are left in place rather than deleted,
+    because removing them would make §51.3's gap list say *"add these"* about stocks the app cannot
+    reach — a worse claim than four wasted lookups a run. Note the boundary this exposed: the theme
+    map's `verified` flag asks whether **NSE's index lists name the ticker**, not whether **the
+    broker can price it**, and those are different questions.
+
+    Related, from the same pass: **a question about a feature is sometimes a question about a
+    screen.** "Can we track analyst targets for emerging-sector stocks?" sounded like new capture.
+    The §49 ledger was already market-wide — measured before building anything, **48 of 101 tagged
+    businesses had a live running target and 18 more had resolved ones** — so the work was to draw
+    the column, not to build an engine. **Measure the existing coverage before designing the
+    feature that would supply it.**
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):
@@ -1330,6 +1461,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `POST /api/multibagger/screen` - Run full screening now (manual trigger)
 - `GET /api/multibagger/screen/{symbol}` - Screen a single stock (e.g., `/api/multibagger/screen/NSE:RELIANCE`)
 - `POST /api/multibagger/report` - Send multibagger report email now
+- `POST /api/multibagger/screen-unscored?limit=60&maxMinutes=12` - **Score every universe symbol with no row on the latest screening date** (SPEC §12.13). Closes the gap between "added to the universe" and "has a score" without waiting for 14:00. Writes, so POST; ~2 paced Kite calls per symbol. **Refused 14:00-15:30 on a trading day and without a valid token, 409 with the reason in the body.** Reports **four** outcomes and never collapses them: `scored`, `tierRejected` (measured, then excluded by the small/micro-cap gate - a decision, not a gap), `failed` (the only real gap), `notReached`.
 - `GET /api/multibagger/trend/{symbol}?days=30` - Score trend history for a stock
 - `GET /api/multibagger/history?date=2026-03-15` - Historical screening results for a date
 - `GET /api/multibagger/by-cap?category=SMALL_CAP` - Filter by market cap (SMALL_CAP, MID_CAP, LARGE_CAP)
@@ -1476,6 +1608,15 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `GET /api/earnings/coverage` - how many companies have a captured quarter at all. DB-only.
 - `POST /api/earnings/capture?symbol=NSE:X` - live NSE. **Refused 09:40-10:15 and from 14:00 to the close with a 409 carrying its reason.** Rarely needed: the screening captures these anyway.
 - Dashboard: `Result` column + filter chips + coverage line on the portfolio, a panel and a quarter-by-quarter table on the stock page, all through `static/js/earnings-cells.js`; freshness key `quarterlyResults`, stamped when the **capture** last ran rather than when a company last published.
+
+**Policy-Backed Theme Coverage** (SPEC §51) — which emerging sectors the government is funding, which businesses sit in them, and **how many of those this app has never looked at**. `symbol` is a query parameter. All DB- or classpath-only and page-load safe. Contributes **zero points** to any score, and there is no flag to change that:
+- `GET /api/themes` — every populated theme with its coverage, its members and the latest scores of the ones we screen. The screen behind `themes.html`.
+- `GET /api/themes/catalog` — the twelve themes with their policy anchors and their written cautions. No I/O at all.
+- `GET /api/themes/theme?name=SEMICONDUCTORS` — one theme; **404** when the name is not in the catalogue (an unknown theme and an empty one are different facts).
+- `GET /api/themes/stock?symbol=NSE:KAYNES` — one business's tags with the scheme and role behind each. **Always 200**: an untagged stock returns `notInTheme: true`, because a 404 would read as "this stock does not exist".
+- `GET /api/themes/gaps` — confirmed NSE listings in a funded theme the screening universe does not reach. **The action list** — closing a gap means the app will analyse the business, which is not a reason to buy it.
+- `GET /api/themes/candidates?months=36` — **the other half of the gap list** (SPEC §51.10): businesses the *market* has that the map has never named. Proposes, never writes — each row carries the word that matched the company name so it can be rejected at a glance, and the response carries its **own measured hit rate** so a short list is not read as "nothing new listed". Themes with no diagnostic name (Pharma APIs) are named rather than silently empty. The map also carries a parsed `# REVIEWED:` date, checked on the data-health screen and **never escalated past WATCH** — nothing schedules a classpath file (SPEC §51.9, Gotcha 125).
+- Dashboard: `themes.html` ("Themes" in the nav, loads the two GETs only); a `Theme` column on portfolio / watchlist / discovery and behind a width toggle on the screener, all through `static/js/theme-cells.js`; freshness key `multibaggerScores` (the map itself is a classpath file with no freshness at all).
 
 **Insider Pulse** (SPEC §28):
 - `GET /api/insider/{symbol}` - Disclosure history + rolling 90-day pulse verdict. DB-only, dashboard-safe.
@@ -2161,8 +2302,22 @@ com.example.trading/
 │                                    # Changes NO score and alerts nothing - it reports.
 ├── intelligence/       (13 files)     # Market intelligence, news analysis, direction prediction; intelligence/recommendation/ subpackage for RecommendationTracker, RecommendationOutcomeScheduler, RecommendationAccuracyService, RecommendationAccuracyReportService  (PreTradeAnalysisAgent removed 2026-05-24)
 ├── marketdata/         (2 files)      # Real-time quotes, historical candles
-├── multibagger/        (10 files)     # Multibagger screening, scoring, reports, scheduler, UnderDiscoveryService (SPEC §12.10), ScreenerTimingVerdict (§12.11), SuggestedEntry (§12.12), CompoundingQuality (§41 — pure, never enters the composite)
+├── multibagger/        (11 files)     # Multibagger screening, scoring, reports, scheduler, UnderDiscoveryService (SPEC §12.10), ScreenerTimingVerdict (§12.11), SuggestedEntry (§12.12), CompoundingQuality (§41 — pure, never enters the composite), UnscoredBackfillResult (§12.13 — the four-outcome record behind `screen-unscored`)
 ├── universe/           (6 files)      # Dynamic universe expansion funnel + IPO tracker (SPEC §30)
+│   universe/theme/     (6 files)      # Policy-backed theme coverage (SPEC §51): which emerging
+│                                      # sectors the government funds, who is in them, and how many
+│                                      # of those businesses this app has never looked at. Three
+│                                      # pure classes carry it — ThemeCatalog (the twelve themes and
+│                                      # the written caution each one needs), UniverseThemes (the
+│                                      # classpath map, fail-loud on an unknown theme token) and
+│                                      # ThemeCoverage (the three-state arithmetic, where UNVERIFIED
+│                                      # leaves the percentage entirely). ThemeService is the only
+│                                      # one touching a repo; ThemeController serves /api/themes.
+│                                      # Adds NO scheduler and NO fetch, and contributes ZERO points
+│                                      # to any score — there is no field to flip. ThemeCandidates
+│                                      # (also pure) proposes businesses the map may be missing and
+│                                      # never writes one, and the map carries its own REVIEWED date
+│                                      # because nothing in this app can update it (SPEC §51.9).
 │   universe/ipo/       (9 files)      # IPO pipeline & post-listing tracker (SPEC §45): entity + repository,
 │                                      # IpoFeedParser / IpoStructureRead / IpoLockIn / IpoApplicationMath
 │                                      # (all pure), IpoTrackingService (the only one touching NSE, Kite or
@@ -2251,4 +2406,4 @@ com.example.trading/
 `WatchlistItemView` too, plus a case asserting `Coverage` still exposes every component the wire
 contract is built from - the two renames crossing that boundary, `impliedUpsidePct ->
 analystUpsidePct` and `symbolAnswered -> analystTargetsFrom`, are exactly where a careless edit
-would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). Run with `mvn test` (864 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.
+would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). `UniverseThemesTest` / `ThemeCoverageTest` / `ThemeSurfaceContractTest` (SPEC §51 — the shipped map loads and is never quietly empty; an untagged business returns an EMPTY list and never null, because empty is a finding and null is a gap; an exchange prefix never changes the answer; a business in two themes keeps both; the `verified` flag is asserted against `universe-sectors.csv` symbol by symbol, since it is the only thing keeping an unconfirmed ticker out of a coverage numerator; **an UNVERIFIED member moves the percentage in neither direction** and a theme of only unconfirmable names has a null percentage rather than 0%; the three states always sum to the tagged count over the real file; and no label, caution or status name carries an instruction to transact — that last case caught a real defect in its own first draft, where a bare `" sell"` substring failed on *"whoever **sells** the servers"*, Gotcha 53 exactly). `ThemeCandidatesTest` / `ThemeMapVintageTest` (SPEC §51.9/§51.10 — a business already in the map is never proposed again but is still **counted in the denominator**, or the hit rate silently improves every time the map grows; a bare `wind` must not file Windlas Biotech under wind energy; a theme with no diagnostic name is **named rather than silently empty**; "nothing scanned" and "nothing found" are different sentences (B-054); the recall figure is computed from the run; the vintage check **can never reach PROBLEM** at any age including ten years, and an unreadable review date reports unknown rather than fresh). `UnscoredBackfillResultTest` (SPEC §12.13 — the four outcomes never share a symbol; the caveat says a tier rejection is *a decision, not a gap* and that only the failed list is one; the wording carries no instruction to transact; an empty pass still reports its denominators; and a bounded pass reports what it did not reach, so a run that stopped early cannot look like one that found nothing left to do). Run with `mvn test` (911 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.

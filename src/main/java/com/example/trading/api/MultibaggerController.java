@@ -31,6 +31,82 @@ public class MultibaggerController {
     private final MultibaggerScoreRepository scoreRepository;
     private final MultibaggerConfig config;
     private final com.example.trading.scanner.Nifty200WatchlistService nseWatchlist;
+    private final com.example.trading.scheduler.MarketHoursService marketHoursService;
+    private final com.example.trading.broker.kite.TokenManagementService tokenManagementService;
+
+    /**
+     * From 14:00 the daily screening owns the broker budget, and the 15:05-15:28 jobs abort
+     * silently at 15:30 if they are starved (B-014, B-049). Bounded at both ends: outside a
+     * trading day there is no contention to protect (Gotcha 97).
+     */
+    private static final java.time.LocalTime BROKER_CRUNCH_START = java.time.LocalTime.of(14, 0);
+    private static final java.time.LocalTime BROKER_CRUNCH_END = java.time.LocalTime.of(15, 30);
+
+    /**
+     * Score every universe symbol that has no row on the latest screening date (SPEC 12.13).
+     *
+     * <p>The universe grows between runs - a holding is added, the expansion funnel promotes a
+     * name, a policy-backed theme brings in thirty-nine (SPEC 51.4) - and until the next 14:00 run
+     * those stocks are in the universe and invisible to every screen that reads a screening row.
+     * This closes that gap on demand.
+     *
+     * <p><b>POST, because it writes</b>, and roughly two paced broker calls per symbol. Refused
+     * during the broker crunch with a 409 carrying its reason in the body -
+     * {@code server.error.include-message} is {@code never}, so a thrown status would arrive bare
+     * and a guard whose explanation never reaches the caller is the silent failure it exists to
+     * prevent (B-049).
+     *
+     * <p>Aborts on an invalid token rather than persisting a run of exceptions as scores (B-032).
+     *
+     * @param limit how many symbols to attempt this pass; the rest are reported as not reached
+     */
+    @PostMapping("/screen-unscored")
+    public ResponseEntity<?> screenUnscored(@RequestParam(defaultValue = "60") int limit,
+                                            @RequestParam(defaultValue = "12") int maxMinutes) {
+        java.time.LocalTime now =
+                java.time.ZonedDateTime.now(marketHoursService.getMarketZone()).toLocalTime();
+        if (marketHoursService.isMarketOpen()
+                && !now.isBefore(BROKER_CRUNCH_START) && !now.isAfter(BROKER_CRUNCH_END)) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "status", 409,
+                    "error", "Not now",
+                    "reason", "Between 14:00 and 15:30 the daily screening and the close-ramp jobs "
+                            + "share the one broker rate limit, and they abort silently at 15:30 if "
+                            + "they are starved. Run this before 14:00, after 15:30, or outside a "
+                            + "trading day."));
+        }
+        if (!tokenManagementService.hasValidToken()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "status", 409,
+                    "error", "No broker session",
+                    "reason", "There is no valid Kite token, so every price fetch would fail and "
+                            + "the pass would record a run of exceptions as screening failures. "
+                            + "Restart the app to trigger a login, then retry."));
+        }
+
+        var result = screenerService.screenUnscored(
+                Math.max(1, Math.min(limit, 500)),
+                java.time.Instant.now().plusSeconds(Math.max(1, Math.min(maxMinutes, 45)) * 60L));
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("screeningDate", result.screeningDate());
+        body.put("universeSize", result.universeSize());
+        body.put("alreadyScored", result.alreadyScored());
+        body.put("examined", result.examined());
+        body.put("scoredCount", result.scoredCount());
+        body.put("tierRejectedCount", result.tierRejected().size());
+        body.put("failedCount", result.failed().size());
+        body.put("notReachedCount", result.skipped().size());
+        body.put("scored", result.scored());
+        body.put("tierRejected", result.tierRejected());
+        body.put("failed", result.failed());
+        body.put("notReached", result.skipped());
+        body.put("note", result.note());
+        // Mandatory: without it "39 scored, 86 rejected" reads as 86 failures. They were measured
+        // and then excluded by a rule, which is a decision rather than a gap (Gotcha 44).
+        body.put("caveat", result.caveat());
+        return ResponseEntity.ok(body);
+    }
 
     /**
      * Get latest screening results.

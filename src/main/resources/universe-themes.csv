@@ -1,0 +1,202 @@
+# Policy-backed emerging-theme map (SPEC 51.2) - which listed businesses sit in a theme the
+# Government of India is actively funding, and which scheme puts it there.
+#
+# THIS FILE IS THE FEATURE, in the same sense macro-exposure.csv is. A theme tag is a claim about
+# a business, and the only way an investor can disagree with a claim is to read it. So every row
+# names the scheme, not a mood: "India Semiconductor Mission", not "chips are hot".
+#
+# WHAT A ROW IS NOT. A tag is not a score, a rating, a recommendation or a reason to own anything.
+# Government money is a demand signal, never a quality signal - subsidised industries have
+# destroyed capital in this country before - and the seven pillars (SPEC 1) still decide whether a
+# business is worth owning. A theme decides only whether the app LOOKS at the business at all.
+# Nothing in this file contributes a single point to any score (SPEC 51.1, SPEC 19).
+#
+# ROLE is the part of the chain the company actually occupies, because "semiconductor stock"
+# covers a company building an assembly plant and a company writing verification software, and
+# those are not the same investment. Where the exposure is a minority of revenue the role says so.
+#
+# COLUMNS: symbol,theme,policy,role
+#   symbol - bare NSE trading symbol, no exchange prefix
+#   theme  - one of the themes in ThemeCatalog; a symbol may appear on several rows
+#   policy - the scheme, mission or policy that makes this a policy-backed theme
+#   role   - where in the value chain, in plain words. May contain commas; it is the last field.
+#
+# A symbol this app cannot find in universe-sectors.csv is kept but reported as UNVERIFIED rather
+# than as covered: a ticker nobody has confirmed must never be counted as a stock we track
+# (Gotcha 44). Those are mostly genuine micro-caps outside NSE's index constituent lists.
+#
+# WHEN THIS FILE WAS LAST LOOKED AT. The two directives below are parsed, not decoration. Nothing
+# in this app can update this map: there is no feed, no scheduler and no writer, so it evolves
+# exactly as often as a person edits it. That matters more than it sounds, because a stale map
+# fails in the FLATTERING direction - coverage is counted against this file's own denominator, so
+# a map that stops growing while the market does not keeps reporting high coverage of a shrinking
+# list. The instrument built to find a blind spot would become one. The data-health screen reads
+# REVIEWED and says so once it is more than six months old; it never calls it a problem, because
+# nothing schedules this file and amber that means "a job failed" would be a lie (Gotcha 125).
+#
+# Six months is the budget cycle: the Union Budget lands on 1 February and the PLI tranches and
+# mission outlays move with it, so a map reviewed in one September is a budget behind by the next.
+# What to re-read when the reminder fires: has a scheme been extended, closed or had its outlay
+# revised (a row keeps its label while its justification quietly stops being true); have companies
+# listed into these themes; and do the tickers still resolve.
+#
+# REVIEWED: 2026-09-19
+# POLICY-AS-OF: Union Budget 2026-27 and the PLI/mission outlays announced up to September 2026
+
+# ============================================================================ SEMICONDUCTORS
+# India Semiconductor Mission (ISM) Rs 76000 cr; Modified SPECS; Design-Linked Incentive (DLI).
+# India has no volume fab yet, so almost every listed name here is assembly and test (OSAT/ATMP)
+# or design services - the capital-light end. Read the role column before assuming otherwise.
+CGPOWER,SEMICONDUCTORS,India Semiconductor Mission (ISM),OSAT/ATMP plant at Sanand - a minority of group revenue today
+KAYNES,SEMICONDUCTORS,India Semiconductor Mission (ISM),OSAT/ATMP plant at Sanand via Kaynes Semicon
+HCLTECH,SEMICONDUCTORS,India Semiconductor Mission (ISM),OSAT joint venture - immaterial to a large IT services P&L
+TATAELXSI,SEMICONDUCTORS,Design-Linked Incentive (DLI),Chip and embedded design services
+MOSCHIP,SEMICONDUCTORS,Design-Linked Incentive (DLI),Semiconductor design services and turnkey ASIC
+SPEL,SEMICONDUCTORS,India Semiconductor Mission (ISM),The oldest listed assembly and test business in India
+ASMTEC,SEMICONDUCTORS,Design-Linked Incentive (DLI),Semiconductor engineering and equipment services
+RIR,SEMICONDUCTORS,Modified SPECS,Power semiconductor devices
+
+# ============================================================================ ELECTRONICS_EMS
+# Large-Scale Electronics Manufacturing PLI; IT Hardware PLI 2.0; SPECS; phased manufacturing.
+# The import-substitution trade. Margins are thin by nature - an EMS business earns its return on
+# asset turns, so read capital efficiency (SPEC 12.8) before reading growth as quality.
+DIXON,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,Contract manufacturing across mobiles displays and appliances
+KAYNES,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,High-mix low-volume EMS for industrial rail and medical
+SYRMA,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,EMS for industrial automotive and healthcare
+AVALON,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,Full-stack EMS with US and India plants
+AMBER,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,Room-air-conditioner contract manufacturing moving into electronics
+PGEL,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,Plastics and appliance contract manufacturing
+CENTUM,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,Electronics for defence aerospace and industrial customers
+CYIENTDLM,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,EMS for aerospace defence and medical
+ELIN,ELECTRONICS_EMS,Large-Scale Electronics Manufacturing PLI,EMS for lighting and small appliances
+
+# ============================================================================ AI_DATA_CENTRES
+# IndiaAI Mission Rs 10372 cr shared GPU compute; IT Hardware PLI 2.0; state data-centre policies;
+# infrastructure status for data centres. Listed exposure splits three ways - whoever builds the
+# shell, whoever powers and cools it, and whoever sells the boxes inside it.
+NETWEB,AI_DATA_CENTRES,IndiaAI Mission,AI and high-performance-computing servers - the boxes inside the hall
+ANANTRAJ,AI_DATA_CENTRES,State data-centre policies,Data-centre developer with a real-estate balance sheet underneath
+TECHNOE,AI_DATA_CENTRES,State data-centre policies,Data-centre build alongside power transmission EPC
+TATACOMM,AI_DATA_CENTRES,National Broadband Mission,Connectivity and colocation
+RAILTEL,AI_DATA_CENTRES,National Broadband Mission,Edge data centres on railway land
+HFCL,AI_DATA_CENTRES,National Broadband Mission,Optical fibre and networking equipment
+STLTECH,AI_DATA_CENTRES,National Broadband Mission,Optical fibre and connectivity
+BBOX,AI_DATA_CENTRES,State data-centre policies,Data-centre infrastructure integration
+POWERINDIA,AI_DATA_CENTRES,State data-centre policies,Power equipment into data-centre load
+BLUESTARCO,AI_DATA_CENTRES,State data-centre policies,Cooling - a small share of a consumer-durables P&L
+
+# ============================================================================ WATER_INFRASTRUCTURE
+# Jal Jeevan Mission Rs 3.6 lakh cr; AMRUT 2.0; Namami Gange; PM-KUSUM for solar pumping.
+# Demand here is almost entirely government-funded, which is the risk as much as the opportunity:
+# read receivables and working capital (SPEC 32.4 forensics) before reading the order book.
+WABAG,WATER_INFRASTRUCTURE,Namami Gange / AMRUT 2.0,Water and waste-water treatment EPC and operations
+IONEXCHANG,WATER_INFRASTRUCTURE,Namami Gange / AMRUT 2.0,Water treatment resins and consumables
+KIRLOSBROS,WATER_INFRASTRUCTURE,Jal Jeevan Mission,Pumps and pumping systems
+KIRLOSENG,WATER_INFRASTRUCTURE,Jal Jeevan Mission,Engines and pumpsets for water supply
+SHAKTIPUMP,WATER_INFRASTRUCTURE,PM-KUSUM,Solar pumping systems
+THERMAX,WATER_INFRASTRUCTURE,Namami Gange / AMRUT 2.0,Water and waste-water treatment within a wider energy business
+WELENT,WATER_INFRASTRUCTURE,Jal Jeevan Mission,Water supply and sewerage infrastructure EPC
+WPIL,WATER_INFRASTRUCTURE,Jal Jeevan Mission,Pumps and water-supply turnkey projects
+JASH,WATER_INFRASTRUCTURE,Namami Gange / AMRUT 2.0,Water control gates and screening equipment
+ROTO,WATER_INFRASTRUCTURE,Jal Jeevan Mission,Progressive-cavity pumps
+EMSLIMITED,WATER_INFRASTRUCTURE,AMRUT 2.0,Water and sewerage infrastructure EPC
+
+# ============================================================================ DEFENCE_INDIGENISATION
+# Positive indigenisation lists; DAP 2020; iDEX; the domestic share of the capital acquisition
+# budget. Order books are long and lumpy - one order can flatter a single year's growth.
+HAL,DEFENCE_INDIGENISATION,Positive indigenisation lists,Military aircraft and engines
+BEL,DEFENCE_INDIGENISATION,Positive indigenisation lists,Defence electronics and radar
+BDL,DEFENCE_INDIGENISATION,Positive indigenisation lists,Missiles and underwater weapons
+MAZDOCK,DEFENCE_INDIGENISATION,Positive indigenisation lists,Warship and submarine building
+COCHINSHIP,DEFENCE_INDIGENISATION,Positive indigenisation lists,Shipbuilding and ship repair
+GRSE,DEFENCE_INDIGENISATION,Positive indigenisation lists,Warship building
+DATAPATTNS,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Defence electronics from design through production
+ASTRAMICRO,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Radio-frequency and microwave subsystems
+PARAS,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Defence optics drones and space subsystems
+ZENTEC,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Combat training simulators and anti-drone systems
+MTARTECH,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Precision components for defence space and nuclear
+SOLARINDS,DEFENCE_INDIGENISATION,Positive indigenisation lists,Explosives and ammunition alongside mining explosives
+BEML,DEFENCE_INDIGENISATION,Positive indigenisation lists,Defence mobility mining and rail equipment
+IDEAFORGE,DEFENCE_INDIGENISATION,iDEX / DAP 2020,Unmanned aerial systems
+
+# ============================================================================ RAILWAY_MODERNISATION
+# National Rail Plan; the Kavach train-collision-avoidance mandate; Vande Bharat and freight
+# corridor programmes; PM Gati Shakti. Single-customer risk defines this theme.
+RVNL,RAILWAY_MODERNISATION,National Rail Plan,Rail infrastructure execution
+IRCON,RAILWAY_MODERNISATION,National Rail Plan,Rail and transport infrastructure EPC
+RITES,RAILWAY_MODERNISATION,National Rail Plan,Rail consultancy inspection and export packages
+TITAGARH,RAILWAY_MODERNISATION,Vande Bharat and freight rolling stock,Wagons coaches and metro trainsets
+JWL,RAILWAY_MODERNISATION,Vande Bharat and freight rolling stock,Freight wagons and rolling-stock components
+TEXRAIL,RAILWAY_MODERNISATION,Vande Bharat and freight rolling stock,Wagons and rail EPC
+HBLENGINE,RAILWAY_MODERNISATION,Kavach train collision avoidance,Kavach train-protection systems and batteries
+KERNEX,RAILWAY_MODERNISATION,Kavach train collision avoidance,Train-collision-avoidance systems
+IRFC,RAILWAY_MODERNISATION,National Rail Plan,The financing arm - a lender rather than a manufacturer
+RAILTEL,RAILWAY_MODERNISATION,National Rail Plan,Rail telecom and signalling networks
+
+# ============================================================================ SOLAR_MANUFACTURING
+# PLI for High Efficiency Solar PV Modules; the ALMM domestic-content list; customs duty on
+# imported cells and modules. The theme rests on a tariff wall, so policy is the main risk.
+WAAREEENER,SOLAR_MANUFACTURING,PLI High Efficiency Solar PV Modules,Modules and cells - the largest listed capacity
+PREMIERENE,SOLAR_MANUFACTURING,PLI High Efficiency Solar PV Modules,Solar cells and modules
+BORORENEW,SOLAR_MANUFACTURING,ALMM and customs protection,Solar glass - the one upstream input listed here
+WEBSOL,SOLAR_MANUFACTURING,PLI High Efficiency Solar PV Modules,Solar cells and modules
+SWSOLAR,SOLAR_MANUFACTURING,ALMM and customs protection,Solar EPC - a contractor rather than a manufacturer
+ACMESOLAR,SOLAR_MANUFACTURING,ALMM and customs protection,Solar generation assets - a power producer rather than a manufacturer
+
+# ============================================================================ WIND_ENERGY
+# The RLMM domestic list; the inter-state transmission charge waiver; wind-solar hybrid and
+# repowering policy.
+SUZLON,WIND_ENERGY,RLMM and ISTS waiver,Wind turbines operations-and-maintenance and repowering
+INOXWIND,WIND_ENERGY,RLMM and ISTS waiver,Wind turbines and turnkey wind projects
+
+# ============================================================================ GREEN_HYDROGEN
+# National Green Hydrogen Mission Rs 19744 cr; SIGHT electrolyser and hydrogen incentives.
+# Early: most listed exposure is an announced intention rather than revenue on the books today.
+NTPC,GREEN_HYDROGEN,National Green Hydrogen Mission,Green hydrogen and ammonia pilots off a thermal base
+RELIANCE,GREEN_HYDROGEN,National Green Hydrogen Mission,Electrolyser and integrated green-energy build-out
+LT,GREEN_HYDROGEN,National Green Hydrogen Mission,Electrolyser manufacturing and hydrogen EPC
+ADANIENT,GREEN_HYDROGEN,National Green Hydrogen Mission,Integrated green hydrogen programme
+JSWENERGY,GREEN_HYDROGEN,National Green Hydrogen Mission,Green hydrogen alongside renewable generation
+THERMAX,GREEN_HYDROGEN,SIGHT electrolyser incentive,Electrolysers and process equipment
+GAIL,GREEN_HYDROGEN,National Green Hydrogen Mission,Hydrogen blending into the gas grid
+
+# ============================================================================ POWER_TRANSMISSION
+# The National Electricity Plan transmission build; Green Energy Corridor; RDSS smart metering.
+# Renewables only pay if the grid can carry them, which is why this theme follows the two above.
+POWERGRID,POWER_TRANSMISSION,National Electricity Plan,Inter-state transmission owner and operator
+KEC,POWER_TRANSMISSION,Green Energy Corridor,Transmission line EPC
+KALPATPOWR,POWER_TRANSMISSION,Green Energy Corridor,Transmission and distribution EPC
+TRANSRAIL,POWER_TRANSMISSION,Green Energy Corridor,Transmission line EPC
+APARINDS,POWER_TRANSMISSION,Green Energy Corridor,Conductors and cables
+POLYCAB,POWER_TRANSMISSION,RDSS,Cables and wires - largely a housing and industrial business
+RRKABEL,POWER_TRANSMISSION,RDSS,Cables and wires
+TARIL,POWER_TRANSMISSION,National Electricity Plan,Power and distribution transformers
+VOLTAMP,POWER_TRANSMISSION,National Electricity Plan,Distribution transformers
+POWERINDIA,POWER_TRANSMISSION,National Electricity Plan,High-voltage grid equipment and HVDC
+SIEMENS,POWER_TRANSMISSION,National Electricity Plan,Grid and industrial electrification
+ABB,POWER_TRANSMISSION,National Electricity Plan,Electrification and automation
+GENUSPOWER,POWER_TRANSMISSION,RDSS smart metering,Smart electricity meters
+HPL,POWER_TRANSMISSION,RDSS smart metering,Smart meters and switchgear
+
+# ============================================================================ EV_BATTERY
+# PM E-DRIVE, the successor to FAME II; the Advanced Chemistry Cell battery PLI; Auto and
+# Auto-Component PLI.
+EXIDEIND,EV_BATTERY,Advanced Chemistry Cell battery PLI,A lead-acid incumbent building lithium cell capacity
+ARE&M,EV_BATTERY,Advanced Chemistry Cell battery PLI,A lead-acid incumbent building lithium cell capacity
+OLAELEC,EV_BATTERY,PM E-DRIVE,Electric two-wheelers and in-house cells
+TVSMOTOR,EV_BATTERY,PM E-DRIVE,Electric two-wheelers within a large combustion-engine business
+SONACOMS,EV_BATTERY,Auto and Auto-Component PLI,Electric drivetrain and traction components
+UNOMINDA,EV_BATTERY,Auto and Auto-Component PLI,Auto components with growing electric content
+GREAVESCOT,EV_BATTERY,PM E-DRIVE,Electric two- and three-wheelers and powertrains
+HBLENGINE,EV_BATTERY,Advanced Chemistry Cell battery PLI,Specialised industrial batteries
+
+# ============================================================================ PHARMA_API
+# PLI for Bulk Drugs and Key Starting Materials; Bulk Drug Parks. An import-substitution theme
+# aimed at China dependence, and priced like a commodity once the capacity arrives.
+AARTIDRUGS,PHARMA_API,PLI for Bulk Drugs and KSM,Active pharmaceutical ingredients
+LAURUSLABS,PHARMA_API,PLI for Bulk Drugs and KSM,APIs and fermentation-based intermediates
+GRANULES,PHARMA_API,PLI for Bulk Drugs and KSM,APIs and formulation intermediates
+DIVISLAB,PHARMA_API,PLI for Bulk Drugs and KSM,Custom synthesis and generic APIs
+NEULANDLAB,PHARMA_API,PLI for Bulk Drugs and KSM,Custom synthesis and APIs
+SUPRIYA,PHARMA_API,PLI for Bulk Drugs and KSM,Niche APIs
+IOLCP,PHARMA_API,PLI for Bulk Drugs and KSM,APIs and specialty chemicals

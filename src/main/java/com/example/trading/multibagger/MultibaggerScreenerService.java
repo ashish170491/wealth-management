@@ -147,7 +147,48 @@ public class MultibaggerScreenerService {
             // the portfolio. The last three are held on BSE; their NSE line is what gets screened,
             // and the classifier joins across the exchanges by trading symbol.
             "NSE:ABCAPITAL", "NSE:BANKINDIA", "NSE:LGEINDIA", "NSE:WABAG",
-            "NSE:KAJARIACER", "NSE:STARHEALTH", "NSE:CPPLUS"
+            "NSE:KAJARIACER", "NSE:STARHEALTH", "NSE:CPPLUS",
+
+            // ---- Policy-backed emerging themes (SPEC §51, 2026-09-19) -------------------------
+            // The theme map named 101 businesses across twelve government-funded themes and this
+            // universe reached 50 of them. These are the 34 whose tickers universe-sectors.csv
+            // confirms; they now get screened like everything else, which is the whole change —
+            // a theme tag decides whether the app LOOKS at a business, never whether it is worth
+            // owning, and none of these contributes a point to any score (SPEC §51.1).
+            //
+            // The remaining 19 tagged names are NOT here on purpose. They sit outside NSE's index
+            // constituent lists so this app cannot confirm the ticker, and an unresolvable symbol
+            // in the universe burns paced Kite lookups every run for ever while logging nothing
+            // anyone reads (Gotcha 22). They stay in the map reading UNVERIFIED, which is a
+            // standing invitation to confirm and promote them — not a silent omission.
+            //
+            // Semiconductors / electronics manufacturing
+            "NSE:KAYNES", "NSE:SYRMA", "NSE:AVALON", "NSE:PGEL",
+            // AI and data centres
+            "NSE:NETWEB", "NSE:ANANTRAJ", "NSE:TECHNOE", "NSE:HFCL", "NSE:STLTECH",
+            "NSE:BBOX", "NSE:POWERINDIA",
+            // Water infrastructure
+            "NSE:IONEXCHANG", "NSE:SHAKTIPUMP", "NSE:WELENT",
+            // Defence indigenisation
+            "NSE:BDL", "NSE:ASTRAMICRO", "NSE:MTARTECH",
+            // Railway modernisation
+            "NSE:JWL", "NSE:HBLENGINE",
+            // Solar, wind and green hydrogen
+            "NSE:WAAREEENER", "NSE:PREMIERENE", "NSE:BORORENEW", "NSE:SWSOLAR",
+            "NSE:ACMESOLAR", "NSE:INOXWIND", "NSE:JSWENERGY",
+            // Power transmission and grid
+            "NSE:RRKABEL", "NSE:TARIL", "NSE:VOLTAMP",
+            // EV and batteries
+            "NSE:ARE&M", "NSE:OLAELEC", "NSE:UNOMINDA",
+            // Pharma APIs
+            "NSE:NEULANDLAB", "NSE:SUPRIYA",
+            // Five more found by RUNNING the coverage screen rather than by reading the lists
+            // (B-113's rule): these sit in MICROCAP_WATCHLIST, which only enters the universe at
+            // TIER_ALL while `screening-tier` is LARGE_MID_SMALL, so they looked covered to a
+            // static reading of the tier file and were not. Named individually rather than by
+            // moving the tier, which would pull in ~100 micro-caps and their Kite cost for a
+            // question nobody asked.
+            "NSE:DATAPATTNS", "NSE:PARAS", "NSE:BEML", "NSE:TEXRAIL", "NSE:AARTIDRUGS"
     );
 
     // Sector mapping for each stock
@@ -333,6 +374,159 @@ public class MultibaggerScreenerService {
      * straight through an absolute {@code >= 60} gate and turned a 39%-pass screen into a
      * 69%-pass screen; none of them move a percentile rank at all.
      */
+    /**
+     * Score every universe symbol that has no row on the latest screening date (SPEC §12.13).
+     *
+     * <p><b>Why this exists.</b> The universe grows between screening runs — a holding is added, the
+     * expansion funnel promotes a name, a policy-backed theme brings in thirty-nine (§51.4) — and
+     * until the next 14:00 run those stocks are in the universe and invisible to every screen that
+     * reads a screening row. Nothing closed that gap on demand.
+     *
+     * <p><b>It applies the same tier gate as the full run, and that is the point.</b>
+     * {@link #screenSingleStock} does not: it writes whatever it computes. Using it here would
+     * publish rows for small and micro-caps the 14:00 run deliberately discards, so the screener
+     * would carry names the scheduled job refuses to write — B-035's shape, one level up. Instead a
+     * stock that fails {@link #passesTierGate} is reported as {@code tierRejected}: measured, and
+     * then excluded by a rule. Re-running will reject it again, which is why the caller is told
+     * rather than the pass retrying it for ever.
+     *
+     * <p><b>Percentile ranks come from the latest full run, not from this batch.</b> Ranking
+     * thirty-nine stocks among themselves produces a percentile in a thirty-nine-stock sample,
+     * which is a different quantity wearing the same name — the units substitution that files a
+     * quarter as a year (B-047). And leaving it null is not neutral either: {@code isCandidate}
+     * treats a null percentile as passing the top-slice test, so an unranked row would qualify on
+     * its absolute score alone, which is exactly the relative-gate bypass that once let 69% of the
+     * universe pass (B-019). Ranking against the run these rows join is the only reading where the
+     * percentile means what it means on every other row.
+     *
+     * <p>Bounded and resumable: it stops at {@code limit} symbols or at {@code deadline}, whichever
+     * comes first, and reports what it did not reach. Each row is persisted as it is produced, never
+     * in one save at the end — an expensive paced pass must not lose everything to one bad row
+     * (B-116).
+     *
+     * <p>This is a <b>compute-to-publish</b> operation by design (Gotcha 50): these symbols are
+     * genuine universe members and a row is what the scheduled run would have written.
+     */
+    public UnscoredBackfillResult screenUnscored(int limit, java.time.Instant deadline) {
+        List<String> universe = resolveUniverse();
+
+        LocalDate date = scoreRepository.findScreeningDates().stream().findFirst().orElse(null);
+        if (date == null) {
+            return new UnscoredBackfillResult(null, universe.size(), 0, 0, List.of(), List.of(),
+                    List.of(), List.of(),
+                    "No screening run has ever been recorded, so there is no cross-section to join "
+                            + "or to rank against. Run a full screening first.");
+        }
+
+        List<MultibaggerScoreEntity> existing =
+                scoreRepository.findByScreeningDateOrderByCompositeScoreDesc(date);
+        // Keyed bare so a row written under BSE: still counts as "this company is scored"
+        // (Gotcha 84 — an exchange prefix is not an identity).
+        Set<String> scoredAlready = new HashSet<>();
+        for (MultibaggerScoreEntity e : existing) {
+            scoredAlready.addAll(com.example.trading.universe.theme.ThemeCoverage
+                    .normalise(List.of(String.valueOf(e.getSymbol()))));
+        }
+
+        List<String> missing = universe.stream()
+                .filter(s -> com.example.trading.universe.theme.ThemeCoverage.normalise(List.of(s))
+                        .stream().noneMatch(scoredAlready::contains))
+                .toList();
+
+        if (missing.isEmpty()) {
+            return new UnscoredBackfillResult(date, universe.size(), scoredAlready.size(), 0,
+                    List.of(), List.of(), List.of(), List.of(),
+                    "Every symbol in the screening universe already has a score on " + date + ".");
+        }
+
+        // The distribution these rows will be ranked into. Sorted best-first by the query.
+        int[] runScores = existing.stream()
+                .map(MultibaggerScoreEntity::getCompositeScore)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .toArray();
+
+        log.info("Unscored backfill: {} of {} universe symbols have no row on {} — screening up to {}.",
+                missing.size(), universe.size(), date, Math.min(limit, missing.size()));
+
+        List<Map<String, Object>> niftyHistory = fetchDailyHistory("NSE:NIFTY 50");
+        Map<String, Double> sectorFlows = fetchSectorFlows();
+        Map<String, HoldingsEntity> holdingsMap = new HashMap<>();
+        try {
+            for (HoldingsEntity h : holdingsRepository.findAll()) {
+                holdingsMap.put(h.getSymbol(), h);
+            }
+        } catch (Exception e) {
+            log.warn("Unscored backfill: holdings unavailable ({}), so held stocks lose their "
+                    + "cross-reference. Scores are unaffected.", e.getMessage());
+        }
+
+        List<UnscoredBackfillResult.Scored> scored = new ArrayList<>();
+        List<String> tierRejected = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        int examined = 0;
+
+        for (String symbol : missing) {
+            if (scored.size() + tierRejected.size() + failed.size() >= limit
+                    || (deadline != null && java.time.Instant.now().isAfter(deadline))) {
+                skipped.add(symbol);
+                continue;
+            }
+            examined++;
+            try {
+                MultibaggerScore score = screenStock(symbol, niftyHistory, holdingsMap, sectorFlows);
+                if (score == null) {
+                    failed.add(symbol);
+                    continue;
+                }
+                if (!passesTierGate(score)) {
+                    // Measured, then excluded by the same rule the daily run applies. Deliberately
+                    // NOT persisted: a row here would be a stock the scheduled job refuses to write.
+                    tierRejected.add(symbol);
+                    continue;
+                }
+                score.setPercentileRank(percentileWithin(runScores, score.getCompositeScore()));
+                // One row at a time (B-116): a paced pass must not lose its whole run to one row.
+                persistScores(List.of(score));
+                scored.add(new UnscoredBackfillResult.Scored(score.getSymbol(),
+                        score.getCompositeScore(), score.getVerdict(), score.getGrade(),
+                        score.getPercentileRank(), isCandidate(score)));
+            } catch (Exception e) {
+                failed.add(symbol);
+                log.debug("Unscored backfill: {} failed: {}", symbol, e.getMessage());
+            }
+        }
+
+        log.info("Unscored backfill: scored {}, tier-rejected {}, failed {}, not reached {}.",
+                scored.size(), tierRejected.size(), failed.size(), skipped.size());
+
+        String note = scored.size() + " newly measured, " + tierRejected.size()
+                + " measured and excluded by the small/micro-cap quality gate, " + failed.size()
+                + " could not be measured"
+                + (skipped.isEmpty() ? "." : ", " + skipped.size() + " not reached this pass.");
+
+        return new UnscoredBackfillResult(date, universe.size(), scoredAlready.size(), examined,
+                List.copyOf(scored), List.copyOf(tierRejected), List.copyOf(failed),
+                List.copyOf(skipped), note);
+    }
+
+    /**
+     * Where a composite would rank in an existing run's distribution, best = 100.
+     *
+     * <p>Ties share the best rank, the same convention {@link #assignPercentileRanks} uses, so a
+     * backfilled row and a row from the full run answer the same question the same way. Null when
+     * the run has no scores to rank against — never 100, which would make an unrankable stock look
+     * like the best in the universe.
+     */
+    private Double percentileWithin(int[] runScores, Integer composite) {
+        if (runScores == null || runScores.length == 0 || composite == null) {
+            return null;
+        }
+        long worse = java.util.Arrays.stream(runScores).filter(s -> s < composite).count();
+        return round1(100.0 * worse / runScores.length);
+    }
+
     private void assignPercentileRanks(List<MultibaggerScore> scores) {
         int n = scores.size();
         if (n == 0) return;

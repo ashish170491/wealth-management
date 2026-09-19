@@ -154,7 +154,19 @@ public record WatchlistItemView(
          * Live targets the share price has already passed (SPEC 49.16). Excluded from the median
          * and the upside, counted here so the absence of a figure can be explained.
          */
-        Integer analystOvertaken) {
+        Integer analystOvertaken,
+
+        // ---- Policy-backed themes (SPEC 51.5) ------------------------------------------------
+        // The same four names the screening row map and the holdings row carry, so one renderer
+        // serves every surface (Gotcha 85). An EMPTY list means the map was consulted and names
+        // no tracked theme - a finding. A NULL list means the lookup never ran and the cell must
+        // draw the unmeasured marker. Two facts, two renderings (Gotcha 121).
+        //
+        // Contribute zero points to any score.
+        java.util.List<String> themes,
+        java.util.List<String> themeLabels,
+        java.util.List<String> themePolicies,
+        java.util.List<String> themeRoles) {
 
     public record SeriesPoint(LocalDate date, Double close) {}
 }

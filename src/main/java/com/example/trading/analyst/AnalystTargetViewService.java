@@ -352,6 +352,44 @@ public class AnalystTargetViewService {
      * the live book: 15 of 30 holdings answer under a different prefix from the one they are
      * held under, so getting this wrong would blank half the column.
      */
+    /**
+     * The fifteen wire keys {@code analyst-cells.js} dereferences off a row (SPEC 49.15).
+     *
+     * <p><b>Why this lives here and not at each call site.</b> The screener, discovery, the
+     * watchlist, the portfolio and the Themes page all feed one renderer, and the field names are a
+     * wire contract with no compiler behind it: a rename that misses one writer blanks the column
+     * on exactly that screen and nowhere else, which is B-099's shape. Three copies of this map had
+     * already accumulated. The class that owns {@link Coverage} owns its wire form.
+     *
+     * <p>Returns an <b>empty map</b> for a null coverage rather than a map of nulls, so the caller
+     * can write nothing at all. That is what keeps three states apart: absent keys mean the lookup
+     * did not run, a counted {@code houses} of 0 means the ledger was searched and nothing is
+     * running, and those must never render alike (SPEC 49.7, Gotcha 44).
+     */
+    public static Map<String, Object> wireFields(Coverage c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (c == null) {
+            return m;
+        }
+        m.put("analystHouses", c.houses());
+        m.put("analystHouseNames", c.houseNames());
+        m.put("analystOpenTargets", c.openTargets());
+        m.put("analystMedianTarget", c.medianTarget());
+        m.put("analystHighestTarget", c.highestTarget());
+        m.put("analystLowestTarget", c.lowestTarget());
+        m.put("analystUpsidePct", c.impliedUpsidePct());
+        m.put("analystPriceAsStored", c.priceAsStored());
+        m.put("analystPriceAsOf", c.priceAsOf());
+        m.put("analystHousesEver", c.housesEver());
+        m.put("analystHouseNamesEver", c.houseNamesEver());
+        m.put("analystTargetsEver", c.targetsEver());
+        m.put("analystLastCallOn", c.lastCallOn());
+        m.put("analystTargetsFrom", c.symbolAnswered());
+        m.put("analystNote", c.note());
+        m.put("analystOvertaken", c.overtakenTargets());
+        return m;
+    }
+
     public Map<String, Coverage> forSymbols(java.util.Collection<String> symbols) {
         Map<String, Coverage> out = new LinkedHashMap<>();
         if (symbols == null || symbols.isEmpty()) return out;
