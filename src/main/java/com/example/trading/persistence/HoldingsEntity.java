@@ -400,6 +400,34 @@ public class HoldingsEntity {
         return (currentPrice - closePrice) * quantity;
     }
 
+    // ---- Policy-backed themes (SPEC 51.5) -----------------------------------------------------
+    // Which government-funded themes name this business, attached by HoldingsViewDecorator so
+    // every holdings read path carries them and a new screen inherits them for free (Gotcha 85).
+    //
+    // An EMPTY list is not the same as a NULL one and both occur. Null means the lookup never ran
+    // and the cell draws the unmeasured marker; empty means the theme map was consulted and names
+    // no theme for this business, which is an ordinary finding and reads as a plain dash. The
+    // whole feature turns on keeping those apart (Gotcha 121), so these stay nullable Lists and
+    // are never defaulted to List.of() at the field.
+    //
+    // Contribute zero points to any score and are not an input to any verdict (SPEC 51.1).
+
+    /** Catalogue names, for filtering. */
+    @Transient
+    private java.util.List<String> themes;
+
+    /** The same in the investor's words, for display. Never render the catalogue name. */
+    @Transient
+    private java.util.List<String> themeLabels;
+
+    /** The government schemes that put this business in those themes. */
+    @Transient
+    private java.util.List<String> themePolicies;
+
+    /** Where in each theme's value chain this business actually sits. */
+    @Transient
+    private java.util.List<String> themeRoles;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

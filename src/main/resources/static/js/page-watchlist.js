@@ -26,6 +26,7 @@ import { sparkline } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
+import { themeCol } from './theme-cells.js';
 import {
   analystCoverageCol, analystFilterGroup, analystCoverageLine,
 } from './analyst-cells.js';
@@ -352,6 +353,7 @@ function mainTable(active) {
     // Same renderer as the portfolio, the screener, discovery and the stock page — five
     // surfaces, one cell, nothing to drift (SPEC 48.10).
     macroExposureCol(),
+    themeCol(),
     // Who else is quoting a target on this stock (SPEC 49.15). Beside our own verdict, never
     // blended into it: it is somebody else's opinion, recorded so it can be scored later, and it
     // contributes zero points to anything here.

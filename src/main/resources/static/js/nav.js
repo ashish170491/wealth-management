@@ -31,6 +31,7 @@ const PAGES = [
   { href: 'watchlist.html', label: 'Watchlist' },
   { href: 'ipo.html', label: 'IPOs' },
   { href: 'macro.html', label: 'Events' },
+  { href: 'themes.html', label: 'Themes' },
   { href: 'reports.html', label: 'Reports' },
   { href: 'health.html', label: 'Data Health' },
   { href: 'guide.html', label: 'Guide' },
@@ -47,6 +48,7 @@ const RELEVANT = {
   'watchlist.html': ['watchlistAnalyzed', 'watchlistSnapshot', 'multibaggerScores'],
   'ipo.html': ['ipoIssues'],
   'macro.html': ['macroEvents', 'marketImpactNews'],
+  'themes.html': ['multibaggerScores'],
   'reports.html': ['holdingsSynced', 'holdingsAnalyzed'],
   // Deliberately empty: this page reports freshness for every table in full, against
   // each job's own cron. A shorter answer to the same question directly above it is

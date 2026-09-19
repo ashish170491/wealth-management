@@ -270,6 +270,12 @@ public class DashboardService {
                 insiderDisclosureRepository::findNewestPitTransactionDate);
         findings.add(DataHealth.pitFeedFreshness(newestPit, now.toLocalDate()));
 
+        // 2c. Is the hand-kept theme map still current? It has no feed, no job and no writer, so
+        //     it ages silently - and it ages in the flattering direction, because coverage is
+        //     counted against its own list (SPEC 51.9). Classpath read, no repository.
+        findings.add(DataHealth.themeMapVintage(
+                com.example.trading.universe.theme.UniverseThemes.reviewedOn(), now.toLocalDate()));
+
         // 3. Do the multi-year lenses have accounts to read, and is the queue still moving?
         var depth = quietly("dataHealth.historyDepth", () -> null,
                 fundamentalsBackfillService::coverage);
@@ -292,6 +298,10 @@ public class DashboardService {
         notChecked.add("Whether a scoring rule is right. These checks ask whether a number was "
                 + "measured and whether it varies across stocks, never whether it is the correct "
                 + "number.");
+        notChecked.add("Whether the theme map is COMPLETE. Its review date is checked above, but "
+                + "nothing here can tell you a business the map has never named - no feed "
+                + "publishes that list, which is why the map is hand-kept. The Candidates section "
+                + "on the Themes screen is a partial answer and says how partial.");
         notChecked.add("The emails, the AI sections and anything outside a screening run.");
 
         return new DashboardDto.DataHealthResponse(
@@ -815,26 +825,39 @@ public class DashboardService {
         if (c == null) {
             return;
         }
-        m.put("analystHouses", c.houses());
-        m.put("analystHouseNames", c.houseNames());
-        m.put("analystOpenTargets", c.openTargets());
-        m.put("analystMedianTarget", c.medianTarget());
-        m.put("analystHighestTarget", c.highestTarget());
-        m.put("analystLowestTarget", c.lowestTarget());
-        m.put("analystUpsidePct", c.impliedUpsidePct());
-        // The price the percentage was measured from, and when. Without it a reader recomputes
-        // the move against the price column beside it and concludes the app cannot add up.
-        m.put("analystPriceAsStored", c.priceAsStored());
-        m.put("analystPriceAsOf", c.priceAsOf());
-        m.put("analystHousesEver", c.housesEver());
-        m.put("analystHouseNamesEver", c.houseNamesEver());
-        m.put("analystTargetsEver", c.targetsEver());
-        m.put("analystLastCallOn", c.lastCallOn());
-        m.put("analystTargetsFrom", c.symbolAnswered());
-        m.put("analystNote", c.note());
-        // Live targets the price has already passed (SPEC 49.16). Counted, never silently
-        // dropped: a median that quietly stops appearing is worse than one that explains itself.
-        m.put("analystOvertaken", c.overtakenTargets());
+        // One writer for the fifteen keys, shared with the Themes page (SPEC 51.8): a rename
+        // that misses one call site blanks the column on exactly that screen (B-099).
+        m.putAll(com.example.trading.analyst.AnalystTargetViewService.wireFields(c));
+    }
+
+    /**
+     * Which government-funded themes name this business (SPEC 51.5).
+     *
+     * <p>The same four keys {@code HoldingsViewDecorator.applyTheme} writes onto a holdings row,
+     * so the screener, discovery, the watchlist and the portfolio all feed one renderer and cannot
+     * describe a theme differently (Gotcha 85).
+     *
+     * <p><b>No batch parameter and no I/O</b>, unlike its macro and analyst neighbours: the theme
+     * map is a static in-memory table, so a per-row lookup costs a hash probe. And {@code screened}
+     * is not written here at all - a row in {@code multibagger_scores} is screened by construction,
+     * so the flag would be the constant {@code true} and a constant on screen is the shape of a
+     * measurement nobody took (B-060).
+     *
+     * <p><b>An untagged business writes the empty list, not nothing.</b> That is the distinction
+     * the whole feature turns on: absent keys would draw the unmeasured marker, but the map was
+     * consulted and named no theme, which is a finding. Two different things, two different cells
+     * (Gotcha 121).
+     *
+     * <p>Contributes zero points to any score.
+     */
+    private void putTheme(Map<String, Object> m, String symbol) {
+        var tags = com.example.trading.universe.theme.UniverseThemes.tagsFor(symbol);
+        m.put("themes", tags.stream().map(t -> t.theme().name()).distinct().toList());
+        m.put("themeLabels", tags.stream().map(t -> t.theme().label()).distinct().toList());
+        m.put("themePolicies", tags.stream().map(
+                com.example.trading.universe.theme.UniverseThemes.Tag::policy).distinct().toList());
+        m.put("themeRoles", tags.stream().map(
+                com.example.trading.universe.theme.UniverseThemes.Tag::role).toList());
     }
 
     /** Watchlist rows by symbol. Empty on any failure - the screener must still render. */
@@ -885,6 +908,7 @@ public class DashboardService {
         putCompounding(m, compoundingLensService.evaluate(e, yearsOfAccounts));
         putMacro(m, macro);
         putAnalyst(m, analyst);
+        putTheme(m, e.getSymbol());
 
         // Sector in the shared vocabulary, where the price sits in its 52-week range, and how the
         // score has moved against the universe (SPEC §12.5, 2026-09-09). All derived from fields

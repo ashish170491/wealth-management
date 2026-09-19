@@ -65,6 +65,16 @@ public final class DataHealth {
     /** Weekdays without a backfill attempt before the batch job counts as stalled. */
     static final int BACKFILL_STALL_DAYS = 4;
 
+    /**
+     * Days before the hand-kept theme map is worth re-reading against current policy.
+     *
+     * <p>Six months, because the cycle that ages it is the Union Budget on 1 February: the PLI
+     * tranches and mission outlays that every row cites move with it, so a map reviewed in one
+     * September is a budget behind by the next. Twice a year straddles that whichever month the
+     * reviewing happens to start in.
+     */
+    static final int THEME_MAP_REVIEW_DAYS = 180;
+
     public enum Severity {
         /** Something is wrong now and the reader should act. */
         PROBLEM,
@@ -551,6 +561,62 @@ public final class DataHealth {
         return new Finding(check, subject, Severity.OK, "Filings still arriving",
                 "The insider feed is delivering - the newest trade on file is "
                 + (days <= 0 ? "from today" : days + " days old") + ".", figure);
+    }
+
+    /**
+     * Whether the hand-kept theme map has been read against current policy recently (SPEC §51.9).
+     *
+     * <p><b>Never PROBLEM</b>, for the reason {@link OnDemandSpec} gives one level down: nothing
+     * schedules this file, so it cannot be late. Amber here means "worth re-reading", and amber
+     * that meant "a job failed" would be a false alarm on the one channel whose entire job is to
+     * be believed (Gotcha 125).
+     *
+     * <p><b>What it is actually guarding.</b> Not tidiness. Every coverage figure on the Themes
+     * screen is counted against the map's own denominator, so the map going stale does not show
+     * up as a falling number — it shows up as a <i>steady high</i> one, because the app keeps
+     * reporting near-complete coverage of a list that stopped growing while the market did not.
+     * A stale map therefore fails in the flattering direction, and the instrument built to find a
+     * blind spot quietly becomes one. That is Gotcha 106(b) — a known cause has to expire with
+     * its fix — applied to a file instead of an exception list.
+     *
+     * @param reviewed the file's own {@code # REVIEWED:} date, null when it carries none or the
+     *                 value could not be parsed
+     */
+    public static Finding themeMapVintage(LocalDate reviewed, LocalDate today) {
+        String check = "vintage";
+        String subject = "Policy theme map";
+
+        if (reviewed == null) {
+            return new Finding(check, subject, Severity.WATCH, "No review date on the map",
+                    "universe-themes.csv carries no readable REVIEWED date, so there is no way to "
+                    + "tell how old its policy claims are. Every row cites a scheme by name, and a "
+                    + "scheme that has since been closed or had its outlay revised leaves the row "
+                    + "looking exactly as sourced as it did the day it was written.",
+                    "no REVIEWED directive");
+        }
+
+        long days = ChronoUnit.DAYS.between(reviewed, today);
+        String figure = "reviewed " + reviewed + " (" + days + " days ago)";
+
+        if (days > THEME_MAP_REVIEW_DAYS) {
+            return new Finding(check, subject, Severity.WATCH, "Worth re-reading - " + days
+                    + " days since the last review",
+                    "Nothing in this app can update the theme map: no feed publishes it, no job "
+                    + "writes it, so it is exactly as current as the last person to edit it. It is "
+                    + days + " days since anyone did, which spans a Union Budget. Three things go "
+                    + "stale: a scheme can be extended, closed or re-funded while its row keeps the "
+                    + "old justification; companies list into these themes and the map cannot hear "
+                    + "about them; and tickers change. Note which way this fails - coverage is "
+                    + "counted against the map's own list, so a map that stopped growing goes on "
+                    + "reporting high coverage rather than a falling number. The Candidates section "
+                    + "on the Themes screen is the starting point, though it only finds companies "
+                    + "whose name says what they do.", figure);
+        }
+
+        return new Finding(check, subject, Severity.OK, "Reviewed " + reviewed,
+                "The theme map was read against current policy " + days + " days ago. It has no "
+                + "schedule and no writer, so this date moves only when somebody edits the file.",
+                figure);
     }
 
     /** Whether the multi-year lenses have enough accounts to say anything yet. */

@@ -31,6 +31,7 @@ import { loadWatchedSet, watchButton } from './watch-button.js';
 import { buyTimingCell, buyTimingRank, entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
 import { macroExposureCol } from './macro-cells.js';
+import { themeCol, themeFilterGroup, themeCoverageLine } from './theme-cells.js';
 import {
   analystCoverageCol, analystFilterGroup, analystCoverageLine,
 } from './analyst-cells.js';
@@ -157,6 +158,20 @@ const FILTERS = chipFilters([
     options: (rs) => sectorOptions(rs, { label: humanLabel }),
   },
   analystFilterGroup(),
+  // Narrow to a government-funded theme (SPEC 51.5). A ROW filter, not a display toggle:
+  // "show me the semiconductor names we screen" is the question the theme map exists for.
+  themeFilterGroup,
+  {
+    key: 'showThemes',
+    toggle: true,
+    text: 'Show themes',
+    title: 'Adds the Theme column: which government-funded themes name each business, and "—" '
+      + 'for the ones none does. Off by default because this table is at its column budget, not '
+      + 'because the tag is thin. A theme is a demand signal, never a quality signal, and it '
+      + 'contributes zero points to any score.',
+    // No `test` — like its neighbours it changes which COLUMNS are drawn and must never make
+    // the bar report the table as filtered.
+  },
   {
     key: 'showAnalysts',
     toggle: true,
@@ -285,6 +300,12 @@ function scoreTable(data) {
   // the toggle purely for width: the default table is at the 20-column budget B-098 set.
   if (FILTERS.state.showAnalysts) {
     cols.push(analystCoverageCol());
+  }
+
+  // Opt-in (SPEC 51.5), same renderer as the portfolio, watchlist, discovery and the Themes
+  // page. Gated purely for width, exactly like the column above.
+  if (FILTERS.state.showThemes) {
+    cols.push(themeCol());
   }
 
   // Opt-in: one compact bar per dimension. Nulls become the striped "not measured" marker, which
@@ -566,7 +587,11 @@ function paint(opts = {}) {
     scoreTable(data),
     // Only when the column is on: a line explaining what blanks in a column mean is noise when
     // the column is not drawn. Over `data` - the list actually under this heading (B-098).
-    FILTERS.state.showAnalysts ? analystCoverageLine(data, { noun: 'stocks' }) : null),
+    FILTERS.state.showAnalysts ? analystCoverageLine(data, { noun: 'stocks' }) : null,
+    // Mandatory beside the Theme column (Gotcha 44): a column of dashes must not read as
+    // "none of these are in a funded theme" when the map is hand-kept and may simply not
+    // name them. Over the shown rows, so the count describes the list beneath it (B-098).
+    FILTERS.state.showThemes ? themeCoverageLine(data, 'screened stocks') : null),
   data.length));
 
   nodes.push(withSummary(section('Grade spread',

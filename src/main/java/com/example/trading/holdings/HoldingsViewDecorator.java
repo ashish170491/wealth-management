@@ -128,6 +128,7 @@ public class HoldingsViewDecorator {
                 applyMacro(h, macro.get(h.getSymbol()));
                 applyAnalyst(h, analyst.get(h.getSymbol()));
                 applyEarnings(h, earnings.get(h.getSymbol()));
+                applyTheme(h);
                 h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
             } catch (Exception e) {
                 log.warn("Could not decorate {} — its row falls back to the raw stored signal: {}",
@@ -150,11 +151,35 @@ public class HoldingsViewDecorator {
             applyMacro(h, macroExposureService.forSymbol(h.getSymbol()));
             applyAnalyst(h, analystTargetViewService.forSymbolCoverage(h.getSymbol()));
             applyEarnings(h, quarterlyResultService.forSymbol(h.getSymbol()));
+            applyTheme(h);
             h.setSector(com.example.trading.portfolio.SectorMapping.resolve(h.getSymbol(), h.getIndustry()));
         } catch (Exception e) {
             log.warn("Could not decorate {}: {}", h.getSymbol(), e.getMessage());
         }
         return h;
+    }
+
+    /**
+     * Attach the policy-backed theme tags (SPEC 51.5).
+     *
+     * <p><b>Always writes, even when the answer is nothing.</b> Unlike every neighbour here, this
+     * method has no null-reading escape: the theme map is a static in-memory table that cannot
+     * fail to answer, so an untagged business gets an <b>empty</b> list rather than a null one.
+     * That is the distinction the feature exists to hold: empty means the map was consulted and
+     * names no tracked theme for this business - a finding, rendered as a plain dash - while null
+     * would mean the lookup never ran and must render as "not measured" (Gotcha 121). Collapsing
+     * them lets a blind spot read as an all-clear.
+     *
+     * <p>Contributes zero points to any score and is not an input to any verdict.
+     */
+    private static void applyTheme(HoldingsEntity h) {
+        var tags = com.example.trading.universe.theme.UniverseThemes.tagsFor(h.getSymbol());
+        h.setThemes(tags.stream().map(t -> t.theme().name()).distinct().toList());
+        h.setThemeLabels(tags.stream().map(t -> t.theme().label()).distinct().toList());
+        h.setThemePolicies(tags.stream().map(
+                com.example.trading.universe.theme.UniverseThemes.Tag::policy).distinct().toList());
+        h.setThemeRoles(tags.stream().map(
+                com.example.trading.universe.theme.UniverseThemes.Tag::role).toList());
     }
 
     /**

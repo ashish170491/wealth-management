@@ -197,6 +197,7 @@ public class WatchlistTrackingService {
                 verdict.verdict(), w.getCurrentPrice(), w.getNearestSupport(),
                 w.getAtr14(), w.getEma50());
 
+        var themeTags = com.example.trading.universe.theme.UniverseThemes.tagsFor(w.getSymbol());
         return new WatchlistItemView(
                 w.getSymbol(), w.getTradingSymbol(), active, w.getSource(), w.getAddedNote(), w.getAddedOn(), days,
                 heldNow || Boolean.TRUE.equals(w.getInHoldings()),
@@ -260,7 +261,16 @@ public class WatchlistTrackingService {
                 analyst != null ? analyst.lastCallOn() : null,
                 analyst != null ? analyst.symbolAnswered() : null,
                 analyst != null ? analyst.note() : null,
-                analyst != null ? analyst.overtakenTargets() : null);
+                analyst != null ? analyst.overtakenTargets() : null,
+                // SPEC 51.5. The map is a static table that cannot fail to answer, so these are
+                // always written and an untagged stock gets an empty list rather than a null one -
+                // "no tracked theme names this business" is a finding, not a gap (Gotcha 121).
+                themeTags.stream().map(t -> t.theme().name()).distinct().toList(),
+                themeTags.stream().map(t -> t.theme().label()).distinct().toList(),
+                themeTags.stream().map(
+                        com.example.trading.universe.theme.UniverseThemes.Tag::policy).distinct().toList(),
+                themeTags.stream().map(
+                        com.example.trading.universe.theme.UniverseThemes.Tag::role).toList());
     }
 
     /**
