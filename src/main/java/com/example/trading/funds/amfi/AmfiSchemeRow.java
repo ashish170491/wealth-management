@@ -68,15 +68,25 @@ public record AmfiSchemeRow(
      * not reach an active category's median even if the flag changed. Same shape as
      * {@code computeActualWeights()} being left alone when the fund module landed (§52.5).
      *
+     * <p><b>Widened to debt and hybrid on 2026-09-20 (§52.15), on the same safety property.</b> The
+     * module could not answer "where do I put money I need in six months" for a structural reason:
+     * it had persisted no debt scheme, no liquid fund and no hybrid, so the question had no
+     * universe rather than a bad answer. Those categories are now kept and given month-end history
+     * while {@code screenable} stays false for every one of them, so no equity peer median,
+     * percentile or coverage count moves - verified by re-reading {@code screenableSchemes} across
+     * the change, exactly as §52.14 did.
+     *
      * <p><b>Exchange-traded funds are deliberately excluded.</b> An ETF's net asset value is not
      * what you would pay for it - it trades on the exchange at a price that can sit away from NAV -
      * so a NAV series would answer a question nobody asked, and its plan and option columns are
-     * usually blank anyway (the units guard would refuse it downstream regardless).
+     * usually blank anyway (the units guard would refuse it downstream regardless). That exclusion
+     * is what leaves gold out: in this feed gold is published only as an ETF, so there is no gold
+     * category to keep, which is a fact about AMFI's file rather than a decision about gold.
      */
     public boolean isTrackable() {
         return structure == SchemeStructure.OPEN_ENDED
-                && category.assetClass() == com.example.trading.funds.AssetClass.EQUITY
-                && category != SebiCategory.EQUITY_ETF
+                && category.isKeepableAssetClass()
+                && !category.isExchangeTraded()
                 && plan == SchemePlanKey.Plan.DIRECT
                 && option == SchemePlanKey.Option.GROWTH;
     }

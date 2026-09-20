@@ -179,6 +179,64 @@ unit test of either would have caught.
 
 ---
 
+### B-135 - Postgres was still enforcing an older version of a Java enum, so the whole NAV pull failed and rolled back 1,509 scheme writes  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first `POST /api/mf/nav/refresh` after the universe was widened to debt and hybrid
+(SPEC §52.15) returned a bare **500**. The log carried
+`ERROR: new row for relation "mf_scheme" violates check constraint "mf_scheme_category_check"`,
+followed by `current transaction is aborted, commands ignored until end of transaction block` - so
+the `mf_sync_run` row that records the failure could not be written either. Nothing was persisted:
+not the 624 new schemes, not the NAV points, not the record of the attempt.
+
+**Root cause.** When Hibernate creates a table for an `@Enumerated(STRING)` column it also writes a
+`CHECK` constraint enumerating the enum members **that existed on the day the table was created**.
+`ddl-auto=update` adds columns, and that is all it reliably does: it never alters an existing
+column's type (B-116), never relaxes a NOT NULL (B-026), never reliably adds a declared column
+(Gotcha 74) - and it never rewrites one of these. `SebiCategory` gained eighteen debt and seven
+hybrid members; the database was still refusing anything outside the equity-only list it had
+memorised months earlier.
+
+Nothing in the application was wrong. The parser resolved every header, the predicate kept the right
+rows, the entity carried the right values. The table simply remembered an older version of the enum.
+
+**Blast radius.** Total for the feature and silent for the rest of the app. The 12:30 scheduled pull
+catches its exception and carries on, so this would have presented exactly as B-116 did: a freshness
+stamp that stops moving while every job reports success and no alert fires. Worse than B-116 in one
+respect - that failure was a single third-party string outgrowing a column, so it began on the day a
+particular row appeared; this one begins the moment an enum gains a member, which is a routine code
+change nobody would connect to a database error days later.
+
+**Why a `saveAll` made it total.** `MutualFundNavSyncService.persist` ends with one
+`schemeRepository.saveAll(...)`, so a single rejected row discards the whole batch - B-128's lesson,
+which had been learned on the IPO capture and not carried here. The constraint fix removes the
+trigger; the batch-save shape remains and is worth revisiting if a second row-level rejection ever
+appears on this path.
+
+**Fix.** `SchemaMigrationRunner.dropStaleEnumCheckConstraints()` drops the check constraint on each
+enum column of `mf_scheme` and `mf_holding` at boot. Three details carry weight:
+
+1. **Dropped, not rewritten.** Rewriting means regenerating the value list on every enum change and
+   getting it right each time, and a stale hand-written constraint fails in exactly the same silent
+   way. The enum is already enforced in Java on the way in, so the database copy adds nothing but a
+   second thing to keep in step (Gotcha 85).
+2. **The constraint name is read from `pg_constraint`, never guessed.** Hibernate's naming has
+   changed across versions, and a guessed name that does not match fails *silently* - leaving the
+   real constraint in place and the symptom unchanged, which is the worst outcome a fix can have.
+3. **Idempotent and non-fatal.** The table may not exist on a first boot. Logged at WARN rather than
+   DEBUG, because the downstream symptom is a whole feature writing nothing (B-054's rule).
+
+**Verification.** Restarted and confirmed six constraints dropped by name in the boot log
+(`mf_scheme_category_check`, `_asset_class_check`, `_structure_check`, `_plan_check`,
+`_nav_option_check`, `mf_holding_scheme_resolved_from_check`). The next pull returned
+`succeeded: true`, 14,375 rows parsed, **1,509 schemes written, zero unclassified headers**, and
+`schemesPersisted` moved 1,031 → 1,616 while **`screenableSchemes` stayed at 637** - the safety
+property §52.15 rests on.
+
+**The general rule, now Gotcha 74's fourth face:** *adding a value to a persisted enum is a schema
+change.* Any `@Enumerated(STRING)` column whose enum can grow needs its check constraint dropped
+once, or the first write carrying the new value fails at the database and takes its whole batch
+with it.
+
 ### B-134 - A two-fund gap from chance was published as a verdict on whether fund managers have skill  `[P2]`  `RESOLVED 2026-09-20`
 
 **Symptom.** The first live run of the new fund-persistence measurement (SPEC §52.13) reported

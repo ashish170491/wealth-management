@@ -69,6 +69,14 @@ const TONE = {
   WEAK_PERSISTENCE: 'info',
   NO_BETTER_THAN_CHANCE: 'neutral',
   REVERSAL: 'neutral',
+  // Whether a category is built for the horizon asked about. The two ways of being wrong are NOT
+  // the same mistake and must not look alike: holding a liquid fund for a ten-year goal gives up
+  // return for safety nobody is using, while holding a gilt fund for six-month money can lose the
+  // money. Only the second is amber, and neither is ever red - red reads as "get out", and this
+  // table is describing an instrument rather than judging a decision already taken.
+  FITS: 'success',
+  TOO_VOLATILE_FOR_THIS_HORIZON: 'warning',
+  LONGER_THAN_NEEDED: 'neutral',
 };
 
 /** Values that mean "this app could not look", and therefore get the striped marker. */

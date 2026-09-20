@@ -64,6 +64,9 @@ let holdings = null;  // /api/mf/holdings
 let history = null;   // /api/mf/history
 let coverage = null;  // /api/mf/coverage
 let persistence = null; // /api/mf/persistence
+let horizon = null;     // /api/mf/horizon?months=N
+let horizonMonths = 6;  // the horizon the reader last asked about
+let horizonBusy = false;
 
 // ---------------------------------------------------------------------- the money
 
@@ -667,6 +670,170 @@ function coveragePanel() {
 
 // ---------------------------------------------------------------------- paint
 
+// ------------------------------------------------- where do I put money I need soon?
+
+/**
+ * The horizons offered. Not a free-text box on purpose: a reader typing 7 gets an answer
+ * indistinguishable from the one for 6, and the precision would be invented.
+ */
+const HORIZONS = [
+  { months: 3, label: '3 months' },
+  { months: 6, label: '6 months' },
+  { months: 12, label: '1 year' },
+  { months: 36, label: '3 years' },
+  { months: 60, label: '5 years' },
+  { months: 120, label: '10 years' },
+];
+
+function horizonChips() {
+  const row = el('div.form-row', {});
+  HORIZONS.forEach((h) => {
+    const b = el('button.chip', {
+      type: 'button',
+      'aria-pressed': String(h.months === horizonMonths),
+    }, h.label);
+    b.addEventListener('click', () => {
+      if (horizonBusy || h.months === horizonMonths) return;
+      horizonMonths = h.months;
+      loadHorizon();
+    });
+    row.appendChild(b);
+  });
+  return row;
+}
+
+/**
+ * How a category sits against the horizon.
+ *
+ * Four states drawn four ways, deliberately. "Longer money than this" is not a warning - the fund
+ * will not lose the money, it is simply giving up return for safety nobody is using - and painting
+ * it the same amber as "too volatile for this" would tell the reader those are the same mistake.
+ * NOT_MEASURED keeps the striped marker, because AMFI filing a scheme under a header with no
+ * mandate is this app's gap rather than a property of the fund (Gotcha 121).
+ */
+function fitCell(r) {
+  const node = verdictBadge(r.fit, r.fitLabel, r.basis);
+  if (!r.bandLabel) return node;
+  return el('div', {},
+    node,
+    el('span.cell-sub', {}, 'built for ' + r.bandLabel));
+}
+
+/**
+ * The measured downside, with the direction it must be read in.
+ *
+ * The worst figure is a FLOOR on how bad it got, not a ceiling on how bad it can get: a fund that
+ * failed outright was merged away and left the record entirely. That is the one direction a
+ * downside reading must never be inverted, so the caveat rides on the cell rather than sitting in
+ * a footnote the reader will not reach.
+ */
+function downsideCell(r) {
+  if (!r.downsideMeasured) return unmeasured(r.downsideReason || 'Not enough history on file.');
+  const share = r.shareNegativePct;
+  return el('div', {},
+    el('span.cell-main', {}, pct(r.worstPct, { digits: 1 })),
+    el('span.cell-sub', {},
+      missing(share) ? '' : num(share, 0) + '% of stretches ended lower'),
+    r.worstFrom
+      ? el('span.cell-sub', {}, 'worst: ' + shortDate(r.worstFrom + '-01')
+        + ' to ' + shortDate(r.worstTo + '-01'))
+      : null);
+}
+
+const HORIZON_COLS = [
+  { key: 'categoryLabel', label: 'Category', render: (r) => el('div', {},
+    el('span.cell-main', {}, r.categoryLabel),
+    el('span.cell-sub', {}, humanLabel(r.assetClass))) },
+  { key: 'fit', label: 'Right for this?', render: fitCell },
+  {
+    key: 'schemesAvailable',
+    label: 'Funds on offer',
+    align: 'r',
+    render: (r) => el('div', {},
+      el('span.cell-main', {}, num(r.schemesAvailable, 0)),
+      r.ownedHere ? el('span.cell-sub', {}, r.ownedHere + ' you already hold') : null),
+  },
+  {
+    key: 'worstPct',
+    label: 'Worst stretch on record',
+    align: 'r',
+    render: downsideCell,
+  },
+  {
+    key: 'independentWindows',
+    label: 'Independent stretches',
+    align: 'r',
+    // Never the window count. Overlapping monthly windows hold no more information than the
+    // months underneath them, and reading the larger number as a sample size is Gotcha 92.
+    render: (r) => (r.downsideMeasured
+      ? el('span', {}, num(r.independentWindows, 0)) : el('span.faint', {}, '—')),
+  },
+];
+
+function horizonPanel() {
+  if (!horizon) return skeleton(2);
+
+  const rows = horizon.categories || [];
+  // A category that fits but has no Direct-plan Growth scheme publishing today is not an option,
+  // and listing it under "built for this" would read as one. It happens for real: AMFI's Low
+  // Duration header carries eighteen schemes and not one of them is Direct-Growth, because the
+  // AMCs file those under a pre-2018 header instead. So it is named separately rather than
+  // dropped - an empty category is a fact about the feed's labelling, not about the market.
+  const fits = rows.filter((r) => r.fit === 'FITS' && r.schemesAvailable > 0);
+  const fitsButEmpty = rows.filter((r) => r.fit === 'FITS' && !r.schemesAvailable);
+  const others = rows.filter((r) => r.fit !== 'FITS');
+
+  return el('div', {},
+    horizonChips(),
+    el('div.info-box', {},
+      el('h4', {}, 'Money you need in ' + horizon.horizonLabel),
+      el('p', {}, horizon.headline),
+      el('p', {},
+        el('strong', {}, 'Two different things are on this table. '),
+        'Whether a category is built for your horizon comes from SEBI’s own rules and is printed '
+        + 'beside every row — it is regulation, not a forecast, so it does not go out of date the '
+        + 'way a performance ranking does. What each one actually did is measured on this app’s '
+        + 'own month-end archive, and it is the only evidence that could contradict the rule.')),
+
+    fits.length
+      ? el('div', {},
+        el('h4', { style: 'margin:16px 0 6px' }, 'Built for this'),
+        table(HORIZON_COLS, fits, { filter: false, sortKey: 'categoryLabel', sortDir: 'asc' }))
+      : empty('Nothing on file is built for this',
+        'That is the finding rather than a gap. Over a period this short the things worth '
+        + 'comparing are a bank account and a sweep deposit, not funds.'),
+
+    fitsButEmpty.length
+      ? el('p.muted', { style: 'font-size:13px;margin:10px 0 0' },
+        fitsButEmpty.length + (fitsButEmpty.length === 1
+          ? ' further category is built for this horizon but has no Direct-plan Growth scheme '
+          : ' further categories are built for this horizon but have no Direct-plan Growth scheme ')
+        + 'publishing under that heading today ('
+        + fitsButEmpty.map((r) => r.categoryLabel).join(', ')
+        + '). That is a fact about how the AMCs label their schemes rather than about the market — '
+        + 'funds of that kind exist, filed under one of the older headings.')
+      : null,
+
+    el('div', { style: 'margin-top:18px' },
+      el('h4', { style: 'margin:0 0 6px' }, 'Everything else, and why not'),
+      el('p.muted', { style: 'font-size:13px;margin:0 0 8px' },
+        'Shown rather than hidden, because “this is the wrong tool for that money” is a finding '
+        + 'and an empty table reads as nothing to report.'),
+      table(HORIZON_COLS, others, { filter: false, sortKey: 'categoryLabel', sortDir: 'asc' })),
+
+    (horizon.realities || []).length
+      ? el('div', { style: 'margin-top:18px' },
+        el('h4', { style: 'margin:0 0 6px' }, 'What actually decides this, and it is not the fund'),
+        el('ul', {}, ...(horizon.realities || []).map((r) => el('li', {}, r))))
+      : null,
+
+    (horizon.caveats || []).length
+      ? el('div', { style: 'margin-top:14px' },
+        el('h4', { style: 'margin:0 0 6px' }, 'What this cannot tell you'),
+        el('ul', {}, ...(horizon.caveats || []).map((c) => el('li', {}, c))))
+      : null);
+}
+
 function paint() {
   const rows = (holdings && holdings.holdings) || [];
   const measured = (lens && lens.holdings) || [];
@@ -734,6 +901,13 @@ function paint() {
   measured.filter((h) => h.recordVerdict !== 'NOT_MEASURED'
     && h.recordVerdict !== 'NOT_COMPARABLE').length));
 
+  nodes.push(withSummary(collapse(section('Where do I put money I need soon?',
+    'The question the rest of this page cannot answer. Which kinds of fund are built for money '
+    + 'with a date on it — and what the worst stretch of exactly that length actually did. No '
+    + 'fund is named as worth owning here, for the reason measured two sections above.',
+    horizonPanel()), { key: 'funds:horizon' }),
+  horizon ? horizon.categoriesFitting + ' fit' : null, { type: 'info' }));
+
   nodes.push(withSummary(collapse(section('How deep this app’s record goes',
     'Every figure above is computed from month-end prices this app fetched and stored. This is '
     + 'how many months it has, and what happened in the ones it does not.',
@@ -763,18 +937,40 @@ async function reload() {
   // assigning it straight through leaves every field undefined, so the page renders its section
   // shells with nothing inside them: HTTP 200 on the page, on every module and on every
   // endpoint, the syntax checker clean, and a blank screen (SPEC 51, Gotcha 137).
-  const [p, hold, hist, cov, pers] = await Promise.all([
+  const [p, hold, hist, cov, pers, hz] = await Promise.all([
     get('/api/mf/portfolio').then((r) => r.data),
     get('/api/mf/holdings').then((r) => r.data),
     get('/api/mf/history').then((r) => r.data),
     get('/api/mf/coverage').then((r) => r.data),
     get('/api/mf/persistence').then((r) => r.data),
+    get('/api/mf/horizon?months=' + horizonMonths).then((r) => r.data),
   ]);
   lens = p;
   holdings = hold;
   history = hist;
   coverage = cov;
   persistence = pers;
+  horizon = hz;
+  paint();
+}
+
+/**
+ * Re-read just the horizon table when the reader picks a different one.
+ *
+ * Deliberately not a full reload: everything else on this page is unaffected by the horizon, and
+ * re-fetching five endpoints to redraw one table would make the click feel like a page load. The
+ * busy flag stops a second click landing on top of the first (the B-115 shape one level down).
+ */
+async function loadHorizon() {
+  horizonBusy = true;
+  try {
+    const r = await get('/api/mf/horizon?months=' + horizonMonths);
+    horizon = r.data;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    horizonBusy = false;
+  }
   paint();
 }
 

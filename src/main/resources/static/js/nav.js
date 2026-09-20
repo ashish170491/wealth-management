@@ -30,6 +30,7 @@ const PAGES = [
   { href: 'market.html', label: 'Market' },
   { href: 'watchlist.html', label: 'Watchlist' },
   { href: 'funds.html', label: 'Funds' },
+  { href: 'goals.html', label: 'Goals' },
   { href: 'ipo.html', label: 'IPOs' },
   { href: 'macro.html', label: 'Events' },
   { href: 'themes.html', label: 'Themes' },
@@ -52,6 +53,9 @@ const RELEVANT = {
   // the strip with the NAV date would read "3 days ago" on a job that worked perfectly (B-119,
   // Gotcha 140). Every rendered NAV on the page separately carries its own "as of" date.
   'funds.html': ['fundNav'],
+  // Goals are typed by the investor and nothing schedules a write to them, so the only stamp
+  // worth reading here belongs to the evidence beside each goal - the fund archive's own pull.
+  'goals.html': ['fundNav'],
   'ipo.html': ['ipoIssues'],
   'macro.html': ['macroEvents', 'marketImpactNews'],
   'themes.html': ['multibaggerScores'],

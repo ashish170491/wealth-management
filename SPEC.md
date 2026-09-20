@@ -958,6 +958,13 @@ is Gotcha 118's hazard aimed at whoever maintains this next. `/api/mf` also matc
 - `GET /api/mf/lens?code=` — the same for one scheme. **404 = never persisted here**, a gap in this app's record rather than a statement about the scheme.
 - `GET /api/mf/history` — how deep the month-end archive goes, with **four outcomes never collapsed**: fetched, not published (asked and silent — a finding), failed (the only real gap), and absent from the table entirely (never attempted). DB-only.
 - `POST /api/mf/history/backfill?limit=&force=` — one bounded, paced, resumable pass of the month-end backfill from 2018-04. **Refused from 14:00 with a 409 carrying its reason.** `force` re-attempts settled months and exists for one situation that has already happened once: the parser that read them was wrong (B-130). Re-fetching is safe — a NAV point is keyed on `(scheme, date)`.
+- `GET /api/mf/horizon?months=&category=` — **where do I put money I need in N months** (§52.16). Two different things, never read as one: the **fit** is SEBI's own category mandate, which is regulation rather than a forecast, and the **downside** is what each category actually did over windows of that length in this app's archive. Ranks nothing and names no scheme as worth owning; passing `category` expands one category into its schemes, **sorted by name**. DB-only and page-load safe, with no network call of any kind.
+
+### Goals (§53) — the one surface that recommends anything, because it needs no forecast
+- `GET /api/portfolio/goals` — every active goal with its implied equity/debt split, the measured worst stretch of that length beside it, the blend across all goals against what is actually held, and the mandatory caveats. DB-only, page-load safe.
+- `GET /api/portfolio/goals/rules` — the rule table itself, so the judgement can be read rather than trusted. **No I/O at all**, the same pattern as `GET /api/macro/map` and `/api/learning/variants`.
+- `POST /api/portfolio/goals` — create or update. The investor's own write (§46.7 click-only); **422 with the reason in the body** when the name or the date is missing. **There is no other writer and no seeder** (§53.3).
+- `DELETE /api/portfolio/goals/{id}` — soft delete; the record is kept.
 
 ---
 
@@ -1023,6 +1030,11 @@ silently folded into HHI, sector weights and the TWR series.
 | `mf_holding` | What the investor owns, from Kite `/mf/holdings`, keyed `(isin, folio)`. `quantity numeric(18,4)` — **never `int`**. Nullable `amfi_scheme_code` beside `scheme_resolved_from`; **soft-delete** via `active`/`exited_on`, because here the history *is* the feature |
 | `mf_sync_run` | One row per NAV pull: `last_pulled_at`, rows parsed, unparsed lines, unclassified headers. The freshness key reads this, **not** a NAV date (§52.6) |
 | `mf_history_fetch` | One row per **month**, unique on `for_month`. Records that a month was *asked about*, which is a different fact from whether any NAV came back. `status ∈ FETCHED / NOT_PUBLISHED / FAILED`, plus `date_used` — the business day that actually answered, which is **not** the calendar month end when that fell on a weekend or a holiday. Without it, "never fetched" and "fetched, and those schemes had no NAV" are indistinguishable in `mf_nav_history` — both are an absence of rows, and the second one read as fact says a fund ceased to exist (§52.7, Gotcha 102) |
+
+### Goal table (✅ — §53, 2026-09-20)
+| Table | Purpose / retention |
+|---|---|
+| `investment_goal` | One row per thing the investor is saving for. **`target_date` is the only required field** — it is what makes the equity/debt decision answerable without a forecast. `target_amount` and `earmarked_value` are optional and **null means not stated, never zero** (§53.3): treating an unstated earmark as zero reports a shortfall equal to the whole goal. `earmarked_as_of` sits beside the earmark so a stale figure is visibly stale. Soft-delete via `active`. **There is no seeder** — every row was typed by the investor, which is B-121's lesson taken to its conclusion; the equivalent of `targets_stated` here would be the constant `true`, and a constant on screen is the shape of a measurement nobody took |
 
 ### LOB columns
 All JSON/audit text fields use `@Column(columnDefinition = "TEXT")`, **not** `@Lob String`. Rationale: Hibernate 6 + PostgreSQL maps `@Lob String` to `oid`, requiring an open transaction to stream. `SchemaMigrationRunner` runs idempotent startup conversion of any legacy `oid` columns to `TEXT`.
@@ -6002,6 +6014,138 @@ the per-category counts. `GET /api/mf/persistence` is DB-only and page-load safe
 neighbours, since it reads every stored NAV point in one bulk query and ranks them twice, but it
 makes no network call of any kind.
 
+### 52.15 The universe widened to debt and hybrid ✅ (2026-09-20)
+
+The investor asked where to put money needed in the short term, and the module could not answer for
+a structural reason rather than a bad one: `isTrackable()` required `AssetClass.EQUITY`, so **not one
+debt scheme, liquid fund or hybrid had ever been persisted**. The question had no universe, not a
+wrong answer. Same shape as §52.14, where index funds were the yardstick and were invisible.
+
+**The split, and the safety property.** `AmfiSchemeRow.isTrackable()` now keeps any open-ended,
+Direct-plan, Growth-option scheme whose asset class is equity, debt or hybrid, excluding anything
+exchange-traded. `isScreenable()` is **untouched**, and every category added answers `false` to
+`isActivelyManagedEquity()` — asserted in `SebiCategoryTest`, not left to a comment — so no equity
+peer median, percentile, quartile or coverage count can move. That is the third time this property
+has carried a widening (§52.5's `computeActualWeights()`, §52.14's index funds), and it is the
+reason each of them could ship without re-verifying the equity numbers by hand.
+
+**Gold is absent, and that is a fact about the file.** AMFI publishes gold only as an ETF, and an
+ETF's net asset value is not what you would pay for it — it trades away from NAV by an amount
+nobody here measures. So there is no gold category to keep. Solution-oriented schemes (retirement
+and children's funds, 42 Direct-Growth rows) are left out too: a five-year lock-in makes them a
+different question, though one the investor actually holds is still persisted by the owned-scheme
+clause.
+
+**B-096 again, and worse than in equity.** SEBI recategorised debt in 2018 and **AMFI never retired
+the old headers**, so the same live file carries two complete taxonomies with current NAV dates:
+
+| Category | Post-2018 header | Pre-2018 header | Total |
+|---|---:|---:|---:|
+| Liquid | 312 | 186 | 498 |
+| Overnight | 204 | 103 | 307 |
+| Money Market | 154 | 91 | 245 |
+| Corporate Bond | 131 | 85 | 216 |
+| Credit Risk | 135 | 37 | 172 |
+| Gilt | 87 | 70 | 157 |
+| **Banking & PSU** | **25** | **150** | **175** |
+
+In equity the two spellings halve a peer group. Here matching only the modern taxonomy would leave
+**14%** of Banking & PSU — and every percentile inside it would be wrong while looking perfectly
+fine. Both taxonomies are in `SebiCategory.ALIASES`, and the fixture the test asserts against now
+covers the **2018–2026 archive headers as well as today's file**, because a header that only ever
+appeared in 2019 still has to resolve or those months silently contribute no schemes.
+
+**The ordering of the keyword fallback is load-bearing.** Every pre-2018 debt header reads
+*"Income/Debt Oriented Schemes - …"*, so a bare `DEBT` rule placed early in the chain would swallow
+all fourteen SEBI categories into one bucket — while nothing threw and the row count stayed right.
+`DEBT` is therefore the **last** debt rule, reached only when no mandate word matched, and its label
+says exactly what it means: *debt, category not identified*. `legacyDebtHeadersDoNotAllCollapseIntoOneBucket`
+fails if anyone reorders it.
+
+**Where the old taxonomy does not line up, it gets no answer rather than a guess.**
+`Income/Debt Oriented Schemes - Ultra Short to Short Term Fund` is 255 rows, 235 of them current, and
+its mandate runs from three months to three years — an order of magnitude of duration. It resolves
+to `DEBT` and `HorizonFit` refuses to match it to a horizon. Filing it under whichever neighbour
+looks closer would answer "is this right for six-month money" from a header that cannot say, which
+is B-047's units error in a new place.
+
+**Measured after the change** (first live run, 2026-09-20): schemes persisted **682 → 1,306**,
+`screenableSchemes` **unchanged at 637**. The month-end archive was re-run with `force=true` so the
+new categories get history; re-fetching is safe because a NAV point is keyed on (scheme, date).
+
+### 52.16 Where do I put money I need in N months? ✅ (2026-09-20)
+
+The question §52.13 could not answer. It has two halves and they must not be confused with each
+other or with a recommendation.
+
+**The first half is regulation, not a forecast.** `HorizonFit` is a rule table over SEBI's own
+category definitions — the mandated Macaulay duration bands in the 2017 categorisation circular. A
+Liquid fund may hold nothing maturing beyond 91 days because a rule says so, not because a manager
+is skilful, and that fact does not decay the way a performance ranking does. The duration band is
+converted to a holding horizon on the one principle that needs no forecast: **hold at least as long
+as the portfolio's duration and a rate move cannot cost you money**, because the higher reinvestment
+yield offsets the capital loss over that span. Shorter than the duration and it can.
+
+Four states, never two (Gotcha 121): `FITS`, `TOO_VOLATILE_FOR_THIS_HORIZON`, `LONGER_THAN_NEEDED`,
+`NOT_MEASURED`. The two ways of being wrong are **not the same mistake** and are drawn differently —
+a liquid fund held for a ten-year goal gives up return for safety nobody is using, while a gilt fund
+held for six-month money can lose the money. Only the second is amber and neither is ever red.
+
+The equity floor is **36 months** and is this app's own rather than SEBI's, which sets no holding
+period for an equity fund. ELSS is the exception with a statutory one, and its floor here is **five
+years, not three**: each instalment is locked for three years from the day it goes in, so a monthly
+plan is not fully free until three years after the last one. Reading the headline "three-year
+lock-in" as the horizon would let a goal be funded with money that cannot be withdrawn for it.
+
+**The second half is measured, and it is the only evidence that could contradict the rule.**
+`CategoryDownside` asks this app's own month-end archive what the worst stretch of exactly that
+length did to each category's median — and on the two occasions in this archive when the rule was
+contradicted (the credit events of late 2018 and April 2020) the funds involved were sold as safe.
+Four rules keep it honest:
+
+1. **The median is asked window by window, never built into an index series** (Gotcha 143), so the
+   peer set is whatever actually existed across those months.
+2. **The return is over the whole window and is never annualised.** Multiplying a three-month fall
+   by four states a loss nobody had — B-047's family, and the fourth time it has been guarded here.
+3. **Survivorship runs the flattering way and is stated, not corrected.** A fund that failed and was
+   merged away cannot appear in a later window, so the worst figure is a **floor on how bad it got,
+   not a ceiling on how bad it can get**. That is the one direction a downside reading must never be
+   inverted, so the caveat rides on the cell rather than sitting in a footnote, and the schemes that
+   stopped publishing are counted.
+4. **Month-end granularity hides what happened inside a month**, and a segregated portfolio — what a
+   defaulting debt fund produces — shows up as a NAV step this class reads as a loss without knowing
+   it is one. Both said, neither adjusted for.
+
+Below **5 schemes per window** or **12 priced windows** the reading is refused: a category whose
+median is two funds has not been measured, and reporting "worst: 0%" for it would be the most
+flattering possible failure (Gotcha 44, 68). `independentWindows` is published beside
+`windowsMeasured` and is the only figure of the two that behaves like a sample size (Gotcha 92).
+
+**What is deliberately absent.** No ranked list, for the reason §52.13 measured. Expanding one
+category returns its schemes **sorted by name**, carrying each scheme's own *worst* window — a risk
+reading rather than a performance one — and nothing else. And the facts that actually decide a
+short-horizon answer are printed above the table because they are not about the fund at all: debt
+and hybrid gains bought after 1 April 2023 are taxed at slab rate whatever the holding period, most
+equity funds charge about 1% to leave inside a year, and **under three months the honest comparison
+is between a fund and a bank sweep account**, a difference of a few hundred rupees on a lakh. The
+module is built to be able to say that.
+
+**The credit quality of what a debt fund holds is the thing that decides whether it is safe, and it
+is not in this feed at all.** Named on screen under twelve months rather than left to be inferred.
+
+**One shared read of the archive, added before it crossed the line rather than after.** Widening the
+universe took `mf_nav_history` from ~13,500 rows to **50,333**, and measured on the live archive this
+endpoint took **4.2 s** against `api.js`'s 8 s page-load timeout while it was still three-quarters
+filled. That is B-115's shape — a page-load endpoint whose cost grows every week the archive deepens,
+with nothing failing to mark the moment it stops being fast enough. `MonthEndSeriesCache` holds the
+whole measurable archive, versioned on the row count and invalidated explicitly by the backfill (the
+one path that *corrects* a row in place rather than adding one, which the count cannot see). Both
+this screen and the goal planner read it, because it is one body of data — Gotcha 97's rule moved
+from the broker to the database. Measured after: **0.95 s cold, 0.10 s warm**.
+
+`GET /api/mf/horizon?months=&category=` — DB-only, page-load safe, no network call of any kind.
+Drawn on `funds.html` as *"Where do I put money I need soon?"* with six horizon chips.
+
 ### 52.11 Non-goals
 
 - **No composite score and no ranking.** §41 and §43 are checklists of named gates, not numbers, and
@@ -6032,5 +6176,183 @@ makes no network call of any kind.
 - **No fund enters** `holdings`, `holdings_history`, `findActive()`, `multibagger_scores`,
   `recommendations`, `screening_coverage`, `tax_lot`, `holding_conviction` or
   `holding_classification`.
+- **No debt or hybrid fund is screened, ranked or scored either** (§52.15). They are persisted so
+  the horizon question has a universe; `isScreenable()` stays false for every one of them, asserted
+  by test rather than by comment, which is what guarantees no equity figure moved.
+
+---
+
+## 53. Goals — money with a date on it ✅ Active (2026-09-20)
+
+### 53.1 Purpose, and why this is the one screen that recommends anything
+
+Every other surface in this app refuses to tell the investor what to do, and the refusals are
+argued rather than assumed: §52.13 measured on this market that a fund's past ranking carries no
+information about its next one, §39.5 deleted a whole feature rather than forecast market
+direction, §25 deleted three engines that scored themselves. All of those questions need a forecast.
+
+**The split between equity and debt for money with a date on it does not.** It follows from one
+fact the investor supplies — when they need the money — and one fact the app can measure — what
+the worst stretch of that length actually did. No view on the market is required at any point. So
+this page will say *"this money should not be in shares"* and mean it, while still refusing to name
+a fund, name a stock, or suggest a trade.
+
+That is also the honest home for the half of the investor's original question that §52.16 could not
+answer on its own. §52.16 says which **kinds of fund** are built for a horizon. §53 says **how much
+of a particular pot** belongs on each side of the line. One is about instruments, the other is about
+the investor.
+
+### 53.2 §20 rule 9 declaration
+
+| | |
+|---|---|
+| **Pillar (§1)** | **None, deliberately.** All seven pillars are defined over an operating company with filings, and a goal is not a business. This is a portfolio module under §20 rule 1, the same classification §52 took. |
+| **Horizon judged at** | Not judged. It issues no pick, so there is nothing for `RecommendationTracker` to score. The one figure that *could* be wrong — the measured downside — is measured, not predicted. |
+| **Coverage row (§38.2)** | None. `screening_coverage` is computed over a screening run and a goal is not screened. |
+| **Shadow mode** | Not applicable: it contributes **zero points** to any score anywhere, and there is no field to flip. |
+
+### 53.3 What is stored, and what is refused
+
+One table, `investment_goal`: name, **target date (required)**, target amount, earmarked value,
+the date the earmark was stated, a note, active.
+
+**The date is the only required field and that is the whole design.** A goal without a date is a
+wish, and the app has nothing to say about it — the `POST` refuses with a **422 carrying the reason
+in the body** (`server.error.include-message` is `never`, so a thrown status alone arrives bare —
+B-049's lesson).
+
+**There is no seeder and there never will be one.** Every row was typed by the investor. This is
+B-121's lesson taken to its conclusion: there, ten permanent drift warnings sat on the landing page
+against sector targets nobody had chosen, and the fix was `targets_stated` (Gotcha 68, B-057,
+B-097 — a default is not a statement). Here the equivalent flag would be the constant `true`, and a
+constant on screen is the shape of a measurement nobody took (B-060), so the rule is enforced by the
+**absence of a writer** rather than by a column.
+
+**`earmarkedValue` is stated, not live, and is null by default.** This app cannot tell which of your
+units belong to which goal and does not try — inventing that link would be worse than leaving it
+blank. A null earmark makes the shortfall and the monthly figure `NOT_MEASURED`, **never zero**:
+treating "not stated" as zero would report a shortfall equal to the whole goal and then a monthly
+figure to fund it from scratch, which is Gotcha 21 with a rupee sign on it. The date the earmark was
+stated is stored beside it so a stale figure is visibly stale.
+
+### 53.4 The mix, and the two halves of it
+
+`GoalMix` is a **stated rule**, printed on screen so it can be argued with — the §43.4 discipline
+for a threshold with no cross-section to calibrate against.
+
+| Money needed in | Shares | Debt |
+|---|---:|---:|
+| under 3 years | 0% | 100% |
+| 3 to 5 years | 30% | 70% |
+| 5 to 7 years | 50% | 50% |
+| 7 to 10 years | 65% | 35% |
+| 10 years or more | 75% | 25% |
+
+Two constants carry the judgement. `NO_EQUITY_BELOW_MONTHS` is **36**, and is asserted by test to be
+the *same constant* `HorizonFit.EQUITY_FLOOR_MONTHS` uses rather than a second copy of the number —
+Gotcha 85 at its smallest, and the drift would put a goal's money in equity at a horizon the fund
+screen refuses it at, on two screens the reader sees together. `MAX_EQUITY_PCT` is **75**, and the
+cap exists *because a goal has a date*: an open-ended long-term portfolio has no day on which it
+must be worth a particular amount, so this table does not apply to it. A goal cannot be postponed by
+definition, so the last years before the date are spent stepping down, which the ramp does
+automatically as the horizon shrinks.
+
+**Beside the rule sits the measurement that could contradict it.** `HorizonEvidenceSource` — a port
+in the portfolio package implemented in the funds package, so the dependency points one way exactly
+as `FundAllocationSource` does — reports what the worst stretch of exactly that length did to the
+**proposed split**. A reader who thinks the ramp is too cautious can see the number it is protecting
+against.
+
+**The blend is walked as a real path, and the first version was not** — found by running it over the
+live archive rather than in review (B-113's rule, and the third time it has paid in this module).
+That version took the worst equity window and the worst debt window and mixed them by weight, which
+is arithmetic over two numbers describing *different months*, so it describes a portfolio nobody
+held. It failed in both directions at once: an all-debt goal came out at exactly **0.0%** for every
+horizon — a constant on screen where a measurement should be (B-060's signature) — because the debt
+leg had to be floored at zero to stop a good bond year flattering a bad equity one, so the floor was
+doing the work rather than the data. `CategoryDownside.measureBlend` now walks each window once,
+takes the median equity return and the median debt return **over those same months**, blends them at
+the stated weight and reports the worst of those.
+
+**The worst window is often a gain, and that is said out loud.** This archive begins in April 2018
+and holds one crash that recovered inside a year, so for any horizon beyond about two years the
+worst stretch on file still finishes ahead: a 30/70 split over three and a half years reads
+**+32.3%**. A column headed *"worst stretch on record"* showing a gain, unlabelled, is the most
+flattering failure this page could produce — so the positive case is named in the cell, in a
+paragraph beneath the table and in the sentence itself, as a fact about the length of the record
+rather than a fact about the risk. *Eight years is not long enough to have seen a decade that went
+nowhere, and India has had those.*
+
+Two more rules on that evidence. **Both legs are pooled**, because the question is "what did equity
+do", and standing mid caps in for all of equity would answer a narrower question under a wider name.
+**The debt leg pools credit-risk and gilt funds in with liquid funds deliberately** — they are what
+someone who "put it in a debt fund" might have owned, and the two bad episodes in this archive are
+precisely what a goal plan needs to have survived; excluding them would make debt look like a bank
+account, the flattering direction.
+
+### 53.5 The monthly figure assumes the money earns nothing, and that is the point
+
+Every goal calculator in the industry asks for an expected rate and quotes a monthly figure to the
+rupee. Change 12% to 9% and the answer moves by a third, so the precision is entirely borrowed from
+an assumption nobody can check — a forecast wearing a plan's clothes, which is the shape §19 bars.
+
+`requiredMonthlyAtZeroReturn` is different in kind: it is arithmetic on two numbers the investor
+supplied, it cannot be wrong, and it is a genuine upper bound on what the goal costs per month.
+Anything the money earns is then a reason the goal lands **early** rather than the reason it lands at
+all. It rounds **up**, never down — rounding down produces a figure that does not reach the goal,
+the one direction this number must never fail in. It is also the only framing that stays honest for
+a short-horizon goal, where the money really should be earning close to nothing.
+
+`GoalMath.wouldHaveNeeded` exists for a second line and is deliberately awkward: it takes a
+**measured** rate and every caller must label the result as what would have happened over the period
+that rate was measured on. It is never defaulted to a conventional 12%.
+
+### 53.6 What the comparison can and cannot say
+
+Because nothing is earmarked, the blend is taken across all active goals **weighted by target
+amount** and compared against `AllocationService.computeCombinedWeights()` — the whole portfolio.
+That is a real reading and a limited one, and the page says so in words rather than leaving the
+reader to infer it.
+
+**Hybrid funds are counted as neither side.** How much of one is in equity moves with its manager
+and is not published in the file this app reads, so splitting it would be a guess dressed as
+arithmetic. They are reported separately and named.
+
+`GAP_TOLERANCE_PP` is **10**. Below that the difference is inside what one month of market movement
+does to the mix, and calling it a gap would raise a row that fires every day and can never clear —
+B-121's failure exactly, and Gotcha 132's reason for caring about it.
+
+### 53.7 Non-goals
+
+- **No projection of portfolio value forward.** Not at a conventional rate, not at a measured one,
+  not with a band. The measured rate appears only as "what would have happened", never as "what will".
+- **No worst-case figure presented without the length of the record beside it.** Where the worst
+  stretch on file is a gain, that is published *as* a gain and named as a statement about an
+  eight-year archive. Suppressing it would be dishonest in one direction and printing it bare would
+  be dishonest in the other.
+- **No earmarking of holdings to goals**, until there is a real basis for it. A guessed link is worse
+  than a blank, because it makes every figure downstream look computed.
+- **No fund, scheme or stock named anywhere.** The split is between two kinds of investment. Which
+  fund to hold is §52's question and §52.13 measured that the usual answer to it does not work.
+- **No buy, sell, switch or redeem instruction.** Pinned by a word-boundary test over every reason
+  string, the same guard §51 and §52 carry — and for the same reason, since a bare substring fails
+  on ordinary prose (Gotcha 53).
+- **No tax calculation.** Moving money between equity and debt is a sale and a purchase, possibly
+  taxable and possibly exit-loaded. The caveat names both and refuses the arithmetic — §52.8's
+  `PlanCostRead` rule one level up.
+- **Zero points to any score**, and no field to flip.
+
+### 53.8 Endpoints and screen
+
+- `GET /api/portfolio/goals` — every active goal with its split, the evidence beside it, the blend
+  against what is held, and the mandatory caveats. DB-only, page-load safe.
+- `GET /api/portfolio/goals/rules` — the rule table itself, so the judgement can be read rather than
+  trusted. No I/O at all, the same pattern as `GET /api/macro/map` and `/api/learning/variants`.
+- `POST /api/portfolio/goals` — create or update. The investor's own write (§46.7 click-only),
+  refused with **422 and the reason in the body** when the name or date is missing.
+- `DELETE /api/portfolio/goals/{id}` — soft delete; the record is kept.
+- Dashboard: **`goals.html`** ("Goals" in the nav, between Funds and IPOs), loading the two GETs and
+  nothing else. Freshness key `fundNav` — nothing schedules a write to a goal, so the only stamp
+  worth reading is the one belonging to the evidence beside it.
 
 ---

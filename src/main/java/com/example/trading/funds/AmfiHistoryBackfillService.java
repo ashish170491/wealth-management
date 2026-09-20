@@ -54,6 +54,7 @@ public class AmfiHistoryBackfillService {
     private final AmfiNavClient client;
     private final MutualFundConfig config;
     private final MutualFundSchemeRepository schemeRepository;
+    private final MonthEndSeriesCache seriesCache;
     private final MutualFundNavRepository navRepository;
     private final MutualFundHoldingRepository holdingRepository;
     private final MutualFundHistoryFetchRepository fetchRepository;
@@ -169,6 +170,11 @@ public class AmfiHistoryBackfillService {
                 }
             }
         }
+
+        // Drop the shared series cache: this is the one path that can CORRECT a stored NAV in
+        // place rather than add one, and a corrected row leaves the row count - the cache's
+        // version token - exactly where it was (B-130 is why that path exists at all).
+        seriesCache.invalidate();
 
         int remaining = pendingMonths(today).size();
         log.info("AMFI history backfill: {} months attempted, {} fetched, {} not published, "

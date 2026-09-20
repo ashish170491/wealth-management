@@ -49,6 +49,7 @@ public class MutualFundController {
     private final AmfiHistoryBackfillService historyBackfillService;
     private final FundLensService lensService;
     private final FundPersistenceService persistenceService;
+    private final HorizonService horizonService;
 
     // ------------------------------------------------------------------ reads (DB-only)
 
@@ -114,6 +115,37 @@ public class MutualFundController {
     @GetMapping("/persistence")
     public Map<String, Object> persistence() {
         return persistenceService.persistence();
+    }
+
+    /**
+     * Where do I put money I need in N months? (SPEC 52.16)
+     *
+     * <p>DB-only and page-load safe, with no network call of any kind. Heavier than its neighbours:
+     * it reads every stored month-end point for every category that has one.
+     *
+     * <p>Two different things come back and they must not be read as one. The <b>fit</b> is SEBI's
+     * own category mandate - what a category is built for - which is regulation rather than a
+     * forecast. The <b>downside</b> is what each category actually did over windows of that length
+     * in this app's archive, which is the only evidence that can contradict the mandate.
+     *
+     * <p>It <b>ranks nothing and names no scheme as worth owning</b>. Passing {@code category}
+     * expands one category into its schemes, sorted by name - the same refusal 52.11 makes, for
+     * the reason 52.13 measured.
+     */
+    @GetMapping("/horizon")
+    public Map<String, Object> horizon(@RequestParam(defaultValue = "6") int months,
+                                       @RequestParam(required = false) String category) {
+        SebiCategory c = null;
+        if (category != null && !category.isBlank()) {
+            try {
+                c = SebiCategory.valueOf(category.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                // An unknown category name is a caller mistake, not a server error: the horizon
+                // table still answers, and the expansion is simply absent.
+                c = null;
+            }
+        }
+        return horizonService.forHorizon(months, c);
     }
 
     // ------------------------------------------------------------------ writes (button-only)
