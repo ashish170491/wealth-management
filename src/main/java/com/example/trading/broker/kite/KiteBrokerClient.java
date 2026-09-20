@@ -363,6 +363,50 @@ public class KiteBrokerClient implements BrokerClient {
         return java.util.Collections.emptyList();
     }
 
+    /**
+     * Mutual fund units held in the demat account (SPEC §52.3).
+     *
+     * <p>Goes through {@code executeWithRetry} like every other call, so it claims a slot on the
+     * process-wide ~2.9 req/s gate rather than bypassing it (Gotcha 23).
+     */
+    @Override
+    public java.util.List<Map<String, Object>> getMutualFundHoldings() {
+        log.info("Request: Fetching mutual fund holdings from broker");
+
+        Map<String, Object> response = executeWithRetry(
+                webClient.get()
+                        .uri("/mf/holdings")
+                        .headers(h -> h.set("Authorization",
+                                "token " + config.getApiKey() + ":" + config.getAccessToken()))
+                        .retrieve()
+                        .onStatus(status -> status.is4xxClientError() || status.is5xxServerError(),
+                                resp -> resp.bodyToMono(String.class).flatMap(errorBody -> {
+                                    log.error("MF holdings fetch failed with status {}: {}",
+                                            resp.statusCode(), errorBody);
+                                    return Mono.error(new RuntimeException(
+                                            "MF holdings fetch failed: " + errorBody));
+                                }))
+                        .bodyToMono(Map.class))
+                .block();
+
+        if (response != null && response.get("data") instanceof java.util.List<?> rawList) {
+            java.util.List<Map<String, Object>> holdings = new java.util.ArrayList<>();
+            for (Object item : rawList) {
+                if (item instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) item;
+                    holdings.add(row);
+                }
+            }
+            log.info("Found {} mutual fund holdings from broker", holdings.size());
+            return holdings;
+        }
+
+        // Distinguishable in the log from a failure: the call succeeded and the book is empty.
+        log.info("No mutual fund holdings returned by broker");
+        return java.util.Collections.emptyList();
+    }
+
     @Override
     public String exitPosition(String exchange, String tradingSymbol, String product, int quantity, String transactionType) {
         log.info("Request: Exiting position - Exchange: {}, Symbol: {}, Product: {}, Qty: {}, Type: {}",

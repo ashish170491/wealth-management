@@ -108,6 +108,77 @@ and renaming it over the original is the version of this that cannot lose data.
 
 ## Resolved Bugs
 
+### B-128 - An AMC name containing brackets was read as a category, silently mis-filing 18% of the AMFI feed  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** On the first run of the new AMFI parser (SPEC §52) over the live 1.5 MB file, 13
+category headers came back `UNCLASSIFIED` — and the largest of them, accounting for **2,535 scheme
+rows (18% of the file)**, was `IL&FS Mutual Fund (IDF)`. Nothing threw, no line failed to parse, and
+the total row count was exactly right at 14,375.
+
+**Root cause.** `AmfiNavParser.looksLikeCategoryHeader()` identified a category block by testing for
+a parenthesis on any semicolon-free line. AMFI's category headers do carry one
+(`Open Ended Schemes(Equity Scheme - Mid Cap Fund)`), but so does that AMC's *name*. The line was
+therefore taken as a new category, resolved to `UNCLASSIFIED`, and **every scheme printed beneath it
+inherited a category that does not exist** until the next real header reset it.
+
+**Blast radius.** Category is the peer group. A mis-filed scheme leaves its true category's
+cross-section and lands in a bucket with no benchmark and no peers, so its percentile, its category
+standing and its category's own median are all computed over the wrong population — while every
+screen renders normally. It would also have understated the screenable universe and inflated the
+"unclassified headers" figure that the coverage endpoint publishes as a measure of the app's own
+gaps.
+
+**Fix.** [AmfiNavParser.java](src/main/java/com/example/trading/funds/amfi/AmfiNavParser.java) — a
+category header must now *begin* with a known structure word (`Open Ended`, `Close Ended`,
+`Interval`). A semicolon-free line that carries a category separator but no structure word is still
+treated as an AMC name **and reported** in `ambiguousHeadings`, so that if AMFI ever introduces a
+fourth structure the mis-read is visible rather than silently re-categorising the rows beneath it.
+
+**Verification.** Re-run over the same live file: unclassified headers **13 → 1** (a genuinely new
+`Silver ETF` category, since given a rule), ambiguous headings 0, category headers 105 → 104 (the
+AMC no longer counted as one), screenable universe unchanged at 571. Pinned by
+`AmfiNavParserTest.amcNameContainingBracketsIsNotACategory`.
+
+**Lesson.** B-113's rule, applied to its own author: **run a new rule over real rows and look at the
+distribution before shipping it.** An invented test case would have used a tidy AMC name, and every
+one of them passed. What exposed this was counting rows per category on the real file — the same
+instrument that found Institutional Interest constant at 40 and monthly RSI constant at 50.
+
+---
+
+### B-129 - A fresh install reported the investor's own mutual funds as unmatched, for a full day  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** First live run of the two fund syncs in their natural order: the AMFI pull wrote 571
+schemes, then the broker sync fetched **6 real holdings and resolved none of them** —
+`"6 holding(s) could not be matched to an AMFI scheme by ISIN"`. Running the AMFI pull a second time
+wrote 577 schemes and the next broker sync resolved all 6.
+
+**Root cause.** An ordering flaw in the new code, not in the data. `MutualFundNavSyncService`
+deliberately persists only the screenable universe **plus every scheme the investor owns** — the
+second clause exists so the module is not blind to a Regular plan or a debt fund it would otherwise
+never store. But that clause reads `mf_holding`, which on a fresh install is empty, so the schemes
+behind the investor's own funds were never written; the broker sync then resolved against a table
+that could not contain them.
+
+**Blast radius.** Six holdings rendering as unresolved reads on screen as *"AMFI has no record of the
+funds you hold"* — a false statement about the data, caused entirely by which pass ran first, and
+self-correcting only after the next day's 12:30 job. Worse than a visible error because it is a
+plausible-looking finding: AMFI genuinely does omit some schemes, so nobody would question it.
+
+**Fix.** `MutualFundHoldingsService.resolveUnmatched()` retries resolution for active holdings with
+no scheme code, and `MutualFundNavSyncService.persist()` calls it immediately after saving schemes.
+A scheme persisted in this pass now rescues its holding in the same pass. Idempotent, and it never
+un-resolves anything.
+
+**Verification.** Live: 6 of 6 unresolved after the first pair of runs, **0 of 6** after the loop was
+closed; scheme count 571 → 577. Re-running the pull is a no-op.
+
+**Lesson.** When a feature has two writers that read each other's output, check the **first** run and
+not the steady state. Both passes were individually correct and their combination was not, which no
+unit test of either would have caught.
+
+---
+
 ### B-127 - A target the share price had already passed kept dragging the median down  `[P2]`  `RESOLVED 2026-09-18`
 
 **Symptom.** The Analysts column reported CPPLUS at **minus 4.6%** "upside" to a median target of

@@ -230,9 +230,12 @@ class DataHealthTest {
         // behind either, which is why multibaggerScores is hard-coded the same way.
         // If a seventh appears, check the annotation before adding it here - someone may have
         // copied a time out of a source file again (B-087).
+        // The seventh, added 2026-09-20 with SPEC 52: fundNav. Verified as this comment instructs -
+        // MutualFundNavScheduler carries cron = "0 30 12 * * MON-FRI" as a literal with no property
+        // behind it, so 12:30 here is the real schedule and not a time copied out of a source file.
         long hardCoded = DataHealth.SCHEDULE.values().stream()
                 .filter(sp -> sp.cronProperty() == null).count();
-        assertThat(hardCoded).isEqualTo(6);
+        assertThat(hardCoded).isEqualTo(7);
     }
 
     @Test

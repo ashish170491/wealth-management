@@ -98,6 +98,27 @@ public interface BrokerClient {
     }
 
     /**
+     * Fetches the mutual fund units held in the demat account (SPEC §52.3).
+     *
+     * <p>A different endpoint from {@link #getHoldings()} and therefore a different table: a fund
+     * row written into {@code holdings} is deleted by the next reconciliation, because that pass
+     * removes everything the <em>equity</em> holdings endpoint did not return.
+     *
+     * <p>Note two shapes in the payload that are easy to mis-read. {@code tradingsymbol} is an
+     * <b>ISIN</b>, not a ticker. {@code quantity} is <b>fractional</b> — the documented samples
+     * include {@code 382.488} and {@code 1.334} — so any consumer storing it as an integer
+     * truncates the position.
+     *
+     * @return List of holdings; each map includes {@code tradingsymbol} (the ISIN), {@code folio},
+     *         {@code fund}, {@code quantity}, {@code average_price}, {@code last_price},
+     *         {@code last_price_date}, {@code pledged_quantity} and {@code pnl}. Empty when the
+     *         broker exposes no mutual fund book.
+     */
+    default java.util.List<Map<String, Object>> getMutualFundHoldings() {
+        return java.util.Collections.emptyList();
+    }
+
+    /**
      * Fetches the status and details of a specific order.
      *
      * @param orderId The broker order ID to check

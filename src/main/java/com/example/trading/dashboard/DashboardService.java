@@ -131,6 +131,9 @@ public class DashboardService {
     private final com.example.trading.analyst.AnalystTargetViewService analystTargetViewService;
     /** SPEC 50: the freshness stamp for quarterly result capture. Read-only, like every field here. */
     private final com.example.trading.earnings.QuarterlyResultRepository quarterlyResultRepository;
+
+    /** SPEC 52 - read for the freshness strip only; the fund screens have their own controller. */
+    private final com.example.trading.funds.MutualFundSyncRunRepository mutualFundSyncRunRepository;
     private final com.example.trading.learning.ScreeningCoverageService screeningCoverageService;
     private final com.example.trading.fundamentals.FundamentalsBackfillService fundamentalsBackfillService;
     private final com.example.trading.fundamentals.FundamentalsBackfillStatusRepository
@@ -201,6 +204,15 @@ public class DashboardService {
         // stamp would read amber every inter-season week for no fault at all.
         out.put("quarterlyResults", asString(quietly("quarterlyResults", () -> null,
                 quarterlyResultRepository::findLatestCapturedAt)));
+        // Mutual funds (SPEC 52). Stamped with when the JOB RAN, never with the NAV date - they are
+        // two different facts and merging them is B-119 in both directions. A mutual fund has one
+        // price a day struck after the cut-off, so a Monday pull legitimately carries Friday's NAV;
+        // stamping the strip with that date would read "3 days ago" and make a healthy job look
+        // broken, while stamping the figures with the run time would label Friday's NAV as today's.
+        out.put("fundNav", asString(quietly("fundNav", () -> null, () ->
+                mutualFundSyncRunRepository.findFirstByOrderByLastPulledAtDesc()
+                        .map(com.example.trading.funds.MutualFundSyncRunEntity::getLastPulledAt)
+                        .orElse(null))));
 
         return out;
     }

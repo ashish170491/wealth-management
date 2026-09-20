@@ -70,6 +70,10 @@ const FRESHNESS_LABELS = {
   marketImpactNews: 'Headlines',
   analystTargets: 'Analyst targets',
   quarterlyResults: 'Results',
+  // SPEC 52.6 - when the AMFI pull last RAN, not the date of the NAVs it carries. Those are two
+  // different facts: a Monday pull legitimately holds Friday's NAV, and stamping this with that
+  // date would read "3 days ago" on a job that worked (B-119).
+  fundNav: 'Fund NAVs',
 };
 
 /** Past this many days a timestamp is called out in amber. */

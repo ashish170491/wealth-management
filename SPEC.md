@@ -126,7 +126,7 @@ Let the investor declare target portfolio weights, and continuously measure drif
 
 ### 5.2 Required Behavior
 - Persist one or more **portfolio profiles** (e.g., "Retirement 2045", "Growth 2030") with target weights by:
-  - **Asset class** (equity / cash / gold — for future extension)
+  - **Asset class** (direct equity / equity funds / debt funds / hybrid / gold / cash) — ✅ implemented 2026-09-20, §52.5
   - **Market cap** (large / mid / small) — initial focus
   - **Sector** (banking, IT, pharma, metals, auto, etc.)
   - **Individual stock** (explicit target weight, optional)
@@ -137,7 +137,16 @@ Let the investor declare target portfolio weights, and continuously measure drif
 
 ### 5.3 Out of Scope
 - Multi-account aggregation.
-- Non-equity assets (fixed income, ETFs, mutual funds) — may be added later.
+- ~~Non-equity assets (fixed income, ETFs, mutual funds) — may be added later.~~
+  **Previously out of scope, now in scope (reversed 2026-09-20)**: mutual funds held on Zerodha
+  Coin — see [§52 Mutual Fund Record](#52-mutual-fund-record--active-2026-09-20). Rationale: §5.2
+  has specified an **Asset class** target dimension since the 2026-04-18 MVP and nothing ever
+  implemented it, so the portfolio total on the most-read screen has been an equity-only figure
+  presented as the whole book — wrong in the flattering direction (Gotcha 134, the surface B-121
+  was found on). What is **not** reversed: funds live in `mf_*` tables and never in `holdings`
+  (§52.3); they carry no score, no §1 pillar and no timing verdict; and a fund's weight is never
+  squared into HHI (§52.5). Directly-held fixed income, and multi-account aggregation, remain out
+  of scope.
 
 ---
 
@@ -829,6 +838,7 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | 11:00, 13:00, 15:00 MON-FRI | Watchlist analysis + snapshot (§37.4) | `WatchlistScheduler.analyzeAndReportWatchlist` | market |
 | 11:30 MON-FRI | Annual-fundamentals backfill batch (§32.6) | `FundamentalsBackfillScheduler.backfillBatch` | market |
 | 12:15 MON-FRI | IPO pipeline capture (§45.6) — three NSE list calls, a detail call per issue, one paced Kite quote per listing under a year old | `IpoCaptureScheduler.captureDaily` | market |
+| 12:30 MON-FRI | AMFI daily NAV pull (§52.6) — **one** HTTP GET of ~1.5 MB from a third host. No Kite call, no NSE call, so it competes for neither budget | `MutualFundNavScheduler.pullDailyNav` | market |
 | every 15 min 09:15–15:30 MON-FRI | Headline capture, storage only — no classification, no alert, no email (§48.4) | `MarketImpactNewsService.scheduledNewsCheck` | market — the cron `0 */15 9-15` fires at 09:00 and the guard is what stops it (§3.4) |
 | 13:20 MON-FRI | Analyst target capture + measurement (§49.6) — the capture half is DB-only; the measurement half is one paced Kite call per stock with an open target, bounded and rotating least-recently-measured first | `AnalystTargetScheduler.captureAndMeasure` | market |
 | 14:00 MON-FRI | Daily multibagger screening | `MultibaggerScheduler.dailyQuickScreening` | market |
@@ -843,7 +853,7 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | **08:00 SAT** | Weekly full screening + coverage vector + shadow composites + universe expansion Stage A + retirement pass | `MultibaggerScheduler.weeklyFullScreening` | **Saturday carve-out** |
 | **09:00 SAT** | Weekly multibagger report email | `MultibaggerScheduler.sendWeeklyReport` | **Saturday carve-out** |
 
-**28 scheduled methods; no job fires before 09:15 on a weekday.** *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, and the 13:20 analyst target pass was added the same day.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
+**29 scheduled methods; no job fires before 09:15 on a weekday.** *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, the 13:20 analyst target pass was added the same day, and the 12:30 AMFI NAV pull on 2026-09-20.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
 
 **Why the 11:30 job is a weekday job and not a third Saturday caller** (2026-09-06). §40.3 originally proposed invoking the backfill from inside `weeklyFullScreening()`. That is right about Gotcha 28 and wrong about capacity: the Saturday window is 07:50–10:35 and that job already carries a full screening run, the coverage vector, shadow composites, the retirement pass and the Stage A coarse scan (measured 11–22 minutes), with the report following at 09:00. Roughly 4,000 paced NSE requests do not fit, and crowding that window pushes the report past the point where its guard aborts it in silence. A weekday job inside the ordinary §3.4 window is **not** the Saturday exception — it uses `isMarketOpen()` and never touches the carve-out — and it runs five times a week instead of once. 11:30 is a genuine gap here, clear of every NSE-heavy job (09:45, 10:00 ×2, 14:00, 14:45), and it uses **no Kite calls at all**, so it never competes for the broker budget that has twice starved the afternoon (Gotcha 23, B-014).
 
@@ -933,6 +943,18 @@ Note: `symbol` is a **query parameter**, not a path variable, throughout the das
 - `GET /api/watchlist`, `/buy-signals`, `/strong-buy-signals`, `/config` — legacy raw rows (active only) and config.
 - `POST /api/watchlist/analyze`, `/analyze-and-report` — all-symbol re-analysis (+ email). Never from the UI; 409 from 14:55.
 
+### Mutual Fund Record (§52) — namespace is `/api/mf`, not `/api/funds`
+Both were free, but `/api/funds` sits three characters from the existing `/api/fundamentals`
+(annual accounts, forensics, turnarounds) — two unrelated features whose paths differ by a suffix
+is Gotcha 118's hazard aimed at whoever maintains this next. `/api/mf` also matches Kite's own
+`/mf/` namespace and the `mf_*` table prefix. **Nothing here contributes a point to any score.**
+
+- `GET /api/mf/holdings` — the funds the investor owns: scheme, category, units, average NAV, latest NAV **with its date**, invested, current, P&L, and `schemeResolvedFrom`. **DB-only, page-load safe.**
+- `GET /api/mf/scheme?code=` — one scheme and its stored NAV series. 404 when not tracked. DB-only.
+- `GET /api/mf/coverage` — the denominators that keep the rest honest: schemes in the file, schemes persisted, schemes with enough history to measure, owned funds resolved to a scheme, and the unclassified headers **by name**. DB-only.
+- `POST /api/mf/nav/refresh` — run the 12:30 pull now. Not a broker call, but a multi-second parse and thousands of upserts on the 4-thread pool that has starved the afternoon twice (B-014, B-049), so **refused from 14:00 with a 409 carrying its reason in the body**.
+- `POST /api/mf/holdings/sync` — read Kite `/mf/holdings` now. One paced broker call, so **refused from 14:55**, the same rule as every per-row refresh.
+
 ---
 
 ## 17. Persistence
@@ -984,6 +1006,18 @@ Table names below are the `@Table(name = …)` values in code (reconciled 2026-0
 | ~~`rebalance_proposal`~~ | **Never built** — rebalance proposals are computed on request (§10) and not persisted |
 | `watchlist` | One row per tracked symbol (§37). Analysis fields overwritten each run; membership fields (`added_on`, `price_at_add`, `nifty_at_add`, `added_note`, `source`, `active`, `removed_on`, `price_at_removal`) written only by add/seed/remove. Soft-delete; retained |
 | `watchlist_daily_snapshot` | One row per tracked symbol per day (§37.4): close, Nifty close, timing/quality score, verdict. `watchlist.snapshot-retention-days` (730) |
+
+### Mutual fund tables (✅ — §52, 2026-09-20)
+**None of these is `holdings`, and that separation is load-bearing** (§52.3). A fund row placed in
+`holdings` is deleted at the next 09:20 sync, truncated to whole units by an `int` column, and
+silently folded into HHI, sector weights and the TWR series.
+
+| Table | Purpose / retention |
+|---|---|
+| `mf_scheme` | Scheme master from AMFI. PK `amfi_scheme_code` (**unique**; ISIN is *not* — 5 measured collisions, so ISIN is a non-unique indexed lookup, §52.4). Carries `category_raw` verbatim beside the resolved `category`, plan, option, asset class, structure, latest NAV + its date, `first_seen`/`last_seen_in_file`. Retained forever — a scheme leaving the feed is a merger or closure and is **recorded, never deleted** (§25.1) |
+| `mf_nav_history` | `(amfi_scheme_code, nav_date)` unique. Daily for owned schemes; month-end for the screenable universe. Retained forever — it is what makes survivorship measurable (§52.7) |
+| `mf_holding` | What the investor owns, from Kite `/mf/holdings`, keyed `(isin, folio)`. `quantity numeric(18,4)` — **never `int`**. Nullable `amfi_scheme_code` beside `scheme_resolved_from`; **soft-delete** via `active`/`exited_on`, because here the history *is* the feature |
+| `mf_sync_run` | One row per NAV pull: `last_pulled_at`, rows parsed, unparsed lines, unclassified headers. The freshness key reads this, **not** a NAV date (§52.6) |
 
 ### LOB columns
 All JSON/audit text fields use `@Column(columnDefinition = "TEXT")`, **not** `@Lob String`. Rationale: Hibernate 6 + PostgreSQL maps `@Lob String` to `oid`, requiring an open transaction to stream. `SchemaMigrationRunner` runs idempotent startup conversion of any legacy `oid` columns to `TEXT`.
@@ -5457,5 +5491,224 @@ fetch, no broker call, no scheduler, nothing written, and zero points to any sco
   not a limitation of the implementation.
 - **No scheduler and no fetch.** The map is a classpath file; §3.4 is untouched, and the 28-row
   schedule is unchanged.
+
+---
+
+## 52. Mutual Fund Record ✅ Active (2026-09-20)
+
+### 52.1 Purpose
+
+Track the mutual funds the investor holds on Zerodha Coin, measure them honestly, and let the
+allocation modules see the whole book rather than the equity third of it.
+
+The request was to *"track high performing mutual funds"*. **"High performing" is the part that
+changed, and the substitution is the section.** Ranking funds on trailing return is the most
+thoroughly debunked selection signal in Indian retail investing, and it is the mistake this app has
+already deleted three engines for (§39.3): sector reversal at IC −0.163, the breakout scanner
+graded only by its own private board, and the ML chain. A fund list sorted on 3-year return is that
+bug in a new asset class, with a spreadsheet's manners.
+
+So what is measured is **cost, rolling excess return over the right benchmark counted not averaged,
+category standing, and measured survivorship** — and the largest single finding available is not a
+ranking at all: Direct and Regular plans of one scheme hold an **identical portfolio**, so the
+divergence between their two NAV series *is* the distributor commission, per fund, from free data
+(§52.7).
+
+### 52.2 §20 rule 9 declaration
+
+Declared even though this lands under **rule 1** (a portfolio module, §5–§11), because the screener
+half of §52.7 is forward-looking and that is exactly the claim rule 9 exists to make reviewable.
+§51.1 is the precedent for answering (a) with *"none, deliberately"*.
+
+| | |
+|---|---|
+| **(a) Pillar** | **None, deliberately — and for two different reasons.** The portfolio half describes money already held and measures no business. The screener half *cannot* measure a §1 pillar, because **a fund is not a business**: no promoter, no cash conversion, no auditor, no moat, no `annual_fundamentals` row. A fund scored on the seven pillars would be a category error; scored on anything else it would be the ranking engine §39.3 deleted twice. |
+| **(b) Horizon** | The portfolio half is **never judged** — it makes no claim that can be wrong. The screener half, *if it ever ranks*, is judged at **365 days and beyond** through `RecommendationTracker` under a new source `FUND_SCREEN`, measured as excess over **the fund's own SEBI category median, never the Nifty** — grading a small-cap fund against the Nifty in a large-cap year is Gotcha 83's error. **Until that registration exists it does not rank**: it filters and sorts on stated facts and says so. |
+| **(c) Coverage** | **Not a `screening_coverage` signal.** That vector is computed over the equity screening run, so a fund is structurally invisible to it — §51.1 makes the identical argument. The instrument is `GET /api/mf/coverage` with five denominators: schemes in the file, schemes persisted, schemes with enough history to measure, owned funds resolved to a scheme, and unclassified headers **by name**. |
+| **(d) Shadow** | `trading.funds.actionable: false`, permanently, **with no companion bonus field to flip**. Checkable rather than asserted: a test fails if a field named `actionable`, `bonus`, `weight`, `points` or `recommendation` appears anywhere in the `funds` package. |
+
+**The one thing this must never become.** A fund's past return is the most over-trusted number in
+Indian retail investing. If a future change gives this module a composite score and sorts on it
+descending, it has re-created what §39.3 deleted — and the reader will buy row one.
+
+### 52.3 Funds live in `mf_*` tables, never in `holdings`
+
+Three findings, each sufficient alone. Ranked by strength:
+
+1. **`HoldingsEntity.quantity` is `private int`.** Kite `/mf/holdings` returns fractional units
+   (`382.488`, `1.334`). `1.334` truncates to `1` — a **25% error** on that position, silently, and
+   `investedValue`, `currentValue` and `getDayChangeValue()` all multiply by it. Reconciliation can
+   be patched with a type flag; an `int` column cannot be widened without touching every consumer
+   and the `holdings_history` `SUM(quantity * price)` queries.
+2. **`HoldingsAnalysisService.reconcileExitedHoldings` deletes what `/portfolio/holdings` does not
+   return.** MF holdings come from `/mf/holdings`, a different endpoint, so a fund row is deleted at
+   the next 09:20 sync. Gotcha 16 names that `findAll()` as the one carve-out that must stay
+   unfiltered *because it needs to see the rows it deletes*; adding a type filter is how B-016 comes
+   back.
+3. **`findActive()` is `WHERE quantity > 0` and nothing else, with 29 call sites over 20 files**,
+   and the aggregate queries have no guard at all — they sum the whole table. The ones that would be
+   missed fail **silently and in the flattering direction**: a fund inflates the "well-diversified"
+   reading, and `HoldingsViewDecorator` would attach ~55 equity-only transients to it, every one
+   permanently null on a surface where Gotcha 120 says a structurally unanswerable column should be
+   deleted rather than striped.
+
+### 52.4 Data source and the traps it carries
+
+**AMFI NAVAll** (`portal.amfiindia.com/spages/NAVAll.txt`), ~1.5 MB, 14,375 rows, free, no key.
+Carries scheme code, ISIN, name, **Plan**, **Option**, NAV and date, with the **SEBI category as a
+block header** above each run of schemes. History back to 2016 via
+`DownloadNAVHistoryReport_Po.aspx`, all AMCs per call.
+
+Measured on the live file, and each of these is a rule in code:
+
+- **Category labels are split across spellings** — B-096 in a new feed. Flexi Cap 130+60, Large Cap
+  112+52, Small Cap 98+45, Mid Cap 83+52, ELSS 112+84 (`ELSS- Tax Saver Fund`), Sectoral/Thematic
+  735+222+80. Unmerged, a peer group is half its true size and **every percentile inside it is wrong
+  while looking fine**. `SebiCategory.resolve` is the single entry point; the raw header is stored
+  beside the resolved value; an unknown header is `UNCLASSIFIED` **reported by name**, never folded
+  into the nearest match. Production is lenient, the test is strict against a captured header set.
+- **An AMC name can contain brackets.** `IL&FS Mutual Fund (IDF)` is an AMC, not a category. A
+  header test that looked only for a parenthesis read it as one and **2,535 rows — 18% of the file —
+  silently inherited a category that does not exist.** Nothing threw and the row count stayed
+  correct. Found by counting rows per category on the real file, not in review (B-113's rule).
+- **Growth vs IDCW is a units error.** An IDCW NAV is reduced by every distribution, so its CAGR
+  understates the fund and comparing it to a Growth series compares two different scales — B-047's
+  family. **Growth only; IDCW is `NOT_MEASURED`, never a low reading.** A label naming both a
+  distribution and growth is IDCW (Gotcha 53, positive direction).
+- **ISIN is not unique; the scheme code is.** Five measured collisions. Kite returns the ISIN as its
+  `tradingsymbol`, so the ISIN lookup is a **first-hit-wins hazard** (Gotcha 107) and records which
+  row answered; `amfi_scheme_code` is the key.
+- **Month-end must snap to a business day.** A Saturday date returns a near-empty file (482 rows vs
+  10,061). A naive "last calendar day" backfill yields a history that reads as *"these funds have no
+  record"* — B-054.
+- **A NAV dated ahead of the file is not corruption.** 706 rows are, all liquid and overnight funds
+  striking a next-day NAV. Rejecting them would drop a category.
+- **The 256 KB `WebClient` default would make this born broken** at 1.5 MB. The buffer is raised on
+  the builder, the B-054 fix already applied to `NseDataService`.
+- **Pre-2018 files use the old taxonomy**, so anything category-relative is floored at **2018-04**.
+  The bare `Growth` bucket resolves to `LEGACY_PRE_2018` — *named*, not `UNCLASSIFIED`, because
+  unclassified means the app has no rule and here the rule is that the category is obsolete.
+
+**The real universe is 571 schemes, not 14,000**: 4,711 rows are dead close-ended fixed-maturity
+plans and the rest are IDCW and Regular-plan clones. Measured after merging and de-duplication —
+Flexi Cap 47, ELSS 38, Small Cap 36, Large & Mid 36, Large Cap 34, Mid Cap 34, Multi Cap 31,
+Focused 28, Value 22, Dividend Yield 12, **Contra 4**, Sectoral/Thematic 249. Contra is permanently
+below any sane peer floor and says so rather than publishing a quartile over four schemes.
+
+### 52.5 Combined allocation, and what must not happen to HHI
+
+`AllocationService.computeActualWeights()` **does not change**, and that is the safety property for
+the whole integration: every existing consumer — HHI, sector concentration, stock concentration,
+the rebalance plan, the donut — keeps reading weights denominated in the **equity** book. A second
+method feeds the new `BUCKET_ASSET_CLASS` and nothing else.
+
+- **A fund's weight is never squared into HHI.** A mid-cap fund at 20% of combined wealth is ~60
+  businesses; squaring 20 asserts 400 points of single-stock concentration that does not exist.
+- **The single-stock cap and sector limits are not rescaled either.** A 16% position that becomes
+  11% of combined wealth is still a 16% bet on one business, and rescaling it under the alert
+  threshold would delete a working risk control by arithmetic — Gotcha 42's asymmetry, in the
+  direction it was written for.
+- **What HHI gains instead is a mandatory caveat**, shipping with the first fund row and not later:
+  *"Computed on your directly-held stocks only. ₹X (Y% of your total wealth) sits in funds and is
+  not in this number."*
+- **Cash is `UNKNOWN`, never 0**, when the margins payload has no equity segment (§46.4).
+
+### 52.6 Schedule and freshness
+
+One new job: **12:30 MON-FRI**, `MutualFundNavScheduler.pullDailyNav`, `isMarketOpen()` guard,
+`Asia/Kolkata` (§15, §3.4). 12:30 is the only genuine weekday gap, between the 12:15 IPO capture and
+the 13:00 watchlist run, and it makes **no Kite and no NSE call**, so it competes for neither
+budget — the same argument §15 uses for the 11:30 backfill.
+
+**A mutual fund has one price per day**, struck after the cut-off and published around 23:00, so a
+mid-day pull necessarily reads the **previous business day**. That is not stale data; it is the only
+data that exists at that hour, and no slot inside §3.4 can ever see today's NAV. It is
+self-correcting and a multi-year measurement does not notice. Where it does bite is the combined
+value tile, where funds sit at T−1 NAV beside equities at today's price — stated on screen.
+
+**Two freshness keys, because they are two different facts** (B-119's rule, and the reason it is
+two keys rather than one):
+
+- `fundNav` ← `mf_sync_run.last_pulled_at`, a `LocalDateTime` — **when the job ran**.
+- Every rendered NAV separately carries `nav_date`, a bare `LocalDate` — **the date of the value**,
+  reported in days ("today" / "yesterday" / "N days ago"), never hours.
+
+Stamp the strip with `nav_date` and a Monday pull reads *"3 days ago"* and the reader concludes the
+job is broken. Stamp the figures with `last_pulled_at` and Thursday's NAV is labelled as today's.
+A market holiday moves one and not the other, which is the third reason they cannot be merged.
+**An unchanged `nav_date` between two pulls is not an error** — there is no NSE holiday calendar in
+this JVM (Gotcha 106a).
+
+### 52.7 What is measured — staged
+
+**Stage 1 (✅ this change)**: scheme master, NAV feed, the investor's own fund holdings, and the
+combined asset-class view. No performance judgement is published yet.
+
+**Stage 2 (planned)**: rolling excess return over the category benchmark, **counted not averaged**
+(§43's idiom), with the trap one level down respected — §43 counts *years*, which are independent,
+but **monthly rolling windows are not**. From 2018-04 there are ~100 months, so 3-year windows
+stepped monthly give ~67 windows and **under 3 independent ones**. `windowsMeasured` and
+`independentWindows` are always reported together, **no t-statistic or significance language ever**,
+and the word "consistently" is unavailable below two independent windows — which means the 5-year
+rolling record **cannot exist yet** and the 3-year window leads.
+
+Also Stage 2: **`PlanCostRead`** — the Direct-minus-Regular CAGR gap, in basis points and rupees,
+the single most actionable number here; and **the survivorship ledger**, which is measured rather
+than caveated. AMFI lists only live schemes, and SEBI's 2018 one-scheme-per-category rule forced a
+merger wave *inside* the measurement window, so every category median is over survivors. Once
+month-end history is on file the app knows which scheme codes stopped appearing: *"of 148 flexi-cap
+schemes reporting in Jan-2019, 41 no longer do."* **A fund's own record is not survivorship-biased —
+only the peer comparison is**, and conflating the two lets a real finding be waved away.
+
+**Benchmarks, and why only two categories can have one.** SEBI mandates **TRI** benchmarks; a price
+index understates the benchmark by the dividend yield (~1–1.5%/yr in India), so every excess return
+computed here is **overstated in the fund's favour** — the worst possible direction, and therefore
+always printed with the bias and its direction named. Of the whole universe this app can benchmark
+Mid Cap exactly, Large Cap by a named proxy, and Large & Mid by a stated blend. Flexi Cap, Multi
+Cap, Small Cap, ELSS, Focused, Value and Contra are **`NOT_HELD`** — an app gap, fixable by adding a
+Nifty 500 series — and Sectoral/Thematic is **`NOT_SINGULAR`**, a property of the question and never
+fixable. Those two must render differently, and neither may collapse into `NOT_MEASURED`, which
+would throw away the fund's own perfectly good record. **That is why category standing is the
+default path and the benchmark path is the exception.**
+
+**Stage 3 (planned, conditional)**: look-through overlap with the direct equity book — the one thing
+no fund website can compute, since it requires knowing what the investor owns directly. It needs
+AMC monthly portfolio disclosures, whose format and reachability are **unverified** (AMFI's own
+TER and disclosure pages are React shells with no discoverable API). It begins with a manual
+single-scheme import to find out. **Ship the list, gate the index**: *"7 of your 30 direct holdings
+also appear in your funds"* is useful at partial coverage, whereas a look-through concentration
+index over 60% of the money reads **lower** than the truth — the one direction a risk metric must
+never fail in (Gotchas 44, 55, 63 all failed flatteringly). `lookThroughHhi` stays null below 95%
+coverage and reports without alerting for its first quarter. **If disclosure proves unobtainable,
+Stage 3 is cut rather than faked** and the module says so in words: *"this app has no portfolio
+disclosure for any fund you hold, so it cannot tell you whether your funds already own your stocks.
+That is a gap in the app, not a finding about your portfolio."*
+
+### 52.8 Non-goals
+
+- **No composite score and no ranking.** §41 and §43 are checklists of named gates, not numbers, and
+  so is this. No `/api/mf/top`, no "best funds" email, and **the category table's default sort is
+  scheme name**. That last one sounds petty and is load-bearing.
+- **No buy, sell, switch or redeem verdict** (§19, §20 rule 10). The vocabulary carries no
+  instruction to transact, pinned by a test matching on **word boundaries** — the §51 version of
+  that test failed in its first draft on *"whoever **sells** the servers"* (Gotcha 53), and the same
+  trap waits here on *"the fund **holds**"*.
+- **No claim about the investor's tax, and no half-truth about switching.** Naming the
+  Regular-to-Direct commission drag without naming that the switch is a redemption plus a purchase —
+  taxable, possibly exit-loaded — reads as advice. State the fact; refuse the calculation.
+- **No point-to-point return shown alone or used as a sort key.** A 5-year CAGR ending today is one
+  draw and the end date is the most important thing about it (§43.2).
+- **No SIP illustration** (*"if you had invested ₹10,000/month…"*) — a back-test with a chosen start
+  date, and the most misleading figure the industry publishes.
+- **No manager-tenure gate.** There is no free structured feed for manager name or start date, and a
+  gate whose input is permanently null trains the eye past `NOT_MEASURED`. It becomes a standing
+  caveat instead: *this record is measured on the scheme, not on a manager.* And a manager change is
+  **never inferred** from a break in the return series — Gotcha 122's forbidden second-order
+  inference, in fund clothing.
+- **No style-drift measure from NAV alone**, and no alpha against a price index (biased upward by
+  the dividend yield — publish excess return and refuse the word).
+- **No fund enters** `holdings`, `holdings_history`, `findActive()`, `multibagger_scores`,
+  `recommendations`, `screening_coverage`, `tax_lot`, `holding_conviction` or
+  `holding_classification`.
 
 ---
