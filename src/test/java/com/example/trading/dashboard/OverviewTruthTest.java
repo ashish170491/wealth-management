@@ -94,7 +94,11 @@ class OverviewTruthTest {
 
     private static AllocationDto.DriftResponse drift(boolean targetsStated) {
         return new AllocationDto.DriftResponse("Default Portfolio", 247047.1, 30,
-                everyBucketBreaching(), 0.0, List.of(), targetsStated);
+                everyBucketBreaching(), 0.0, List.of(), targetsStated,
+                // Combined wealth: the equity book plus a fund position, nothing unclassified.
+                // The attention list reads the equity-denominated buckets only, so these are
+                // carried but never consulted here - which is itself worth pinning.
+                330000.0, 82952.9, true, 0.0, List.of());
     }
 
     @Test
@@ -130,7 +134,8 @@ class OverviewTruthTest {
         AllocationDto.DriftResponse quiet = new AllocationDto.DriftResponse(
                 "Default Portfolio", 247047.1, 30,
                 List.of(bucket("PHARMA", 10.0, 10.2, AllocationService.ALERT_IN_TOLERANCE)),
-                0.0, List.of(), false);
+                0.0, List.of(), false,
+                330000.0, 82952.9, true, 0.0, List.of());
 
         assertThat(DashboardService.attention(List.of(), List.of(), quiet, null)).isEmpty();
     }

@@ -179,6 +179,84 @@ unit test of either would have caught.
 
 ---
 
+### B-133 - The drift heading read a field that does not exist, so it printed "On target" on a portfolio where every bucket was breaching  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** *"Are you still following your plan?"* on My Portfolio carried a green **On target**
+summary while all nine allocation buckets underneath it read `OVER_TOLERANCE`.
+
+**Root cause.** The heading filtered on `b.status === 'OVER_TOLERANCE'`. A drift bucket has no
+`status` field - it is `alertLevel` - so the filter matched nothing on every portfolio that has ever
+existed, and the ternary fell through to "On target" with `type: 'success'`. There is no build step
+for `static/js/**`, so an undefined property is not an error; it is simply `undefined !== '...'`.
+
+**Blast radius.** Every section on every screen folds by default since SPEC §27.15, which makes the
+heading **the only thing the reader sees** until they open it. A summary that cannot disagree with
+itself is worse there than no summary at all: it does not merely fail to warn, it actively reassures.
+Same family as B-117 (a summary distinguishing fewer states than the rows beneath it) and B-098 (a
+count rendered beside a list must be derived from that list).
+
+**Fix.** [page-holdings.js](src/main/resources/static/js/page-holdings.js) computes `offTarget` once
+from `alertLevel` and both the text and the tone read that one value, so they cannot disagree. The
+section text also now says in words when the targets were **seeded rather than chosen**, so a breach
+against weights nobody set reads as "this comparison has not been set up" rather than as a fault in
+the portfolio (B-121's rule, on the screen rather than on the attention list).
+
+**Verification.** Live render of `holdings.html#analysis` against the real book: the heading reads
+**"9 off target"** in amber where it read "On target" in green before.
+
+---
+
+### B-132 - The combined asset-class weights were computed, put on the wire and never drawn  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** `GET /api/portfolio/drift` returned four `ASSET_CLASS` buckets - EQUITY_FUND 61.9%,
+EQUITY_DIRECT 25.6%, HYBRID_FUND 10.7%, CASH 1.8% - and no screen in the app drew any of them. The
+investor's portfolio page continued to present **₹2.60 L of directly-held shares as "your
+portfolio"** when total wealth was ₹10.16 L.
+
+**Root cause.** `AllocationService.computeDrift()` appends `BUCKET_ASSET_CLASS` alongside the sector,
+size and stock buckets, and `page-holdings.js` ended its drift renderer with
+`return el('div', {}, coverage, group('SECTOR'), group('MARKET_CAP'));`. A third bucket type was
+added to the payload and the renderer was never told. **Second instance of B-099** - a shared payload
+needs a renderer that draws all of it - and this time the un-drawn half was the headline finding of
+the whole mutual-fund module.
+
+Two smaller faults sat underneath it. `group()` chose its heading with a two-way ternary
+(`type === 'SECTOR' ? 'By sector' : 'By company size'`), so a third type would have been labelled
+"By company size" (B-098's shape). And `DriftResponse` carried the asset-class *percentages* without
+`combinedTotalValue`, `fundValue`, `cashMeasured` or `unclassifiedFundWeightPercent`, so a fund whose
+asset class could not be resolved would have **vanished from the buckets with nothing to explain the
+shortfall** - the percentages silently failing to sum to 100 and reading as a smaller portfolio
+(B-054, B-096).
+
+**Blast radius.** Not a cosmetic gap. Every other percentage on that screen - the sector mix, HHI,
+the single-stock limits, the drift rows - is denominated in the **equity book**, deliberately and
+permanently (§52.5: a 16% position is a 16% bet on one business whatever share of combined wealth it
+is, and rescaling it would delete a working risk control by arithmetic). Without the asset-class
+block on screen, the reader has no way to know that, and every one of those figures reads as a share
+of everything they own. That is a figure quoted on a scale it was not measured on - B-047's family -
+across a whole screen rather than in one cell.
+
+**Fix.** `DriftResponse` gained the five combined-wealth fields.
+[page-holdings.js](src/main/resources/static/js/page-holdings.js) gained `assetClassPanel()` and a
+new **"What your money is actually in"** section, placed *above* the sector mix and the concentration
+score: a reader who meets those first has already been told a number is "your portfolio". The panel
+names **both totals in rupees** in a box beneath it, because two denominators on one screen are safe
+only when each one is named; it says in words that a fund's weight is never squared into the
+concentration score and that look-through overlap is **not measured** rather than zero; and it draws
+an unresolved fund as a named warning rather than letting it leave the total quietly. The sector and
+concentration headings were reworded from *money* to *shares* for the same reason.
+
+**Verification.** Live render of `holdings.html#analysis`: the section draws ₹10.16 L across four
+rows, and the box beneath names ₹10.16 L and ₹2.60 L as the two denominators. `funds.html` renders
+the per-fund record from the same data (§52.12).
+
+**Lesson, and it is not "remember the other screen".** The endpoint work and the rendering work were
+two commits, and between them the app *held* the finding and could not *show* it. When a payload
+grows a new kind of row, the renderer that consumes it needs a case for it in the same change -
+otherwise the feature is complete by every test and invisible to the only person it was built for.
+
+---
+
 ### B-131 - An income-distribution series was measured against Growth peers, understating a fund the investor owns  `[P2]`  `RESOLVED 2026-09-20`
 
 **Symptom.** The first live run of the fund lens over the investor's real book produced a full

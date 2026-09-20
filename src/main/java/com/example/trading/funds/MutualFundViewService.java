@@ -169,8 +169,15 @@ public class MutualFundViewService {
         long ownedUnresolved = holdingRepository.countByActiveTrueAndAmfiSchemeCodeIsNull();
 
         Map<String, Long> byCategory = new TreeMap<>();
+        // The category's own plain-English label travels WITH the count, rather than leaving the
+        // dashboard to title-case the enum name: doing that turned ELSS into "Elss" and
+        // SECTORAL_THEMATIC into "Sectoral Thematic" on the one screen whose whole subject is
+        // which peer group a fund is ranked inside. One vocabulary, defined once (Gotcha 85).
+        Map<String, String> categoryLabels = new TreeMap<>();
         for (Object[] r : schemeRepository.countScreenableByCategory()) {
             SebiCategory c = (SebiCategory) r[0];
+            categoryLabels.put(c == null ? "UNCLASSIFIED" : c.name(),
+                    c == null ? "Category not recognised here" : c.label());
             byCategory.put(c == null ? "UNCLASSIFIED" : c.name(), (Long) r[1]);
         }
 
@@ -180,6 +187,7 @@ public class MutualFundViewService {
         out.put("schemesWithEnoughHistory", measurable);
         out.put("minPointsToMeasure", config.getMinMonthsToMeasure());
         out.put("screenableByCategory", byCategory);
+        out.put("categoryLabels", categoryLabels);
         out.put("ownedFunds", ownedActive);
         out.put("ownedFundsUnresolved", ownedUnresolved);
 
@@ -282,8 +290,8 @@ public class MutualFundViewService {
         out.put("caveat", "A month reading NOT_PUBLISHED is a finding, not a gap: every candidate "
                 + "business day was asked and none carried an equity cross-section. A month absent "
                 + "from this list entirely has never been attempted, which is a different fact "
-                + "again. schemesWithEnoughHistory counts stored NAV points per scheme and is a "
-                + "denominator for what could be measured - it says nothing about how any fund did.");
+                + "again. The count of schemes deep enough to measure is a denominator for what "
+                + "could be measured at all - it says nothing about how any fund did.");
         return out;
     }
 }

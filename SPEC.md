@@ -1369,18 +1369,20 @@ Reverses the §19 non-goal recorded until 2026-08-24 (see §25.7 for the decisio
 
 ### 27.2 Scope
 
-**Four module groups, seven screens:**
+**Four module groups, fourteen screens** (the table below names the ones with their own module;
+`health.html`, `macro.html`, `themes.html` and `guide.html` are described in §44, §48, §51 and §21):
 
 | Screen | Covers |
 |---|---|
 | `index.html` | Triage — portfolio KPIs, value-over-time, "what needs your attention today", concentration + track record, biggest moves. **Two numbers answer two different questions and the page must say so** (2026-09-18): gain-on-cost heads "Where you stand" while the §46 time-weighted return heads "Is your money growing?", and where they diverge by more than 5 pp a callout names the divergence in both directions rather than reconciling them (Gotcha 105). **Both benchmarks are drawn, never one** — rendering only the Nifty 50 turned an 8.2 pp shortfall against the Midcap 150 into a 3.8 pp win on a mid/small-tilted book. The §46 `caveats[]` and the track record's overlap caveat are **mandatory**, not optional: a row count of overlapping picks is not a sample size (§38.9, Gotcha 92) |
-| `holdings.html` | Holdings table + sparklines, sector/market-cap mix, HHI, drift, thesis decay, conviction, dividends, accumulation, tax lots |
+| `holdings.html` | Holdings table + sparklines, **"What your money is actually in"** (§52.12 — direct equity vs funds vs cash, the only block here denominated in total wealth, placed above the rest so no figure is read as "your portfolio" before that split is seen), sector/market-cap mix, HHI, drift, thesis decay, conviction, dividends, accumulation, tax lots |
 | `screener.html` | The business first (2026-09-09, B-098): financial quality, ROCE (ROA for a lender), debt/equity, profit growth YoY, promoter holding + change + pledge, valuation (reverse-DCF verdict, P/E vs sector), red flags (forensic, HIGH_RISK, pledge > 20%), market cap in crore, sector from NSE's index classification; plus composite (with grade, rank and the 30-day change *vs the universe shift* folded under it), the compounding gate, the timing verdict and entry ladder, under-radar and buyability. The seven dimension bars are opt-in ("Show the seven scores"). Filters: shortlist (compounder ∧ fair entry ∧ not owned), sector, size, grade, owned, compounding, risk (hide red flags / not yet checked), free-text search. Headline panel is "Compounders at a fair price" with its funnel counts |
 | `discovery.html` | Early-stage view: under-the-radar candidates, buyability, insider activity, universe expansion funnel, recent-listing watch (§12.9, §12.10, §28, §30) |
 | `accuracy.html` | Source × horizon calibration, IC, per-dimension IC |
 | `market.html` | FII/DII summary and watchlist teaser (top 5 by verdict) — loads `/api/fiidii/summary` and `/api/watchlist/items` only. The index-direction/PCR, breakout and sector-reversal panels went with their engines on 2026-09-03 (§39) |
 | `ipo.html` | IPO pipeline (§45): open / forthcoming / just-closed issues with the structure read and application sizing, the category guide with the shareholder-quota prerequisites, recent listings with lock-in calendar, cycle stage and on-demand quality analysis. Loads `/api/ipo/pipeline` and `/api/ipo/recent` only |
 | `watchlist.html` | Watchlist tracking (§37): add/remove, date added, return since added, vs Nifty, sector, quality + timing, 90-day trend, "still a good time to buy?" verdict, removed-stocks history |
+| `funds.html` | Mutual funds (§52.12): what is held with each NAV's own date, then per fund what the plan costs → the rolling-window record counted → category standing → whether an index exists → peer attrition; the month-end archive's four outcomes; and the category peer counts with "can a quartile be published?". **No score, no ranking, no default sort that could be read as one.** Loads the four `/api/mf` GETs only |
 | `stock.html?symbol=` | Per-stock drill-down: price/score history, 7-dimension radar, research endpoints |
 | `reports.html` | In-page previews of the actual report HTML (see §27.6) |
 
@@ -5634,7 +5636,18 @@ value tile, where funds sit at T−1 NAV beside equities at today's price — st
 **Two freshness keys, because they are two different facts** (B-119's rule, and the reason it is
 two keys rather than one):
 
-- `fundNav` ← `mf_sync_run.last_pulled_at`, a `LocalDateTime` — **when the job ran**.
+- `fundNav` ← `mf_sync_run.last_pulled_at`, a `LocalDateTime` — **when the job ran**. This is the
+  only fund key on the `nav.js` strip, and `funds.html` declares it alone.
+- Every rendered NAV separately carries `nav_date`, a bare `LocalDate` — **the date of the value**,
+  reported in days ("today" / "yesterday" / "N days ago"), never hours. On `funds.html` the date is
+  drawn *inside* the NAV cell rather than in a column of its own, so the eye cannot take the number
+  without it.
+
+Stamp the strip with `nav_date` and a Monday pull reads *"3 days ago"* and the reader concludes the
+job is broken. Stamp the figures with `last_pulled_at` and Thursday's NAV is labelled as today's.
+A market holiday moves one and not the other, which is the third reason they cannot be merged.
+**An unchanged `nav_date` between two pulls is not an error** — there is no NSE holiday calendar in
+this JVM (Gotcha 106a).
 
 **The month-end backfill gets no freshness key, deliberately** (§52.7, Gotcha 125). Amber on the
 `nav.js` strip means *a job that should have run has not*, and that claim is simply false for a table
@@ -5643,14 +5656,6 @@ fortnight-old stamp on it is a fact about the reader's habits rather than a faul
 reported on `GET /api/mf/history` instead, where it can be read as a denominator rather than as an
 alarm — the same reasoning that keeps `macroEvents` on the on-demand list. Stage 2 therefore adds
 **no `@Scheduled` method**, and the §15 count stays at 29.
-- Every rendered NAV separately carries `nav_date`, a bare `LocalDate` — **the date of the value**,
-  reported in days ("today" / "yesterday" / "N days ago"), never hours.
-
-Stamp the strip with `nav_date` and a Monday pull reads *"3 days ago"* and the reader concludes the
-job is broken. Stamp the figures with `last_pulled_at` and Thursday's NAV is labelled as today's.
-A market holiday moves one and not the other, which is the third reason they cannot be merged.
-**An unchanged `nav_date` between two pulls is not an error** — there is no NSE holiday calendar in
-this JVM (Gotcha 106a).
 
 ### 52.7 The month-end archive, and the two traps in fetching it
 
@@ -5807,6 +5812,67 @@ first quarter. **If disclosure proves unobtainable, Stage 3 is cut rather than f
 says so in words: *"this app has no portfolio disclosure for any fund you hold, so it cannot tell you
 whether your funds already own your stocks. That is a gap in the app, not a finding about your
 portfolio."*
+
+### 52.12 The screens ✅ (2026-09-20)
+
+Stage 1 and Stage 2 shipped nine endpoints and **not one pixel**, which meant the whole module was
+reachable only by typing a URL. Worse, the combined asset-class weights were computed, appended to
+`/api/portfolio/drift` and never drawn: `page-holdings.js` rendered `group('SECTOR')` and
+`group('MARKET_CAP')` and nothing else, so the finding that the app had been presenting a quarter of
+this portfolio as the whole of it sat on the wire for a day. **That is B-099's shape — a shared
+payload needs a renderer that draws all of it** — and it is the reason this section exists rather
+than being left implicit.
+
+**`funds.html` ("Funds" in the nav, between Watchlist and IPOs).** Four DB-only GETs on load,
+verified by hand because a page-load `get()` is ungated and only `getOnDemand()` has the allowlist
+(Gotcha 39): `/api/mf/portfolio`, `/api/mf/holdings`, `/api/mf/history`, `/api/mf/coverage`. Four
+sections, ordered by the strength of the evidence rather than the way a fund site would order them:
+
+1. **The funds you own** — units, cost, NAV *with its date in the same cell*, value and gain. A
+   position whose broker cost basis is `0.0` reads **not measured**, never a total gain: units
+   transferred in are *cost unknown*, not free.
+2. **What the record says about each one**, one collapsible panel per fund carrying, in this order,
+   *what the plan costs* → *the record over rolling windows* → *where it sat in its category* →
+   *whether an index exists at all* → *how many peers did not survive*. The cost leads because it is
+   the one figure here that does not decay. The mandatory coverage line sits above them and counts
+   **four** states (§52.8).
+3. **How deep this app's record goes** — the month-end archive, with all four `mf_history_fetch`
+   outcomes drawn separately (§52.7).
+4. **What this app can see of the fund market** — the denominators: schemes on file, comparable
+   schemes, and **how many schemes are in each category with an explicit "can a quartile be
+   published?" column**, because Contra has four and no percentile over four funds is a finding.
+
+`static/js/fund-cells.js` holds every renderer, extracted **before** a second screen existed. The
+lesson that produced `compounding.js`, `macro-cells.js` and `analyst-cells.js` cost a defect each
+time it was learned late, and a fund column on the portfolio is an obvious next step. Three rules
+live in that module rather than in its callers: `NOT_MEASURED` draws the striped marker while
+`NOT_COMPARABLE` draws a neutral badge with its reason in the tooltip (Gotcha 121); a fund behind its
+category is **amber, never red**, because red reads as *sell* and two independent windows do not
+support that; and every badge carries the sentence its verdict was reached on, so a reader who can
+see why can disagree.
+
+**`holdings.html` gains "What your money is actually in"**, placed *above* the sector mix and the
+concentration score on purpose — a reader who meets those first has already been told a figure is
+"your portfolio" before learning that directly-held shares are a quarter of it. It is the **only**
+block on that screen denominated in total wealth, and the box beneath it names both totals in
+rupees, because two denominators on one screen are safe only when each is named (B-047's family).
+The sector and concentration headings were reworded to say *shares* rather than *money* for the same
+reason. `AllocationDto.DriftResponse` grew `combinedTotalValue`, `fundValue`, `cashMeasured`,
+`unclassifiedFundWeightPercent` and `unclassifiedFunds` so the render can be honest: an unresolved
+fund is **absent** from the buckets rather than filed under "Other" (B-096), which means they do not
+sum to 100 whenever one exists, and a shortfall nobody explains reads as a smaller portfolio rather
+than as a gap (B-054).
+
+**One defect found while wiring it, unrelated to funds.** The drift section's folded heading read
+`b.status === 'OVER_TOLERANCE'`; the field is `alertLevel`. So it had printed a green **"On target"**
+since it shipped, on a portfolio where every sector bucket was breaching. With sections folded by
+default (§27.15) the heading is the only thing the reader sees, which makes a summary that cannot
+disagree with itself worse there than no summary at all.
+
+**Glossary.** Fourteen fund terms were added to `static/js/glossary.js` — NAV, Direct and Regular
+plan, IDCW, rolling window, independent windows, *not comparable*, survivorship, quartile, expense
+ratio, AMFI, SEBI, ELSS. Several are this app's own vocabulary rather than market usage, and a badge
+is the worst place to meet a word for the first time (§51's rule, §21 rule 1).
 
 ### 52.11 Non-goals
 

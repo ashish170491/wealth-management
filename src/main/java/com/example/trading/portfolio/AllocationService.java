@@ -168,7 +168,13 @@ public class AllocationService {
         return new AllocationDto.DriftResponse(
                 profile.getName(), actual.totalValue(), actual.holdingsCount(), buckets,
                 actual.unclassifiedWeight(), actual.unclassifiedSymbols(),
-                targetsStated(profile));
+                targetsStated(profile),
+                // The combined figures travel WITH the buckets they denominate. Sending the
+                // ASSET_CLASS percentages alone would leave the reader unable to tell a portfolio
+                // that is 61.9% funds from one where a fund could not be classified and simply
+                // left the total (Gotcha 44).
+                combined.totalValue(), combined.fundValue(), combined.cashMeasured(),
+                combined.unclassifiedFundWeight(), combined.unclassifiedFunds());
     }
 
     /**

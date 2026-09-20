@@ -545,11 +545,22 @@ public class FundLensService {
 
     // ------------------------------------------------------------------ prose
 
+    /**
+     * Written for the investor, not for whoever is reading the JSON.
+     *
+     * <p>The first draft named the two fields - {@code windowsMeasured} and
+     * {@code independentWindows} - which is a code identifier printed at a reader who is explicitly
+     * not a market professional (SPEC §21 rule 1), and it renders on {@code funds.html} under every
+     * measured fund. The claim is unchanged: a count of overlapping windows is not a sample size
+     * (Gotcha 92 in a new asset class).
+     */
     private static final String SAMPLE_NOTE =
-            "windowsMeasured counts overlapping windows and is not a sample size. "
-                    + "independentWindows is the one that behaves like a sample size, and over the "
-                    + "history available it is small - no significance claim is made anywhere here, "
-                    + "and the word \"consistently\" is withheld below two independent windows.";
+            "Those windows overlap: consecutive three-year stretches share almost all of the same "
+                    + "months, so sixty of them are not sixty separate pieces of evidence. The "
+                    + "number of genuinely separate stretches is the one that behaves like a sample "
+                    + "size, and over the history on file it is small - which is why nothing here "
+                    + "claims a result is statistically meaningful, and why the word "
+                    + "\"consistently\" is withheld below two separate stretches.";
 
     private static final String PORTFOLIO_CAVEAT =
             "Nothing on this screen is a suggestion to transact. A fund's record over rolling "

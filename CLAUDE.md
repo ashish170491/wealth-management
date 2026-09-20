@@ -1551,6 +1551,51 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     real one (B-117 again). The general rule, and the third time it paid in one session: **run it
     over the real book, not the universe you constructed.**
 
+146. **A payload that grows a new kind of row needs a renderer case in the same change, or the
+    feature is complete by every test and invisible to the only person it was built for** (B-132,
+    SPEC §52.12). `computeDrift()` appended four `ASSET_CLASS` buckets - **equity funds 61.9%,
+    direct shares 25.6%, hybrid 10.7%, cash 1.8%** - and `page-holdings.js` ended its renderer with
+    `group('SECTOR'), group('MARKET_CAP')`. So the app *held* the finding that it had been
+    presenting a quarter of this portfolio as the whole of it, put it on the wire, and drew none of
+    it. **Second instance of B-099**, and the un-drawn half was the headline finding of an entire
+    module. Two smaller faults sat underneath: `group()` picked its heading with a **two-way
+    ternary**, so a third bucket type would have been labelled "By company size" (B-098 again), and
+    `DriftResponse` carried the percentages without `combinedTotalValue`, `cashMeasured` or
+    `unclassifiedFundWeightPercent` - so an unclassifiable fund would have **left the buckets with
+    nothing to explain the shortfall**, the percentages quietly failing to sum to 100 and reading as
+    a smaller portfolio (B-054, B-096).
+
+    **Two denominators on one screen are safe only when each is named.** Everything else on My
+    Portfolio - the sector mix, HHI, the single-stock cap, the drift rows - is denominated in the
+    **equity book**, deliberately and permanently (§52.5: a 16% position is a 16% bet on one
+    business whatever share of combined wealth it is, and rescaling it deletes a risk control by
+    arithmetic). Without the asset-class block on screen the reader cannot know that, and every one
+    of those figures reads as a share of everything they own - B-047's family across a whole screen
+    rather than in one cell. So the new section leads, *above* the sector mix and the concentration
+    score, names both totals in rupees, and the two headings beneath it were reworded from *money*
+    to *shares*.
+
+    **Found in the same pass, and worse than it sounds** (B-133): the drift heading filtered on
+    `b.status === 'OVER_TOLERANCE'` and the field is `alertLevel`, so it had printed a green
+    **"On target"** since it shipped on a portfolio where all nine buckets were breaching. There is
+    no build step for `static/js/**`, so an undefined property is not an error. Since §27.15 folded
+    every section by default the heading is the **only thing the reader sees**, which means a
+    summary that cannot disagree with itself does not merely fail to warn - it reassures.
+
+    **And on a refusal, the reason is the content.** The first render put "Nothing to compare
+    against" in a badge with its explanation in a `title` tooltip. A refusal the reader cannot
+    evaluate is worse than a gap, and the reader most likely to act on a fund page is the one least
+    likely to hunt for the caveat (§51's on-screen-not-in-a-tooltip rule). `NOT_COMPARABLE` and
+    `NOT_MEASURED` now draw their sentence at full weight - and are suppressed when both readings on
+    one panel would print the identical paragraph twice, which is what teaches a reader to skip both.
+
+    Process note: **four defects on that page were found by rendering it, not by reading it** - the
+    sample-size note printing the code identifiers `windowsMeasured` and `independentWindows` at a
+    reader who is explicitly not a market professional (§21 rule 1); the survivorship figure shown
+    where no peer comparison had been made, so *"0% of the category gone"* over three index funds
+    read as a finding; the same caveat printed twice on one panel; and the tooltip above. Gotcha
+    89's rule, again: a layout change needs a look, not just a number.
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):
@@ -1783,6 +1828,19 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
   parser that read them was wrong (B-130). Re-fetching is safe — a NAV point is keyed on
   (scheme, date).
 - Freshness key `fundNav`, stamped with **when the job ran**, never with the NAV date (see Gotcha 139).
+- Dashboard: **`funds.html`** ("Funds" in the nav, SPEC §52.12) loads the four GETs above and nothing
+  else. Four sections ordered by strength of evidence, not by what a fund site would lead with:
+  what is held with each NAV's own date *in the same cell*; then per fund **what the plan costs →
+  the rolling-window record counted → category standing → whether an index exists → peer
+  attrition**; then the month-end archive's four outcomes; then the category peer counts with an
+  explicit *"can a quartile be published?"* column. `static/js/fund-cells.js` holds every renderer,
+  extracted **before** a second screen existed because that lesson has cost a defect every time it
+  was learned late (B-099): `NOT_MEASURED` draws the striped marker while `NOT_COMPARABLE` draws a
+  neutral badge (Gotcha 121), a fund behind its category is **amber and never red** because red
+  reads as *sell* and two independent windows do not support that, and every badge carries the
+  sentence its verdict was reached on. **No score, no ranking, and no default sort that could be
+  mistaken for one.** `holdings.html` gained **"What your money is actually in"** from the same
+  work (Gotcha 146, B-132).
 
 **Insider Pulse** (SPEC §28):
 - `GET /api/insider/{symbol}` - Disclosure history + rolling 90-day pulse verdict. DB-only, dashboard-safe.

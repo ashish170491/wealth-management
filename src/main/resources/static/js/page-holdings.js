@@ -993,6 +993,139 @@ function riskCard(risk) {
  * hid the one bucket type that actually worked — the market-cap targets — behind a sector table
  * where every row was wrong.
  */
+/** A two-way ternary here silently labelled a third bucket type "By company size" (B-098). */
+const GROUP_TITLES = {
+  SECTOR: 'By sector',
+  MARKET_CAP: 'By company size',
+  ASSET_CLASS: 'By asset class',
+};
+
+const ASSET_CLASS_LABELS = {
+  EQUITY_DIRECT: 'Shares you hold directly',
+  EQUITY_FUND: 'Equity mutual funds',
+  HYBRID_FUND: 'Hybrid funds (shares and bonds)',
+  DEBT_FUND: 'Debt funds',
+  GOLD_FUND: 'Gold funds',
+  OTHER_FUND: 'Other funds',
+  CASH: 'Cash with the broker',
+};
+
+/**
+ * What the money is actually in — directly-held shares, funds and cash (SPEC 5.2, 52.5).
+ *
+ * This is the one block on this screen denominated in TOTAL WEALTH. Everything else here —
+ * the sector mix, HHI, the single-stock cap, the drift rows — is denominated in the equity
+ * book, deliberately and permanently: a 16% position is a 16% bet on one business whatever
+ * share of combined wealth it happens to be, and rescaling it would quietly delete a working
+ * risk control (Gotcha 42's asymmetry). Two denominators on one screen is safe only if each
+ * one is named, which is why the caveat below is not optional — an unnamed second denominator
+ * is B-047's family (a figure quoted on a scale it was not measured on).
+ *
+ * These rows were computed, put on the wire and never drawn for a day after the fund module
+ * shipped: `computeDrift` appended them and the renderer only ever asked for SECTOR and
+ * MARKET_CAP. That is B-099's shape — a shared payload needs a renderer that draws all of it.
+ */
+function assetClassPanel(drift) {
+  if (!drift) return null;
+  const rows = (drift.buckets || [])
+    .filter((b) => b.bucketType === 'ASSET_CLASS' && b.actualWeight > 0.005)
+    .map((b) => ({
+      ...b,
+      label: ASSET_CLASS_LABELS[b.bucketKey] || humanLabel(b.bucketKey),
+      value: drift.combinedTotalValue > 0
+        ? (b.actualWeight / 100) * drift.combinedTotalValue : null,
+    }));
+
+  if (!rows.length) {
+    return empty('No asset-class split available',
+      'This needs at least the equity holdings to have a value. Nothing has been assumed.');
+  }
+
+  const equityOnly = rows.length === 1 && rows[0].bucketKey === 'EQUITY_DIRECT';
+
+  const nodes = [
+    table([
+      { key: 'label', label: 'What it is' },
+      {
+        key: 'value',
+        label: 'Value',
+        align: 'r',
+        // Null, never zero: a percentage with no combined total behind it cannot be turned
+        // back into rupees, and a 0 would read as a position worth nothing.
+        render: (r) => (missing(r.value) ? unmeasured('No combined total to price this against.') : inr(r.value)),
+      },
+      {
+        key: 'actualWeight',
+        label: 'Share of everything',
+        align: 'r',
+        render: (r) => pct(r.actualWeight, { signed: false }),
+      },
+    ], rows, { sortKey: 'actualWeight', filter: false }),
+  ];
+
+  // The gap, named. An unresolved fund is ABSENT from the rows above rather than filed under a
+  // bucket called "Other" (B-096), so whenever this is non-zero the percentages do not sum to
+  // 100 — and a shortfall nobody explains reads as a smaller portfolio rather than as a gap.
+  if (drift.unclassifiedFundWeightPercent > 0.005) {
+    nodes.push(alert({
+      severity: 'WARNING',
+      title: `${pct(drift.unclassifiedFundWeightPercent, { signed: false })} of your money is in funds this app could not classify`,
+      message: `${(drift.unclassifiedFunds || []).join(', ')}. These are left out of the rows above rather than lumped into an "Other" bucket, so those percentages are of the classified part only.`,
+    }));
+  }
+
+  if (drift.cashMeasured === false) {
+    nodes.push(el('p.faint', { style: 'font-size:12.5px;margin-top:8px' },
+      'Cash is missing from this split: the broker payload carried no equity segment, so the '
+      + 'app could not see it. That is different from there being none, and the percentages '
+      + 'above are therefore of a total that excludes an unknown amount.'));
+  }
+
+  nodes.push(el('div.info-box', { style: 'margin-top:14px' },
+    el('h4', {}, equityOnly ? 'This is your whole portfolio' : 'Which total each percentage is out of'),
+    el('p', {},
+      'The percentages above are shares of ',
+      el('strong', {}, 'everything'),
+      ' — ', inr(drift.combinedTotalValue), ' across shares, funds and cash. ',
+      'Every other figure on this screen — the sector mix, the concentration score, the drift '
+      + 'rows, the single-stock limits — is a share of the ',
+      el('strong', {}, inr(drift.totalPortfolioValue)),
+      ' you hold as individual shares, and that is deliberate: a 16% position is a 16% bet on '
+      + 'one business whether or not you also own funds, and restating it against a bigger '
+      + 'total would weaken a risk limit by arithmetic rather than by decision.'),
+    el('p', {},
+      el('strong', {}, 'A fund is not one holding. '),
+      'A mid-cap fund is sixty-odd businesses, so its weight is deliberately never squared into '
+      + 'the concentration score. Until the app can read what the funds themselves hold, how '
+      + 'much your funds overlap with the shares you own directly is ',
+      el('em', {}, 'not measured'),
+      ' — which is honest, and is not the same as zero overlap.'),
+    el('p.faint', {},
+      'The fund figures come from Zerodha Coin and are priced at the last published NAV, which '
+      + 'is struck after the market closes — so a fund value is at most one business day behind '
+      + 'a share price. The per-fund record is on the Funds screen.')));
+
+  return el('div', {}, ...nodes);
+}
+
+/**
+ * What the concentration number leaves out, in rupees (SPEC 52.5).
+ *
+ * Silent when there are no funds, because a caveat on every portfolio is noise and noise trains
+ * the reader past the line that matters (Gotcha 117c).
+ */
+function fundExclusionNote(drift) {
+  if (!drift || !(drift.fundValue > 0) || !(drift.combinedTotalValue > 0)) return null;
+  const share = (drift.fundValue / drift.combinedTotalValue) * 100;
+  return el('p.faint', { style: 'font-size:12.5px;margin-top:10px' },
+    'Computed on your directly-held shares only. ', inr(drift.fundValue),
+    ' — ', pct(share, { signed: false }), ' of your total wealth — sits in funds and is '
+    + 'not in this number. That is deliberate rather than an omission: a fund is dozens of '
+    + 'businesses, so counting its weight as a single position would assert a concentration that '
+    + 'does not exist. What the funds themselves hold is not read here, so whether they overlap '
+    + 'with the shares above is not measured — which is not the same as no overlap.');
+}
+
 function driftPanel(drift) {
   if (!drift || !drift.buckets || drift.buckets.length === 0) {
     return empty('No allocation targets set',
@@ -1003,7 +1136,7 @@ function driftPanel(drift) {
     const targeted = drift.buckets.filter((b) => b.bucketType === type && b.alertLevel !== 'NO_TARGET');
     const untargeted = drift.buckets.filter((b) => b.bucketType === type && b.alertLevel === 'NO_TARGET' && b.actualWeight > 0.05);
     if (targeted.length === 0 && untargeted.length === 0) return null;
-    const nodes = [el('div', { style: 'font-weight:600;margin:12px 0 6px' }, type === 'SECTOR' ? 'By sector' : 'By company size')];
+    const nodes = [el('div', { style: 'font-weight:600;margin:12px 0 6px' }, GROUP_TITLES[type] || humanLabel(type))];
     if (targeted.length) {
       nodes.push(table([
         { key: 'bucketKey', label: type === 'SECTOR' ? 'Sector' : 'Size', render: (b) => humanLabel(b.bucketKey) },
@@ -1084,24 +1217,55 @@ function renderAnalysis() {
     (data.holdings || []).filter((h) => h.analystHouses).length));
   }
 
-  nodes.push(withCount(section('How spread out is your money?',
-    'Your holdings grouped by sector. A single slice dominating means your portfolio rises and falls with one part of the economy. Holdings with no sector on record are named, not hidden in a slice.',
+  // Ahead of the sector mix and the concentration score on purpose. Both of those are shares of
+  // the equity book, and a reader who meets them first has already been told a number is "your
+  // portfolio" before being shown that shares are a quarter of it.
+  nodes.push(withSummary(section('What your money is actually in',
+    'Directly-held shares, mutual funds and broker cash as shares of everything you own. This is '
+    + 'the only block on this screen measured against your total wealth — every other percentage '
+    + 'here is a share of the shares alone, which the note underneath explains.',
+    assetClassPanel(data.drift)),
+    data.drift && data.drift.combinedTotalValue > 0 ? inr(data.drift.combinedTotalValue) : null,
+    { type: 'info' }));
+
+  nodes.push(withCount(section('How spread out are your shares?',
+    'Your directly-held shares grouped by sector — funds and cash are not in these percentages, '
+    + 'and the split across all three is above. A single slice dominating means that part of your '
+    + 'share portfolio rises and falls with one part of the economy. Holdings with no sector on '
+    + 'record are named, not hidden in a slice.',
     sectorMix(data.holdings)),
     new Set((data.holdings || []).map((h) => h.sector).filter(Boolean)).size));
 
   nodes.push(withSummary(section('Concentration risk',
-    'HHI is a single concentration number: under 1,500 is well spread, above 2,500 means a few positions drive most of your outcome. Neither is right or wrong — it just needs to be deliberate. The opposite problem, positions too small to matter, is shown beside it.',
-    riskCard(data.risk)), data.risk && data.risk.hhi && data.risk.hhi.classification));
+    'HHI is a single concentration number: under 1,500 is well spread, above 2,500 means a few '
+    + 'positions drive most of your outcome. Neither is right or wrong — it just needs to be '
+    + 'deliberate. The opposite problem, positions too small to matter, is shown beside it.',
+    riskCard(data.risk),
+    // SPEC 52.5's mandatory caveat, carrying the figure it is withholding so the reader can
+    // disagree with it. It ships with the first fund row rather than later: a concentration
+    // number presented as covering "your portfolio" while excluding three quarters of the money
+    // is the one direction a risk metric must never fail in (Gotchas 44, 55, 63 all failed
+    // flatteringly).
+    fundExclusionNote(data.drift)),
+  data.risk && data.risk.hhi && data.risk.hhi.classification));
 
+  // `b.status` does not exist on a drift bucket - the field is `alertLevel` - so this heading
+  // read a green "On target" on a portfolio where every single sector bucket was breaching, and
+  // did so from the day it shipped. A folded section makes its heading the only thing the reader
+  // sees (SPEC 27.15), so a summary that cannot disagree with itself is worse here than none.
+  const offTarget = ((data.drift && data.drift.buckets) || [])
+    .filter((b) => b.alertLevel === 'OVER_TOLERANCE').length;
   nodes.push(withSummary(section('Are you still following your plan?',
-    'Drift compares what you actually hold against the target percentages you set, by sector and by company size. "Over Tolerance" means a bucket has moved further from target than the wiggle room you allowed.',
+    'Drift compares what you actually hold against the target percentages you set, by sector and '
+    + 'by company size, as shares of your directly-held shares. "Over Tolerance" means a bucket '
+    + 'has moved further from target than the wiggle room you allowed.'
+    + (data.drift && data.drift.targetsStated === false
+      ? ' These targets were seeded when the app first started and you have not set them yourself, '
+        + 'so read a breach as "this comparison has not been set up" rather than as a problem with '
+        + 'the portfolio.' : ''),
     driftPanel(data.drift)),
-    data.drift && data.drift.buckets
-      ? (data.drift.buckets.filter((b) => b.status === 'OVER_TOLERANCE').length
-        ? `${data.drift.buckets.filter((b) => b.status === 'OVER_TOLERANCE').length} off target` : 'On target')
-      : null,
-    { type: data.drift && data.drift.buckets
-      && data.drift.buckets.some((b) => b.status === 'OVER_TOLERANCE') ? 'warning' : 'success' }));
+    data.drift && data.drift.buckets ? (offTarget ? `${offTarget} off target` : 'On target') : null,
+    { type: offTarget ? 'warning' : 'success' }));
 
   return nodes;
 }
