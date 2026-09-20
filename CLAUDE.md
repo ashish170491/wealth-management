@@ -1460,6 +1460,97 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     this JVM (Gotcha 106a). Same family as Gotcha 130: a value stored as a date must be reported as a
     date.
 
+141. **A field count is not a format, and the tell was a number being too small** (B-130,
+    SPEC §52.7). AMFI serves the daily file and the historical report with the **same eight
+    semicolon-separated fields in different orders** - the first and last two agree, and the scheme
+    name, both ISINs, the plan and the option all move. A parser reading fixed positions therefore
+    keeps producing rows with a correct scheme code, a correct NAV and a correct date, and a
+    scrambled everything-else. The first month-end backfill reported **6 months fetched, 0 failed,
+    ~1,900 equity schemes counted per month** and wrote **four NAV points per month** where 275 were
+    due, because `isScreenable()` was reading ISINs as plan names. Nothing threw; no status code was
+    wrong. Field positions are now read from the file's own header line **by column name**, a file
+    with no header **reports its layout as assumed** rather than presenting it as a fact, and
+    `REINVEST` is tested before `GROWTH` because `"ISIN Div Payout/ISIN Growth"` contains both
+    words. Fourth instance of one shape (B-047 a quarter filed as a year, B-060 an RSI whose window
+    could not reach its period, B-120 a per-share delta summed as money): **a figure that is
+    structurally wrong while every mechanism reports success.** Had the wrong number been plausible
+    rather than absurd it would have shipped - which is the argument for B-113's rule, look at the
+    figure before believing the status code.
+
+142. **Two traps in a month-end backfill, and the second is the opposite of the first** (SPEC
+    §52.7). **A weekend month end returns an almost empty file** - `30-Jun-2018` is a Saturday
+    and returns 481 rows, **8 of them equity**, against ~9,500 and ~1,700 on the neighbouring
+    weekday; parsed as a real observation it states that the entire equity universe has no NAV that
+    month (B-054). So `MonthEndCalendar` never asks about a weekend at all. **But a weekday month
+    end can be short and still be good**: `30-Apr-2018` is a Monday returning 3,271 rows against
+    9,553, which reads as the same failure - and its **equity** rows are 1,687 against 1,707, the
+    missing ~6,000 being debt schemes. The first acceptance rule tested total rows and would have
+    discarded a good month, shortening every fund's record by one observation invisibly.
+    `NavFileAcceptance` tests **equity rows only**, at a threshold sitting in a measured gap two
+    orders of magnitude wide (good days 1,687-2,377, the bad day 8) rather than on an assumption
+    about market size. And `mf_history_fetch` exists so **four facts stay distinct**: fetched, not
+    published (asked and silent - a finding), failed (the only real gap), and absent from the table
+    entirely (never attempted). All four look identical in `mf_nav_history` as an absence of rows,
+    and an absence of rows is exactly what the survivorship ledger reads (Gotcha 102's rule, with
+    teeth).
+
+143. **Count windows, never average them - and the window count is not the sample size** (SPEC
+    §52.8). Gotcha 103 (*count years, never average them*) moved from years to rolling windows,
+    plus a trap it does not have. An **average** excess return lets one spectacular window carry a
+    decade, which is how every fund factsheet in the country is built; `RollingWindowRecord` counts
+    the windows a fund was ahead in, at `REQUIRED_SHARE = 0.70`. But §43 counts *years*, which
+    are independent, and **monthly rolling windows are not**: ~100 months of history gives ~60
+    three-year windows and **two independent ones**. So `windowsMeasured` and `independentWindows`
+    are always reported together, **no significance language is produced anywhere**, and the word
+    *consistently* is withheld below two independent windows - which means the five-year rolling
+    record **cannot exist yet**. Reading the window count as a sample size is Gotcha 92 in a new
+    asset class, and B-122 is what it looks like when it reaches a landing page. Two more rules
+    travel with it. **The peer median is asked window by window, never built into an index series**:
+    an index needs a base month, which silently drops every peer that did not exist then and tilts
+    the comparison toward long-lived survivors. And **the TRI haircut is a win condition, not a
+    subtraction** - a price index understates the benchmark by the dividend yield, so excess return
+    against one is overstated *in the fund's favour*; the raw excess is published and the haircut is
+    the bar a window must clear. A peer median gets **no haircut**, because both sides are NAVs net
+    of their own costs and applying one would invent a penalty.
+
+144. **When the obvious cost signal is walled, the cheaper share class is the measurement** (SPEC
+    §52.8). AMFI publishes no machine-readable expense ratio - the page is a React shell with
+    per-AMC downloads and no endpoint. But the Direct and Regular plans of one scheme are **two
+    published NAV series over a single identical portfolio**, differing only by the commission paid
+    out of one of them, so the gap between their compound rates **is** the distributor commission,
+    per fund, per year, from a free file. That is the B-018 move (NSE walled `/api/quote-equity`, so
+    price-to-earnings was computed from filings instead). Three things keep it honest. The two plans
+    share **no scheme code and no ISIN, only a name**, so `SchemeTwinKey` pairs them and is
+    deliberately strict - a **missed** pair costs one unmeasured commission reported honestly, a
+    **wrong** pair publishes the gap between two different portfolios as a commission. A Regular
+    plan with no twin on file reads `REGULAR_PLAN_NO_TWIN`, **never zero drag**. And it is **not a
+    second cost penalty**: a NAV is already net of expenses, so an excess return measured from NAVs
+    has paid for the commission once already. It stops at the fact - naming the drag without naming
+    that moving plans is a redemption plus a purchase, taxable and possibly exit-loaded, reads as
+    advice, so the caveat is mandatory and the arithmetic is refused.
+
+145. **A rule that holds by construction over the set you built may not hold over the set you were
+    given** (B-131, SPEC §52.8). The screenable fund universe is Direct-**Growth** by
+    construction, so every invented test case was a Growth series and every one passed. What the
+    investor actually owns is not constrained that way — and the first live run measured an
+    **IDCW Payout** ELSS holding against Growth peers, reporting it `BEHIND_BENCHMARK` at **-2.34
+    points** across 47 of 66 windows. Under the Income Distribution option the fund pays money out
+    and **its NAV drops by the amount paid**, so an IDCW series records the return *after* every
+    distribution while its peers record it before: two different quantities that look identical on
+    screen. The bias has a direction — IDCW always reads **worse** — so the failure is a
+    fund the investor holds being called a laggard when it is not. `SeriesComparability` now checks
+    before anything is measured, and an **unresolved** option is refused too, because
+    probably-Growth is exactly the assumption that yields a confident wrong number (Gotcha 68).
+    Fifth instance of one shape, after B-047, B-060, B-113 and B-120. Two rules travel with it.
+    **The archive fills a blank plan or option and never overwrites a resolved one** — the daily
+    file leaves both columns empty for a held fund whose name carries no plan words, while the
+    historical feed names it in full, and a share class is immutable so filling a blank is safe
+    where overwriting a category would not be. And **a coverage line must count as many states as
+    its rows draw**: `holdingsMeasured` tested only for `NOT_MEASURED` and so reported three of six
+    holdings measured when one carried a verdict, sweeping two `NOT_COMPARABLE` rows in with the
+    real one (B-117 again). The general rule, and the third time it paid in one session: **run it
+    over the real book, not the universe you constructed.**
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):
@@ -1676,6 +1767,21 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `GET /api/mf/coverage` — the five denominators that keep the rest honest: schemes in the file, persisted, with enough history, owned funds resolved, and **unclassified AMFI headers by name**. DB-only.
 - `POST /api/mf/nav/refresh` — run the 12:30 pull now. Not a broker call, but a multi-second parse plus thousands of upserts on the 4-thread pool that has starved the afternoon twice, so **refused from 14:00 with a 409 carrying its reason**.
 - `POST /api/mf/holdings/sync` — read the broker's `/mf/holdings` now. One paced call, so **refused from 14:55**.
+- `GET /api/mf/portfolio` — **every fund the investor holds, measured** (SPEC §52.8): the
+  record over rolling windows against its own SEBI category counted-not-averaged, where it sat
+  inside that category, what the plan costs, and the survivorship the peer median is flattered by.
+  DB-only, page-load safe. Carries the mandatory coverage line — a holding reading "not measured"
+  is this app's gap, never a judgement on the fund.
+- `GET /api/mf/lens?code=` — the same for one scheme. **404 = never persisted here**, which is a
+  gap in this app's record rather than a statement about the scheme.
+- `GET /api/mf/history` — how deep the month-end archive goes, with **four outcomes never
+  collapsed**: fetched, not published (asked and silent — a finding), failed (the only real gap),
+  and absent entirely (never attempted). DB-only.
+- `POST /api/mf/history/backfill?limit=&force=` — one bounded, paced, resumable pass of the
+  month-end backfill from 2018-04. **Refused from 14:00 with a 409 carrying its reason.** `force`
+  re-attempts settled months and exists for one situation that has already happened once: the
+  parser that read them was wrong (B-130). Re-fetching is safe — a NAV point is keyed on
+  (scheme, date).
 - Freshness key `fundNav`, stamped with **when the job ran**, never with the NAV date (see Gotcha 139).
 
 **Insider Pulse** (SPEC §28):
@@ -2367,6 +2473,20 @@ com.example.trading/
 │                                    # repositories, a sync service, a holdings service, the DB-only
 │                                    # view service, the 12:30 scheduler and the controller.
 │                                    # MutualFundAllocationSource implements the portfolio-side port.
+│                                    # Stage 2 (SPEC §52.7-§52.9) adds the measurement half, all pure:
+│                                    # MonthEndCalendar (never asks about a weekend — a Saturday
+│                                    # month end returns 8 equity rows), NavFileAcceptance (the
+│                                    # equity-rows-only test, whose threshold sits in a measured gap
+│                                    # two orders of magnitude wide), RollingWindowRecord (counted
+│                                    # not averaged, and windowsMeasured is NOT a sample size),
+│                                    # CategoryCrossSection (MIN_PEERS=10 — Contra has four schemes),
+│                                    # PlanCostRead + SchemeTwinKey (the Direct-minus-Regular
+│                                    # commission, the one figure here that does not decay),
+│                                    # SurvivorshipLedger, FundVocabulary. Plus AmfiColumnLayout
+│                                    # (B-130: the two feeds serve the same eight fields in
+│                                    # different orders), AmfiHistoryBackfillService, the
+│                                    # mf_history_fetch table and FundLensService — the single
+│                                    # DB-backed reader, so two screens cannot disagree (§41.5).
 │                                    # Adds NO score, NO pillar and NO timing verdict, and there is
 │                                    # no field to flip — FundSurfaceContractTest fails if one appears.
 ├── holdings/           (6 files)      # Portfolio analysis, valuation, exit timing alerts, HoldingsDecayService (thesis-drift detection)
@@ -2481,4 +2601,4 @@ com.example.trading/
 `WatchlistItemView` too, plus a case asserting `Coverage` still exposes every component the wire
 contract is built from - the two renames crossing that boundary, `impliedUpsidePct ->
 analystUpsidePct` and `symbolAnswered -> analystTargetsFrom`, are exactly where a careless edit
-would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). `UniverseThemesTest` / `ThemeCoverageTest` / `ThemeSurfaceContractTest` (SPEC §51 — the shipped map loads and is never quietly empty; an untagged business returns an EMPTY list and never null, because empty is a finding and null is a gap; an exchange prefix never changes the answer; a business in two themes keeps both; the `verified` flag is asserted against `universe-sectors.csv` symbol by symbol, since it is the only thing keeping an unconfirmed ticker out of a coverage numerator; **an UNVERIFIED member moves the percentage in neither direction** and a theme of only unconfirmable names has a null percentage rather than 0%; the three states always sum to the tagged count over the real file; and no label, caution or status name carries an instruction to transact — that last case caught a real defect in its own first draft, where a bare `" sell"` substring failed on *"whoever **sells** the servers"*, Gotcha 53 exactly). `ThemeCandidatesTest` / `ThemeMapVintageTest` (SPEC §51.9/§51.10 — a business already in the map is never proposed again but is still **counted in the denominator**, or the hit rate silently improves every time the map grows; a bare `wind` must not file Windlas Biotech under wind energy; a theme with no diagnostic name is **named rather than silently empty**; "nothing scanned" and "nothing found" are different sentences (B-054); the recall figure is computed from the run; the vintage check **can never reach PROBLEM** at any age including ten years, and an unreadable review date reports unknown rather than fresh). `UnscoredBackfillResultTest` (SPEC §12.13 — the four outcomes never share a symbol; the caveat says a tier rejection is *a decision, not a gap* and that only the failed list is one; the wording carries no instruction to transact; an empty pass still reports its denominators; and a bounded pass reports what it did not reach, so a run that stopped early cannot look like one that found nothing left to do). `SebiCategoryTest` / `AmfiNavParserTest` / `SchemePlanKeyTest` / `FundSurfaceContractTest` (SPEC §52 — **B-096 pre-empted in a new feed**: the two spellings of every equity category resolve to one category and at least ten categories are reached by more than one spelling, asserted against a **captured set of all 103 live AMFI headers** so a new spelling fails the build rather than silently halving a peer group; an unknown header is unclassified *carrying its raw text* and never the nearest match; the pre-2018 bare `Growth` bucket is **named** rather than unclassified, because "no rule" and "obsolete category" are different facts. In the parser, **an AMC name containing brackets is not a category header** — the real defect this shipped with, where `IL&FS Mutual Fund (IDF)` made 2,535 rows inherit a category that does not exist while nothing threw and the row count stayed right; plus an absent NAV is null not zero, a **future-dated** row is kept because 706 liquid funds strike a next-day NAV, an unreadable date is null not today, and a malformed line is **counted** so a layout change is loud. In the plan key, every distributing spelling resolves to IDCW and a label naming *both* a distribution and growth is IDCW (Gotcha 53, positive direction), an unresolvable plan is never guessed into Regular, and only a Direct-Growth series is canonical. And the contract test makes "contributes zero points" **checkable**: no class in the package may carry an actionable/bonus/points/composite field, no enum name or label may contain a transaction verb **matched on word boundaries**, and every money field is a nullable wrapper so "did not look" cannot collapse into "found zero"). Run with `mvn test` (946 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.
+would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). `UniverseThemesTest` / `ThemeCoverageTest` / `ThemeSurfaceContractTest` (SPEC §51 — the shipped map loads and is never quietly empty; an untagged business returns an EMPTY list and never null, because empty is a finding and null is a gap; an exchange prefix never changes the answer; a business in two themes keeps both; the `verified` flag is asserted against `universe-sectors.csv` symbol by symbol, since it is the only thing keeping an unconfirmed ticker out of a coverage numerator; **an UNVERIFIED member moves the percentage in neither direction** and a theme of only unconfirmable names has a null percentage rather than 0%; the three states always sum to the tagged count over the real file; and no label, caution or status name carries an instruction to transact — that last case caught a real defect in its own first draft, where a bare `" sell"` substring failed on *"whoever **sells** the servers"*, Gotcha 53 exactly). `ThemeCandidatesTest` / `ThemeMapVintageTest` (SPEC §51.9/§51.10 — a business already in the map is never proposed again but is still **counted in the denominator**, or the hit rate silently improves every time the map grows; a bare `wind` must not file Windlas Biotech under wind energy; a theme with no diagnostic name is **named rather than silently empty**; "nothing scanned" and "nothing found" are different sentences (B-054); the recall figure is computed from the run; the vintage check **can never reach PROBLEM** at any age including ten years, and an unreadable review date reports unknown rather than fresh). `UnscoredBackfillResultTest` (SPEC §12.13 — the four outcomes never share a symbol; the caveat says a tier rejection is *a decision, not a gap* and that only the failed list is one; the wording carries no instruction to transact; an empty pass still reports its denominators; and a bounded pass reports what it did not reach, so a run that stopped early cannot look like one that found nothing left to do). `SebiCategoryTest` / `AmfiNavParserTest` / `SchemePlanKeyTest` / `FundSurfaceContractTest` (SPEC §52 — **B-096 pre-empted in a new feed**: the two spellings of every equity category resolve to one category and at least ten categories are reached by more than one spelling, asserted against a **captured set of all 103 live AMFI headers** so a new spelling fails the build rather than silently halving a peer group; an unknown header is unclassified *carrying its raw text* and never the nearest match; the pre-2018 bare `Growth` bucket is **named** rather than unclassified, because "no rule" and "obsolete category" are different facts. In the parser, **an AMC name containing brackets is not a category header** — the real defect this shipped with, where `IL&FS Mutual Fund (IDF)` made 2,535 rows inherit a category that does not exist while nothing threw and the row count stayed right; plus an absent NAV is null not zero, a **future-dated** row is kept because 706 liquid funds strike a next-day NAV, an unreadable date is null not today, and a malformed line is **counted** so a layout change is loud. In the plan key, every distributing spelling resolves to IDCW and a label naming *both* a distribution and growth is IDCW (Gotcha 53, positive direction), an unresolvable plan is never guessed into Regular, and only a Direct-Growth series is canonical. And the contract test makes "contributes zero points" **checkable**: no class in the package may carry an actionable/bonus/points/composite field, no enum name or label may contain a transaction verb **matched on word boundaries**, and every money field is a nullable wrapper so "did not look" cannot collapse into "found zero"). `MonthEndCalendarTest` / `NavFileAcceptanceTest` / `RollingWindowRecordTest` / `CategoryCrossSectionTest` / `PlanCostReadTest` / `SchemeTwinKeyTest` / `SurvivorshipLedgerTest` (SPEC §52.7-§52.9, Stage 2 — and the first case in `RollingWindowRecordTest` is the whole design: **a fund whose *average* excess return is positive because of one spectacular window still fails the count**, which is Gotcha 103 moved from years to windows. Beside it: ~97 months holds **two** independent windows and not sixty, so the word "consistently" is withheld; a price index costs the fund the 1.25-point dividend haircut while a peer median costs it nothing, because both sides are NAVs net of their own costs; the **raw** excess is still published, so the haircut is a bar and not a hidden subtraction; a gap in the series never stretches a 36-month window to 45 months (B-047's family); a benchmark that cannot answer **drops the window rather than scoring the fund against a flat line**; and no benchmark at all is `NOT_COMPARABLE`, never `NOT_MEASURED`, because the fund's own record is intact. The calendar tests are dates from the live archive: a Saturday month end is **never asked about**, a weekday month end that is 6,000 debt rows short is **accepted** because its equity cross-section is complete, and the acceptance threshold is asserted to sit inside the measured gap rather than on a guess. `CategoryCrossSectionTest` pins that **Contra's four schemes get no quartile, ever** — and that this is `TOO_FEW_PEERS`, a refusal, while a genuinely bad record is `LOWER_QUARTILE`. `SchemeTwinKeyTest` pins the asymmetry: a **missed** pair costs one unmeasured commission, a **wrong** pair publishes the gap between two different portfolios as a commission, so the AMC name is part of the key and `GROWTH OPTION` is stripped as a phrase before a bare `OPTION` could strand the word `GROWTH`. And `NavFileAcceptanceTest.rejectionNeverClaimsFundsAreWorthless` **caught a real defect in its own subject**: the rejection text read "...rather than a day on which funds had no value", true and readable as its own opposite the moment it is truncated in a cell — Gotcha 53 in the direction of prose). `SeriesComparabilityTest` / `FundDivergenceNoteTest` (SPEC §52.8 - **the defect the live run found**: an IDCW series is refused rather than measured against Growth peers, an *unresolved* option is refused too because probably-Growth is still an assumption, and the refusal text is asserted never to read as a judgement on the fund. The divergence note exists as a test because after that guard landed it **no longer fires on the live book at all** - so without one it would be code nobody has ever seen run, which is B-074's shape; it pins that agreement stays silent, that an unmeasured reading cannot disagree with anything, and that the note explains the gap rather than resolving it into one answer). Run with `mvn test` (1,010 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.

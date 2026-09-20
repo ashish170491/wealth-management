@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.time.LocalDate;
 
 /**
  * The DB-only read model behind {@code /api/mf/*} (SPEC §52, §27).
@@ -34,6 +35,7 @@ public class MutualFundViewService {
     private final MutualFundNavRepository navRepository;
     private final MutualFundHoldingRepository holdingRepository;
     private final MutualFundSyncRunRepository syncRunRepository;
+    private final MutualFundHistoryFetchRepository historyFetchRepository;
 
     /** What the investor owns, joined to the scheme master where the ISIN resolved. */
     public Map<String, Object> holdings() {
@@ -204,6 +206,84 @@ public class MutualFundViewService {
         Optional<MutualFundSyncRunEntity> last = syncRunRepository.findFirstByOrderByLastPulledAtDesc();
         out.put("lastPulledAt", last.map(MutualFundSyncRunEntity::getLastPulledAt).orElse(null));
         out.put("navDateInFile", last.map(MutualFundSyncRunEntity::getNavDateInFile).orElse(null));
+        return out;
+    }
+
+    /**
+     * How deep the month-end record actually goes (SPEC §52.7).
+     *
+     * <p>This is the instrument for the backfill, the way {@code /api/fundamentals/coverage} is the
+     * instrument for the annual-accounts rollout. It reports <b>three</b> outcomes per month and
+     * never collapses them, because they mean opposite things:
+     *
+     * <ul>
+     *   <li>{@code fetched} - a business day answered and its NAVs are stored.</li>
+     *   <li>{@code notPublished} - every business day was asked and none carried an equity
+     *       cross-section. A finding about the market, not a gap in this app.</li>
+     *   <li>{@code failed} - the request did not succeed. The only real gap, and the only one worth
+     *       acting on.</li>
+     * </ul>
+     *
+     * <p>{@code monthsNeverAttempted} is separate again: a month with no row at all has not been
+     * looked at, which is different from a month that was looked at and found silent. Folding those
+     * together is precisely what made the annual backfill unable to tell "never attempted" from
+     * "this company has only ever filed three years" (Gotcha 102).
+     */
+    public Map<String, Object> historyCoverage() {
+        List<MutualFundHistoryFetchEntity> rows = historyFetchRepository.findAllByOrderByForMonthAsc();
+
+        long fetched = rows.stream()
+                .filter(r -> r.getStatus() == MutualFundHistoryFetchEntity.Status.FETCHED).count();
+        long notPublished = rows.stream()
+                .filter(r -> r.getStatus() == MutualFundHistoryFetchEntity.Status.NOT_PUBLISHED).count();
+        long failed = rows.stream()
+                .filter(r -> r.getStatus() == MutualFundHistoryFetchEntity.Status.FAILED).count();
+
+        long walkedBack = rows.stream()
+                .filter(r -> r.getDatesTried() != null && r.getDatesTried() > 1).count();
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("monthsOnRecord", rows.size());
+        out.put("monthsFetched", fetched);
+        out.put("monthsNotPublished", notPublished);
+        out.put("monthsFailed", failed);
+        out.put("monthsNeedingAWalkBack", walkedBack);
+
+        LocalDate oldest = rows.stream()
+                .filter(r -> r.getDateUsed() != null)
+                .map(MutualFundHistoryFetchEntity::getDateUsed)
+                .min(LocalDate::compareTo).orElse(null);
+        LocalDate newest = rows.stream()
+                .filter(r -> r.getDateUsed() != null)
+                .map(MutualFundHistoryFetchEntity::getDateUsed)
+                .max(LocalDate::compareTo).orElse(null);
+        out.put("oldestMonthEndOnFile", oldest);
+        out.put("newestMonthEndOnFile", newest);
+
+        int floor = config.getMinMonthsToMeasure();
+        out.put("minMonthsToMeasure", floor);
+        out.put("schemesWithEnoughHistory", navRepository.countSchemesWithAtLeast(floor));
+        out.put("schemesPersisted", schemeRepository.count());
+
+        List<Map<String, Object>> months = new ArrayList<>();
+        for (MutualFundHistoryFetchEntity r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("month", r.getForMonth());
+            m.put("status", r.getStatus().name());
+            m.put("dateUsed", r.getDateUsed());
+            m.put("datesTried", r.getDatesTried());
+            m.put("equityRows", r.getEquityRows());
+            m.put("navRowsWritten", r.getNavRowsWritten());
+            m.put("note", r.getNote());
+            months.add(m);
+        }
+        out.put("months", months);
+
+        out.put("caveat", "A month reading NOT_PUBLISHED is a finding, not a gap: every candidate "
+                + "business day was asked and none carried an equity cross-section. A month absent "
+                + "from this list entirely has never been attempted, which is a different fact "
+                + "again. schemesWithEnoughHistory counts stored NAV points per scheme and is a "
+                + "denominator for what could be measured - it says nothing about how any fund did.");
         return out;
     }
 }

@@ -21,6 +21,9 @@ import java.util.Set;
  *
  * <pre>
  * Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date
+ *   ... and the history endpoint serves the SAME EIGHT FIELDS IN A DIFFERENT ORDER:
+ * Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date
+ *   ... so field positions are read from the header line, never assumed (B-130, AmfiColumnLayout).
  *
  * Open Ended Schemes(Equity Scheme - Flexi Cap Fund)     &lt;- category header
  *
@@ -54,13 +57,17 @@ public final class AmfiNavParser {
      * @param unparsedLines        lines that looked like data and could not be read - a layout change
      * @param unclassifiedHeaders  category headers with no rule in {@link SebiCategory}, by name
      * @param categoryHeadersSeen  how many category headers were walked
+     * @param layout               where the fields were found, and whether that was read or assumed
+     *                             (B-130) - reported so a caller can say which feed it just parsed
+     *                             rather than discover it from a figure being too small
      */
     public record ParseResult(
             List<AmfiSchemeRow> rows,
             int unparsedLines,
             Set<String> unclassifiedHeaders,
             int categoryHeadersSeen,
-            Set<String> ambiguousHeadings
+            Set<String> ambiguousHeadings,
+            AmfiColumnLayout layout
     ) {
         public int rowCount() {
             return rows.size();
@@ -81,6 +88,7 @@ public final class AmfiNavParser {
 
         SebiCategory.Resolved currentCategory = SebiCategory.resolve(null);
         String currentAmc = null;
+        AmfiColumnLayout layout = AmfiColumnLayout.assumedDaily();
 
         for (String raw : content.split("\\R")) {
             String line = raw.trim();
@@ -88,8 +96,14 @@ public final class AmfiNavParser {
                 continue;
             }
 
-            // The column header repeats mid-file in some AMFI exports. It is not a scheme row.
+            // The column header repeats mid-file in some AMFI exports. It is not a scheme row -
+            // it is where the field positions come from, because AMFI serves this data in two
+            // different column orders with the same field count (B-130, AmfiColumnLayout).
             if (line.startsWith(COLUMN_HEADER_PREFIX)) {
+                AmfiColumnLayout read = AmfiColumnLayout.fromHeader(line);
+                if (read.isUsable()) {
+                    layout = read;
+                }
                 continue;
             }
 
@@ -112,7 +126,7 @@ public final class AmfiNavParser {
                 continue;
             }
 
-            AmfiSchemeRow row = parseRow(line, currentCategory, currentAmc);
+            AmfiSchemeRow row = parseRow(line, currentCategory, currentAmc, layout);
             if (row == null) {
                 unparsed++;
             } else {
@@ -121,7 +135,7 @@ public final class AmfiNavParser {
         }
 
         return new ParseResult(List.copyOf(rows), unparsed, Set.copyOf(unclassified),
-                categoryHeaders, Set.copyOf(ambiguous));
+                categoryHeaders, Set.copyOf(ambiguous), layout);
     }
 
     /** The structure words every AMFI category header begins with. */
@@ -156,23 +170,24 @@ public final class AmfiNavParser {
         return !looksLikeCategoryHeader(line) && line.contains(" - ") && line.indexOf('(') > 0;
     }
 
-    private static AmfiSchemeRow parseRow(String line, SebiCategory.Resolved category, String amc) {
+    private static AmfiSchemeRow parseRow(String line, SebiCategory.Resolved category, String amc,
+                                          AmfiColumnLayout layout) {
         String[] f = line.split(";", -1);
         if (f.length < 8) {
             return null;
         }
         long code;
         try {
-            code = Long.parseLong(f[0].trim());
-        } catch (NumberFormatException e) {
+            code = Long.parseLong(f[layout.code()].trim());
+        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
             return null;
         }
 
-        String isinGrowth = blankToNull(f[1]);
-        String isinReinvest = blankToNull(f[2]);
-        String name = f[3].trim();
-        String planCol = f[4];
-        String optionCol = f[5];
+        String isinGrowth = blankToNull(at(f, layout.isinGrowth()));
+        String isinReinvest = blankToNull(at(f, layout.isinReinvest()));
+        String name = at(f, layout.name()).trim();
+        String planCol = at(f, layout.plan());
+        String optionCol = at(f, layout.option());
 
         SchemePlanKey.Resolved pk = SchemePlanKey.resolve(planCol, optionCol, name);
 
@@ -189,9 +204,14 @@ public final class AmfiNavParser {
                 pk.option(),
                 pk.planFrom(),
                 pk.optionFrom(),
-                parseNav(f[6]),
-                parseDate(f[7])
+                parseNav(at(f, layout.nav())),
+                parseDate(at(f, layout.date()))
         );
+    }
+
+    /** A column the header did not name is absent, never field zero. */
+    private static String at(String[] fields, int index) {
+        return (index >= 0 && index < fields.length) ? fields[index] : "";
     }
 
     /**

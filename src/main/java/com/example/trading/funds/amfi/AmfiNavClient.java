@@ -10,6 +10,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 /**
  * Fetches AMFI's daily all-scheme NAV file (SPEC §52.4).
@@ -97,6 +100,50 @@ public class AmfiNavClient {
         }
 
         log.info("AMFI NAV file fetched: {} bytes", body.length());
+        return body;
+    }
+
+    /**
+     * AMFI's date format in the historical report's query string. Locale-pinned on purpose: under a
+     * non-English default locale {@code MMM} renders a month name AMFI does not recognise, and the
+     * endpoint answers HTTP 200 with an empty report rather than an error - which the caller would
+     * read as "no fund published that month".
+     */
+    private static final DateTimeFormatter AMFI_DATE =
+            DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);
+
+    /**
+     * One historical day's file, for the month-end series (SPEC §52.7).
+     *
+     * <p>Same shape, same parser and same failure contract as {@link #fetchNavAll()}: a transport
+     * failure throws rather than returning a blank string, because a month we failed to fetch and a
+     * month in which nothing published must never look alike downstream.
+     *
+     * @param date the single day requested; {@code frmdt} and {@code todt} are both set to it
+     */
+    public String fetchNavHistory(LocalDate date) {
+        String stamp = AMFI_DATE.format(date);
+        String url = config.getNavHistoryUrl() + "?frmdt=" + stamp + "&todt=" + stamp;
+        String body;
+        try {
+            body = webClient.get()
+                    .uri(url)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(config.getTimeoutSeconds()));
+        } catch (Exception e) {
+            throw new AmfiFetchException("AMFI history fetch for " + stamp + " failed: "
+                    + e.getMessage(), e);
+        }
+        if (body == null || body.isBlank()) {
+            throw new AmfiFetchException("AMFI returned an empty body for " + stamp
+                    + " - treating as a failed fetch, not as a day on which nothing published");
+        }
+        if (!body.contains("Scheme Code")) {
+            throw new AmfiFetchException("AMFI history response for " + stamp + " has no header row"
+                    + " - the feed layout may have changed, or an error page was served with 200");
+        }
+        log.debug("AMFI history {}: {} bytes", stamp, body.length());
         return body;
     }
 

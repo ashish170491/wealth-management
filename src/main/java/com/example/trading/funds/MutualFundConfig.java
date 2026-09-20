@@ -52,6 +52,39 @@ public class MutualFundConfig {
     private boolean storeNavForScreenableUniverse = true;
 
     /**
+     * AMFI's historical NAV report. One date range per call, all AMCs, back to 2016.
+     *
+     * <p>{@code frmdt} and {@code todt} are appended as {@code dd-MMM-yyyy}. Asking for a single
+     * day rather than a range is deliberate: a range returns every intervening day and the body
+     * grows past any sane buffer, while what a month-end series needs is exactly one observation.
+     */
+    private String navHistoryUrl = "https://portal.amfiindia.com/DownloadNAVHistoryReport_Po.aspx";
+
+    /**
+     * Where the month-end backfill starts.
+     *
+     * <p><b>2018-04, not 2016.</b> SEBI's recategorisation circular took effect through the first
+     * half of 2018, so a scheme's category before it does not describe the mandate it runs today -
+     * comparing a fund against a peer group assembled under the old taxonomy is B-047's family, a
+     * figure measured on one scale and reported on another. The archive reaches further back and
+     * the extra years are deliberately not used for anything category-relative.
+     */
+    private String historyStartMonth = "2018-04";
+
+    /**
+     * Pause between historical fetches, milliseconds.
+     *
+     * <p>Courtesy, not a rate limit anybody published: this is a third party's free endpoint being
+     * read for one investor's own portfolio (SPEC §49.11's rule i). ~100 calls at this pace is
+     * about four minutes, which is why the backfill is bounded and resumable rather than one long
+     * run.
+     */
+    private long historyPaceMillis = 1500;
+
+    /** Months a single backfill pass will attempt before stopping and reporting what it did. */
+    private int historyBatchMonths = 12;
+
+    /**
      * Minimum stored monthly NAV points before any rolling measurement may be published.
      *
      * <p>36 months, and it is a refusal rather than a tuning knob: below it the whole lens reads

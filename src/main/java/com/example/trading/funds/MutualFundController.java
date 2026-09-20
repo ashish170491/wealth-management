@@ -46,6 +46,8 @@ public class MutualFundController {
     private final MutualFundViewService viewService;
     private final MutualFundNavSyncService navSyncService;
     private final MutualFundHoldingsService holdingsService;
+    private final AmfiHistoryBackfillService historyBackfillService;
+    private final FundLensService lensService;
 
     // ------------------------------------------------------------------ reads (DB-only)
 
@@ -67,6 +69,34 @@ public class MutualFundController {
     @GetMapping("/coverage")
     public Map<String, Object> coverage() {
         return viewService.coverage();
+    }
+
+    /**
+     * Every fund the investor holds, measured (SPEC 52.8).
+     *
+     * <p>The record over rolling windows, standing inside its own SEBI category, what the plan
+     * costs, and the survivorship the peer median is flattered by. Contributes zero points to any
+     * score and carries no instruction to transact.
+     */
+    @GetMapping("/portfolio")
+    public Map<String, Object> portfolioLens() {
+        return lensService.portfolio();
+    }
+
+    @GetMapping("/lens")
+    public ResponseEntity<Map<String, Object>> lens(@RequestParam long code) {
+        return lensService.lensFor(code)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(reason(404, "Not tracked",
+                                "Scheme " + code + " is not in mf_scheme, so there is nothing to "
+                                        + "measure. That is a gap in this app's record, not a "
+                                        + "statement about the scheme.")));
+    }
+
+    @GetMapping("/history")
+    public Map<String, Object> history() {
+        return viewService.historyCoverage();
     }
 
     // ------------------------------------------------------------------ writes (button-only)
@@ -110,6 +140,33 @@ public class MutualFundController {
             out.put("unresolvedNote", r.unresolved() + " holding(s) could not be matched to an AMFI "
                     + "scheme by ISIN. They are kept and reported, never guessed or dropped.");
         }
+        return out;
+    }
+
+    @PostMapping("/history/backfill")
+    public Map<String, Object> backfillHistory(@RequestParam(required = false) Integer limit,
+                                              @RequestParam(defaultValue = "false") boolean force) {
+        requireBefore(NAV_REFRESH_BLOCKED_FROM,
+                "The AMFI month-end backfill",
+                "it makes a paced request per month against a third party and parses a 1.2 MB file "
+                        + "each time, on the same 4-thread pool the afternoon jobs run on");
+
+        AmfiHistoryBackfillService.BackfillResult r =
+                historyBackfillService.backfill(limit, force, java.time.LocalDate.now());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("monthsAttempted", r.monthsAttempted());
+        out.put("monthsFetched", r.monthsFetched());
+        out.put("monthsNotPublished", r.monthsNotPublished());
+        out.put("monthsFailed", r.monthsFailed());
+        out.put("navRowsWritten", r.navRowsWritten());
+        out.put("schemesDiscovered", r.schemesDiscovered());
+        out.put("monthsRemaining", r.monthsRemaining());
+        out.put("detail", r.detail());
+        out.put("caveat", "monthsNotPublished is a finding, not a failure: every business day in "
+                + "that month was asked and none carried an equity cross-section. Only monthsFailed "
+                + "is a gap in this app. schemesDiscovered counts schemes present in the archive and "
+                + "absent from today's file - funds that have since merged or wound up, kept "
+                + "deliberately because they are what makes survivorship measurable.");
         return out;
     }
 

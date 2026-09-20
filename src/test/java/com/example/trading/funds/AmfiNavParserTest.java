@@ -1,5 +1,6 @@
 package com.example.trading.funds;
 
+import com.example.trading.funds.amfi.AmfiColumnLayout;
 import com.example.trading.funds.amfi.AmfiNavParser;
 import com.example.trading.funds.amfi.AmfiSchemeRow;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +22,95 @@ class AmfiNavParserTest {
 
     private static final String HEADER =
             "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date";
+
+    /**
+     * The historical endpoint's header. Same eight fields, different order - see B-130 and
+     * {@link #historyLayoutIsReadFromTheHeaderNotAssumed()}.
+     */
+    private static final String HISTORY_HEADER =
+            "Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date";
+
+    @Test
+    @DisplayName("B-130: the history feed's column order is read from its header, not assumed")
+    void historyLayoutIsReadFromTheHeaderNotAssumed() {
+        // Verbatim from the 31-Aug-2026 historical file. Under the daily file's fixed positions
+        // this row still parses - the scheme code, NAV and date sit in the same places - while the
+        // name, both ISINs, the plan and the option are all silently taken from the wrong columns.
+        // That is how the first backfill reported "6 months fetched, 0 failed" and wrote four NAV
+        // points where hundreds were due: nothing threw, and only the figure being too small said so.
+        String file = HISTORY_HEADER + "\n"
+                + "\n"
+                + "Open Ended Schemes ( Equity Scheme - Mid Cap Fund )\n"
+                + "\n"
+                + "Axis Mutual Fund\n"
+                + "\n"
+                + "120505;Axis Midcap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;"
+                + "INF846K01DP9;INF846K01CH8;123.4560;31-Aug-2026\n";
+
+        AmfiNavParser.ParseResult r = AmfiNavParser.parse(file);
+
+        assertThat(r.rowCount()).isEqualTo(1);
+        AmfiSchemeRow row = r.rows().get(0);
+        assertThat(row.schemeName()).isEqualTo("Axis Midcap Fund - Direct Plan - Growth Option");
+        assertThat(row.plan()).isEqualTo(SchemePlanKey.Plan.DIRECT);
+        assertThat(row.option()).isEqualTo(SchemePlanKey.Option.GROWTH);
+        assertThat(row.category()).isEqualTo(SebiCategory.MID_CAP);
+        assertThat(row.isScreenable())
+                .as("the whole point: under the assumed layout this row is not screenable and the "
+                        + "month-end series is empty")
+                .isTrue();
+        assertThat(r.layout().source()).isEqualTo(HISTORY_HEADER);
+    }
+
+    @Test
+    @DisplayName("the daily feed still parses, and the two layouts disagree about every middle field")
+    void dailyAndHistoryLayoutsDiffer() {
+        AmfiColumnLayout daily = AmfiColumnLayout.fromHeader(HEADER);
+        AmfiColumnLayout history = AmfiColumnLayout.fromHeader(HISTORY_HEADER);
+
+        assertThat(daily.isUsable()).isTrue();
+        assertThat(history.isUsable()).isTrue();
+
+        // The three fields that agree are exactly why this was invisible.
+        assertThat(history.code()).isEqualTo(daily.code());
+        assertThat(history.nav()).isEqualTo(daily.nav());
+        assertThat(history.date()).isEqualTo(daily.date());
+
+        // Every field that identifies the scheme moves.
+        assertThat(history.name()).isNotEqualTo(daily.name());
+        assertThat(history.plan()).isNotEqualTo(daily.plan());
+        assertThat(history.option()).isNotEqualTo(daily.option());
+        assertThat(history.isinGrowth()).isNotEqualTo(daily.isinGrowth());
+        assertThat(history.isinReinvest()).isNotEqualTo(daily.isinReinvest());
+    }
+
+    @Test
+    @DisplayName("the two ISIN columns are told apart, not both mapped to the payout column")
+    void isinColumnsAreDistinct() {
+        AmfiColumnLayout daily = AmfiColumnLayout.fromHeader(HEADER);
+
+        // "ISIN Div Payout/ ISIN Growth" contains both words, so testing GROWTH before REINVEST
+        // puts the reinvestment ISIN into the growth field and loses one of them entirely.
+        assertThat(daily.isinGrowth()).isEqualTo(1);
+        assertThat(daily.isinReinvest()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("a file with no column header says its layout was assumed rather than read")
+    void missingHeaderIsReportedAsAssumed() {
+        String file = "Open Ended Schemes(Equity Scheme - Mid Cap Fund)\n"
+                + "\n"
+                + "Axis Mutual Fund\n"
+                + "\n"
+                + "120505;INF846K01CH8;-;Axis Midcap Fund;Direct Plan;Growth;123.4560;18-Sep-2026\n";
+
+        AmfiNavParser.ParseResult r = AmfiNavParser.parse(file);
+
+        assertThat(r.rowCount()).isEqualTo(1);
+        assertThat(r.layout().source())
+                .as("an assumption must be reportable as one, never presented as a fact")
+                .contains("assumed");
+    }
 
     @Test
     @DisplayName("a category header carries down onto every row beneath it")

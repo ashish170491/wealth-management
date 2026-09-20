@@ -954,6 +954,10 @@ is Gotcha 118's hazard aimed at whoever maintains this next. `/api/mf` also matc
 - `GET /api/mf/coverage` — the denominators that keep the rest honest: schemes in the file, schemes persisted, schemes with enough history to measure, owned funds resolved to a scheme, and the unclassified headers **by name**. DB-only.
 - `POST /api/mf/nav/refresh` — run the 12:30 pull now. Not a broker call, but a multi-second parse and thousands of upserts on the 4-thread pool that has starved the afternoon twice (B-014, B-049), so **refused from 14:00 with a 409 carrying its reason in the body**.
 - `POST /api/mf/holdings/sync` — read Kite `/mf/holdings` now. One paced broker call, so **refused from 14:55**, the same rule as every per-row refresh.
+- `GET /api/mf/portfolio` — **every fund the investor holds, measured** (§52.8): the record over rolling windows against its own SEBI category **counted not averaged**, where it sat inside that category, what the plan costs, and the survivorship the peer median is flattered by. DB-only, page-load safe. Carries the mandatory coverage line — a holding reading "not measured" is this app's gap, never a judgement on the fund.
+- `GET /api/mf/lens?code=` — the same for one scheme. **404 = never persisted here**, a gap in this app's record rather than a statement about the scheme.
+- `GET /api/mf/history` — how deep the month-end archive goes, with **four outcomes never collapsed**: fetched, not published (asked and silent — a finding), failed (the only real gap), and absent from the table entirely (never attempted). DB-only.
+- `POST /api/mf/history/backfill?limit=&force=` — one bounded, paced, resumable pass of the month-end backfill from 2018-04. **Refused from 14:00 with a 409 carrying its reason.** `force` re-attempts settled months and exists for one situation that has already happened once: the parser that read them was wrong (B-130). Re-fetching is safe — a NAV point is keyed on `(scheme, date)`.
 
 ---
 
@@ -1018,6 +1022,7 @@ silently folded into HHI, sector weights and the TWR series.
 | `mf_nav_history` | `(amfi_scheme_code, nav_date)` unique. Daily for owned schemes; month-end for the screenable universe. Retained forever — it is what makes survivorship measurable (§52.7) |
 | `mf_holding` | What the investor owns, from Kite `/mf/holdings`, keyed `(isin, folio)`. `quantity numeric(18,4)` — **never `int`**. Nullable `amfi_scheme_code` beside `scheme_resolved_from`; **soft-delete** via `active`/`exited_on`, because here the history *is* the feature |
 | `mf_sync_run` | One row per NAV pull: `last_pulled_at`, rows parsed, unparsed lines, unclassified headers. The freshness key reads this, **not** a NAV date (§52.6) |
+| `mf_history_fetch` | One row per **month**, unique on `for_month`. Records that a month was *asked about*, which is a different fact from whether any NAV came back. `status ∈ FETCHED / NOT_PUBLISHED / FAILED`, plus `date_used` — the business day that actually answered, which is **not** the calendar month end when that fell on a weekend or a holiday. Without it, "never fetched" and "fetched, and those schemes had no NAV" are indistinguishable in `mf_nav_history` — both are an absence of rows, and the second one read as fact says a fund ceased to exist (§52.7, Gotcha 102) |
 
 ### LOB columns
 All JSON/audit text fields use `@Column(columnDefinition = "TEXT")`, **not** `@Lob String`. Rationale: Hibernate 6 + PostgreSQL maps `@Lob String` to `oid`, requiring an open transaction to stream. `SchemaMigrationRunner` runs idempotent startup conversion of any legacy `oid` columns to `TEXT`.
@@ -5630,6 +5635,14 @@ value tile, where funds sit at T−1 NAV beside equities at today's price — st
 two keys rather than one):
 
 - `fundNav` ← `mf_sync_run.last_pulled_at`, a `LocalDateTime` — **when the job ran**.
+
+**The month-end backfill gets no freshness key, deliberately** (§52.7, Gotcha 125). Amber on the
+`nav.js` strip means *a job that should have run has not*, and that claim is simply false for a table
+nothing schedules: the archive is as current as the last time somebody chose to deepen it, and a
+fortnight-old stamp on it is a fact about the reader's habits rather than a fault. Its depth is
+reported on `GET /api/mf/history` instead, where it can be read as a denominator rather than as an
+alarm — the same reasoning that keeps `macroEvents` on the on-demand list. Stage 2 therefore adds
+**no `@Scheduled` method**, and the §15 count stays at 29.
 - Every rendered NAV separately carries `nav_date`, a bare `LocalDate` — **the date of the value**,
   reported in days ("today" / "yesterday" / "N days ago"), never hours.
 
@@ -5639,52 +5652,163 @@ A market holiday moves one and not the other, which is the third reason they can
 **An unchanged `nav_date` between two pulls is not an error** — there is no NSE holiday calendar in
 this JVM (Gotcha 106a).
 
-### 52.7 What is measured — staged
+### 52.7 The month-end archive, and the two traps in fetching it
 
-**Stage 1 (✅ this change)**: scheme master, NAV feed, the investor's own fund holdings, and the
-combined asset-class view. No performance judgement is published yet.
+Everything in §52.8 rests on a month-end NAV series, built by `AmfiHistoryBackfillService` from
+AMFI's own historical report — one request per month, bounded, paced and resumable, recorded in
+`mf_history_fetch`.
 
-**Stage 2 (planned)**: rolling excess return over the category benchmark, **counted not averaged**
-(§43's idiom), with the trap one level down respected — §43 counts *years*, which are independent,
-but **monthly rolling windows are not**. From 2018-04 there are ~100 months, so 3-year windows
-stepped monthly give ~67 windows and **under 3 independent ones**. `windowsMeasured` and
-`independentWindows` are always reported together, **no t-statistic or significance language ever**,
-and the word "consistently" is unavailable below two independent windows — which means the 5-year
-rolling record **cannot exist yet** and the 3-year window leads.
+**That table exists so three different facts cannot be confused.** A month is `FETCHED`,
+`NOT_PUBLISHED` (every candidate business day was asked and none carried an equity cross-section —
+a finding about the market) or `FAILED` (the request did not succeed — the only real gap). A month
+absent from the table entirely has *never been attempted*, which is a fourth fact again. Without the
+table all four look identical in `mf_nav_history`: an absence of rows. This is Gotcha 102's rule —
+"never attempted" and "this company has only ever filed three years" are indistinguishable from a
+row count — and it matters more here, because an absence of NAV rows is exactly the input the
+survivorship ledger reads (§52.9), so the confusion would not stay harmless.
 
-Also Stage 2: **`PlanCostRead`** — the Direct-minus-Regular CAGR gap, in basis points and rupees,
-the single most actionable number here; and **the survivorship ledger**, which is measured rather
-than caveated. AMFI lists only live schemes, and SEBI's 2018 one-scheme-per-category rule forced a
-merger wave *inside* the measurement window, so every category median is over survivors. Once
-month-end history is on file the app knows which scheme codes stopped appearing: *"of 148 flexi-cap
-schemes reporting in Jan-2019, 41 no longer do."* **A fund's own record is not survivorship-biased —
-only the peer comparison is**, and conflating the two lets a real finding be waved away.
+**Trap 1 — a weekend month end returns an almost empty file.** Measured: `30-Jun-2018` is a Saturday
+and returns **481 rows, 8 of them equity**, against ~9,500 and ~1,700 on the neighbouring weekday.
+Parsed naively that is not an error — it is a month in which the archive appears to state that the
+entire equity universe has no NAV, which every downstream reading takes as fact (B-054). I walked
+into it twice while planning, which is why `MonthEndCalendar` never asks about a weekend at all
+rather than asking and coping.
 
-**Benchmarks, and why only two categories can have one.** SEBI mandates **TRI** benchmarks; a price
-index understates the benchmark by the dividend yield (~1–1.5%/yr in India), so every excess return
-computed here is **overstated in the fund's favour** — the worst possible direction, and therefore
-always printed with the bias and its direction named. Of the whole universe this app can benchmark
-Mid Cap exactly, Large Cap by a named proxy, and Large & Mid by a stated blend. Flexi Cap, Multi
-Cap, Small Cap, ELSS, Focused, Value and Contra are **`NOT_HELD`** — an app gap, fixable by adding a
-Nifty 500 series — and Sectoral/Thematic is **`NOT_SINGULAR`**, a property of the question and never
-fixable. Those two must render differently, and neither may collapse into `NOT_MEASURED`, which
-would throw away the fund's own perfectly good record. **That is why category standing is the
-default path and the benchmark path is the exception.**
+**Trap 2 — and it is the opposite of what it looks like.** `30-Apr-2018` is a *Monday* returning
+**3,271 rows against 9,553** the previous business day, which reads as the same failure. It is not:
+its **equity** rows are **1,687 against 1,707**. The ~6,000 missing rows are debt schemes. The first
+version of the acceptance rule tested total rows and would have discarded a perfectly good month,
+shortening every fund's record by one observation in a way no screen could show. So `NavFileAcceptance`
+tests **equity rows only**, at a threshold sitting in a measured gap two orders of magnitude wide —
+good days run 1,687–2,377, the one bad day read 8 — rather than on an assumption about how big the
+market ought to be (§12.11's discipline).
 
-**Stage 3 (planned, conditional)**: look-through overlap with the direct equity book — the one thing
-no fund website can compute, since it requires knowing what the investor owns directly. It needs
-AMC monthly portfolio disclosures, whose format and reachability are **unverified** (AMFI's own
-TER and disclosure pages are React shells with no discoverable API). It begins with a manual
-single-scheme import to find out. **Ship the list, gate the index**: *"7 of your 30 direct holdings
-also appear in your funds"* is useful at partial coverage, whereas a look-through concentration
-index over 60% of the money reads **lower** than the truth — the one direction a risk metric must
-never fail in (Gotchas 44, 55, 63 all failed flatteringly). `lookThroughHhi` stays null below 95%
-coverage and reports without alerting for its first quarter. **If disclosure proves unobtainable,
-Stage 3 is cut rather than faked** and the module says so in words: *"this app has no portfolio
-disclosure for any fund you hold, so it cannot tell you whether your funds already own your stocks.
-That is a gap in the app, not a finding about your portfolio."*
+**The feed serves two different column orders (B-130).** The daily file is
+`Scheme Code;ISIN Growth;ISIN Reinvest;Scheme Name;Plan;Option;NAV;Date`; the history endpoint is
+`Scheme Code;NAV Name;Plan;Option;ISIN Growth;ISIN Reinvest;NAV;Date`. Same eight fields, same first
+and last two, **every identifying field moved**. A parser reading fixed positions therefore keeps
+producing rows with a correct code, NAV and date and a scrambled everything-else. Positions are read
+from the file's own header line by column name, never assumed, and a file with no header reports its
+layout as *assumed* rather than presenting it as a fact.
 
-### 52.8 Non-goals
+**A scheme found only in the archive is stored, not skipped** — it is precisely a scheme that has
+since merged or wound up, and that is the evidence §52.9 is made of (§25.1). Its *current* fields
+are never overwritten by a historical row, so a 2018 category can never displace today's.
+
+### 52.8 What is measured ✅ (Stage 2, 2026-09-20)
+
+**Rolling excess return, counted not averaged** — §43's idiom moved from years to windows, and the
+whole measurement design. An *average* excess return lets one spectacular window carry a decade: a
+fund that beat its peers by 30 points in 2020 and has trailed slightly every month since still shows
+a positive mean, and every factsheet in the country is built that way. `RollingWindowRecord` counts
+instead: *in how many of the windows it has lived through was it ahead?* `REQUIRED_SHARE = 0.70`,
+the same figure and the same reasoning as §43 — not 1.0, because a fund never once behind has not met
+a bad market and that selects for short histories; not a bare majority, because a fund spends more
+than half a cycle in the half that suits its style. It is the one threshold here set on judgement
+rather than a measured percentile, for §43.4's reason.
+
+**The trap one level down, which §43 does not have.** §43 counts *years*, and years are independent.
+Monthly rolling windows are not: ~100 months gives ~60 three-year windows and **two independent
+ones**. `windowsMeasured` and `independentWindows` are always reported together, **no t-statistic or
+significance language is produced anywhere**, and the word *consistently* is withheld below two
+independent windows — which means **the five-year rolling record cannot exist yet** and the
+three-year window leads. Reading the window count as a sample size is Gotcha 92 in a new asset class,
+and B-122 is what it looks like on a landing page.
+
+**The category median is the primary comparator, and the benchmark is the exception.** Every peer's
+month-end series comes from the same file, over the same dates, so the comparison is like-for-like by
+construction and needs no index at all. It is asked **window by window** rather than built into one
+index series: a category's membership changes every year, and an index needs a base month, which
+silently excludes every peer that did not exist then and tilts the comparison toward long-lived
+survivors. Below `MIN_PEERS = 10` the median **declines to answer** rather than returning a thin
+number — measured on the live file, Contra has **four** schemes, and a quartile over four would be
+the most confident thing on the screen.
+
+**The TRI haircut is a win condition, never a subtraction.** SEBI mandates Total Return Index
+benchmarks. A price index understates the benchmark by the dividend yield (~1–1.5%/yr in India), so
+every excess return against one is **overstated in the fund's favour** — the worst possible
+direction. The raw excess is published and `TRI_HAIRCUT_PP = 1.25` is the bar a window must clear, so
+a fund ahead by 0.8 points reads as *behind* and the reason says why. A peer median gets **no
+haircut**: both sides are NAVs net of their own costs, and applying one would invent a penalty.
+
+**Benchmark availability, and why only two categories have one.** Mid Cap is `HELD_EXACT`, Large Cap
+`HELD_PROXY` (named on screen), Large & Mid `HELD_BLEND` with the weights shown. Flexi Cap, Multi
+Cap, Small Cap, ELSS, Focused, Value and Contra are **`NOT_HELD`** — this app's gap, fixable by
+loading a Nifty 500 series. Sectoral/Thematic is **`NOT_SINGULAR`**: ~1,000 schemes each track a
+different index, a property of the question and permanently refused. Those two render differently and
+neither may collapse into `NOT_MEASURED`, which would throw away the fund's own good record.
+Substituting a midcap index for a small-cap mandate is **B-047 in index clothing** and is barred by
+test.
+
+**The units guard, and the live run that proved it was needed** (B-131). A scheme's series may only
+be compared with its peers' if it is a **Growth** series. Under the Income Distribution cum Capital
+Withdrawal option the fund pays money out and *its net asset value drops by the amount paid*, so an
+IDCW series records the return **after** every distribution while its Growth peers record it before.
+The screenable universe is Direct-Growth by construction, so this could not arise there — but an
+**owned** scheme is whatever the investor bought, and the first live run measured an IDCW ELSS
+holding against Growth peers and reported it `BEHIND_BENCHMARK` at **-2.34 points**. The bias has a
+direction: an IDCW series always reads **worse**, so the failure is a fund the investor owns being
+called a laggard when it is not. `SeriesComparability` is checked *before* anything is measured, an
+**unresolved** option is refused on the same grounds (probably-Growth is the assumption that
+produces a confident wrong number), and the refusal names the Growth series of the same scheme as
+the thing that would be measurable — a gap with a next step rather than a dead end.
+
+Two rules came out of the same run. **The archive fills a blank plan or option and may never
+overwrite a resolved one**: the daily file leaves both columns empty for one held fund whose name
+carries no plan words, while the historical feed names it in full, and a share class is an immutable
+property of the scheme so filling a blank is safe where overwriting a category would not be. And
+**the coverage line counts four states, not two** — *measured*, *not comparable* (measured fine,
+nothing like-for-like to grade it against), *not measured* (too little history), *unresolved* —
+because counting only the last two reported three of six holdings as measured when one carried a
+verdict (B-117's shape).
+
+**`PlanCostRead` — the one number here that does not decay.** AMFI publishes no machine-readable
+expense ratio (the page is a React shell with per-AMC downloads and no endpoint), so the obvious cost
+signal is unavailable. But the Direct and Regular plans of one scheme are **two published NAV series
+over a single identical portfolio**, differing only by the commission paid out of one of them — so
+the gap between their compound rates *is* the distributor commission, per fund, per year, from a free
+file. That is the B-018 move. The two plans share no scheme code and no ISIN, only a name, so
+`SchemeTwinKey` pairs them; it is deliberately strict, because a **missed** pair costs one unmeasured
+commission reported honestly while a **wrong** pair publishes the gap between two different
+portfolios as a commission. A Regular plan with no twin on file reads `REGULAR_PLAN_NO_TWIN`, never
+zero drag. And it stops at the fact: the switching caveat is mandatory and the arithmetic of acting
+on it is refused (§52.10).
+
+Note what this is **not**: a second cost penalty. A NAV is already net of expenses, so an excess
+return measured from NAVs has paid for the commission once already. Subtracting it again is
+double-counting.
+
+### 52.9 Survivorship, measured rather than caveated
+
+AMFI's daily file lists only live schemes, so every category median computed from it is a median over
+survivors — and SEBI's 2018 one-scheme-per-category rule forced a merger wave **inside** the window
+this module measures. The usual response is a sentence admitting the bias exists. With the month-end
+archive on file the app does better: it knows exactly which scheme codes were reporting in a given
+month and are absent today. The first backfill pass over 2018 discovered **51 schemes present in the
+archive and absent from today's file** in its first three months alone.
+
+**The distinction that must not be lost.** A fund's *own* record is not survivorship-biased — it is
+the record of a fund that is still here, measured over its own life. Only the *peer comparison* is
+biased, because the peers that did worst were merged away and took their returns out of the median.
+Conflating the two lets a real finding about a fund be waved off with a general caveat, so the ledger
+attaches to the cross-section only and says so in words.
+
+### 52.10 Stage 3 (planned, conditional) — look-through overlap
+
+Look-through overlap with the direct equity book is the one thing no fund website can compute, since
+it requires knowing what the investor owns directly. It needs AMC monthly portfolio disclosures,
+whose format and reachability are **unverified** (AMFI's own TER and disclosure pages are React
+shells with no discoverable API). It begins with a manual single-scheme import to find out. **Ship
+the list, gate the index**: *"7 of your 30 direct holdings also appear in your funds"* is useful at
+partial coverage, whereas a look-through concentration index over 60% of the money reads **lower**
+than the truth — the one direction a risk metric must never fail in (Gotchas 44, 55, 63 all failed
+flatteringly). `lookThroughHhi` stays null below 95% coverage and reports without alerting for its
+first quarter. **If disclosure proves unobtainable, Stage 3 is cut rather than faked** and the module
+says so in words: *"this app has no portfolio disclosure for any fund you hold, so it cannot tell you
+whether your funds already own your stocks. That is a gap in the app, not a finding about your
+portfolio."*
+
+### 52.11 Non-goals
 
 - **No composite score and no ranking.** §41 and §43 are checklists of named gates, not numbers, and
   so is this. No `/api/mf/top`, no "best funds" email, and **the category table's default sort is

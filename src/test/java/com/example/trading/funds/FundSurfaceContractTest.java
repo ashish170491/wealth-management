@@ -35,7 +35,17 @@ class FundSurfaceContractTest {
             SchemePlanKey.class,
             AssetClass.class,
             SchemeStructure.class,
-            FundAllocationSource.FundSlice.class
+            FundAllocationSource.FundSlice.class,
+            // Stage 2 (SPEC 52.7-52.9): the measurement classes. These are the ones where a
+            // "score" field would be most tempting and most damaging.
+            MutualFundHistoryFetchEntity.class,
+            NavFileAcceptance.class,
+            RollingWindowRecord.Record.class,
+            RollingWindowRecord.Window.class,
+            CategoryCrossSection.class,
+            PlanCostRead.class,
+            SurvivorshipLedger.class,
+            SeriesComparability.class
     );
 
     /**
@@ -73,7 +83,10 @@ class FundSurfaceContractTest {
     @DisplayName("no enum constant anywhere in the module reads as an instruction to transact")
     void vocabularyCarriesNoInstruction() {
         List<Class<? extends Enum<?>>> enums = List.of(
-                SebiCategory.class, AssetClass.class, SchemeStructure.class);
+                SebiCategory.class, AssetClass.class, SchemeStructure.class,
+                FundVocabulary.FundRecordVerdict.class, FundVocabulary.CategoryStanding.class,
+                FundVocabulary.PlanCostVerdict.class, FundVocabulary.BenchmarkAvailability.class,
+                MutualFundHistoryFetchEntity.Status.class);
 
         for (Class<? extends Enum<?>> e : enums) {
             for (Object constant : e.getEnumConstants()) {
@@ -98,6 +111,67 @@ class FundSurfaceContractTest {
         for (SebiCategory c : SebiCategory.values()) {
             assertNoTransactVerb(c.label(), "label of " + c.name());
         }
+    }
+
+    @Test
+    @DisplayName("every measurement label reads as a past-tense fact, not a noun about a fund")
+    void measurementLabelsCarryNoInstruction() {
+        for (FundVocabulary.FundRecordVerdict v : FundVocabulary.FundRecordVerdict.values()) {
+            assertNoTransactVerb(v.label(), "FundRecordVerdict label");
+        }
+        for (FundVocabulary.CategoryStanding v : FundVocabulary.CategoryStanding.values()) {
+            assertNoTransactVerb(v.label(), "CategoryStanding label");
+        }
+        for (FundVocabulary.PlanCostVerdict v : FundVocabulary.PlanCostVerdict.values()) {
+            assertNoTransactVerb(v.label(), "PlanCostVerdict label");
+        }
+        for (FundVocabulary.BenchmarkAvailability v : FundVocabulary.BenchmarkAvailability.values()) {
+            assertNoTransactVerb(v.label(), "BenchmarkAvailability label");
+        }
+    }
+
+    @Test
+    @DisplayName("the switching caveat states the cost and refuses the arithmetic")
+    void switchingCaveatStopsAtTheFact() {
+        // Naming the Regular-plan drag without naming that moving plans is a redemption plus a
+        // purchase - taxable, possibly exit-loaded - reads as advice (SPEC 52.11 refusal 3). The
+        // caveat must say so AND must not go on to tell the reader what to do about it.
+        String caveat = PlanCostRead.SWITCHING_CAVEAT;
+
+        assertThat(caveat).contains("redemption").contains("tax").contains("exit load");
+        assertThat(caveat).contains("deliberately does not compute");
+        assertNoTransactVerb(caveat.replace("exit load", "load"), "SWITCHING_CAVEAT");
+    }
+
+    @Test
+    @DisplayName("four states, and NOT_COMPARABLE is not folded into NOT_MEASURED")
+    void theFourStatesAllExist() {
+        // Collapsing these throws away a fund's own good record because this app has not loaded an
+        // index, or reports a four-scheme category as a quartile (Gotcha 121, 68).
+        assertThat(FundVocabulary.FundRecordVerdict.values())
+                .contains(FundVocabulary.FundRecordVerdict.NOT_MEASURED,
+                        FundVocabulary.FundRecordVerdict.NOT_COMPARABLE);
+        assertThat(FundVocabulary.CategoryStanding.values())
+                .contains(FundVocabulary.CategoryStanding.NOT_MEASURED,
+                        FundVocabulary.CategoryStanding.TOO_FEW_PEERS);
+        assertThat(FundVocabulary.BenchmarkAvailability.NOT_HELD.isAnswerable()).isFalse();
+        assertThat(FundVocabulary.BenchmarkAvailability.NOT_SINGULAR.isAnswerable()).isFalse();
+        assertThat(FundVocabulary.BenchmarkAvailability.HELD_PROXY.isAnswerable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a small-cap mandate never resolves to an index this app merely happens to hold")
+    void noIndexIsSubstitutedForAMandateItDoesNotMatch() {
+        // Substituting a midcap index for a small-cap category is B-047 in index clothing: two
+        // different things compared, and the difference reported as skill.
+        assertThat(FundLensService.benchmarkAvailability(SebiCategory.SMALL_CAP))
+                .isEqualTo(FundVocabulary.BenchmarkAvailability.NOT_HELD);
+        assertThat(FundLensService.benchmarkAvailability(SebiCategory.FLEXI_CAP))
+                .isEqualTo(FundVocabulary.BenchmarkAvailability.NOT_HELD);
+
+        // And the two kinds of refusal stay distinct: one is our gap, one is the question's shape.
+        assertThat(FundLensService.benchmarkAvailability(SebiCategory.SECTORAL_THEMATIC))
+                .isEqualTo(FundVocabulary.BenchmarkAvailability.NOT_SINGULAR);
     }
 
     @Test

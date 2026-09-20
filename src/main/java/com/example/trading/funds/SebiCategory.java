@@ -185,6 +185,9 @@ public enum SebiCategory {
         KEYWORDS.put("OVERNIGHT", DEBT);
         KEYWORDS.put("DURATION", DEBT);
         KEYWORDS.put("FLOATER", DEBT);
+        // Pre-2018 spelling of the same thing, and the ONE header in the 2018-2026 archive
+        // that the live-file alias table did not already cover.
+        KEYWORDS.put("FLOATING RATE", DEBT);
         // Pre-2018 taxonomy, seen in the historical files: "Open Ended Schemes ( Income )".
         KEYWORDS.put("INCOME", DEBT);
     }

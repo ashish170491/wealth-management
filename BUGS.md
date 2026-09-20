@@ -179,6 +179,118 @@ unit test of either would have caught.
 
 ---
 
+### B-131 - An income-distribution series was measured against Growth peers, understating a fund the investor owns  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first live run of the fund lens over the investor's real book produced a full
+rolling record and a category percentile for **Motilal Oswal ELSS Tax Saver Fund Direct - IDCW
+Payout**: behind its category in 47 of 66 rolling 36-month windows, median excess **-2.34
+percentage points**, `BEHIND_BENCHMARK`. Every peer in that comparison was a Direct-**Growth**
+series. Nothing threw, no figure was out of range, and the verdict was confidently wrong.
+
+**Root cause.** Under the Income Distribution cum Capital Withdrawal option the fund pays money out
+and **its net asset value drops by the amount paid**. An IDCW series therefore records the
+investor's return *after* every distribution ever made, while a Growth series records it before.
+The two compound rates are different quantities that look identical on screen. SPEC §52.4 and
+Gotcha 139(b) both state the rule - *measure Growth only; IDCW is NOT_MEASURED, never a low
+reading* - and the Stage 2 measurement simply never enforced it, because the screenable universe is
+Direct-Growth by construction and it did not occur to me that an **owned** scheme need not be.
+
+**Blast radius.** The bias has a direction: an IDCW series always reads **worse**. So the failure
+mode is a fund the investor holds being reported as a laggard when it is not - and the reader has no
+way to see that the comparison was invalid, because the arithmetic is flawless and the peer count,
+the window count and the median are all real. Same family as B-047 (a quarter filed as a year),
+B-060 (an RSI whose window could not reach its period), B-113 (two years against ten) and B-120 (a
+per-share delta summed as money).
+
+**Fix.** New [SeriesComparability](src/main/java/com/example/trading/funds/SeriesComparability.java),
+checked **before** anything is measured rather than corrected afterwards. A non-Growth series yields
+`NOT_COMPARABLE` with a reason that names the units problem and points at the Growth series of the
+same scheme as the thing that would be measurable. An **unresolved** option is refused on the same
+grounds: "probably Growth" is the assumption that produces a confident wrong number (Gotcha 68).
+
+**Verification.** Live re-run: the ELSS holding reads `NOT_COMPARABLE` / `NOT_MEASURED` carrying its
+reason, and the five Growth holdings are unaffected. Pinned by `SeriesComparabilityTest`, including
+a case asserting the refusal text never itself reads as a judgement on the fund.
+
+**Two more defects found in the same run, both fixed with it.**
+
+1. **A blank plan in the scheme master made a Direct-Growth fund unmeasurable.** The daily file
+   leaves Plan and Option **empty** for *Motilal Oswal Midcap Fund* and its scheme name carries no
+   plan words either, so the master stored `UNSPECIFIED` - and after the guard above, that reads as
+   "cannot confirm this is comparable". The historical feed names it in full:
+   `Motilal Oswal Midcap Fund-Direct Plan-Growth Option`. The backfill now **fills a blank plan or
+   option and may never overwrite a resolved one** - a share class is an immutable property of the
+   scheme, so filling a blank is safe in a way that overwriting a category would not be. After one
+   forced month the fund reads `GROWTH` / `DIRECT_PLAN` / `AHEAD_OF_BENCHMARK` / `UPPER_HALF`.
+
+2. **The coverage line counted four states as two.** `holdingsMeasured` tested only for
+   `NOT_MEASURED`, so it reported **3 of 6 holdings measured** when exactly **one** carried a
+   verdict - the two `NOT_COMPARABLE` rows were swept in with the real one. That is B-117's shape
+   exactly: *a summary over the same rows must distinguish the same number of states the renderer
+   does.* The line now reports measured / not comparable / not measured / unresolved separately and
+   says which of them are gaps in this app.
+
+**Lesson.** The screenable universe is Direct-Growth **by construction**, so every invented test
+case was a Growth series and every one of them passed. What the investor actually owns is not
+constrained that way. **When a rule holds by construction over the set you built, check whether it
+holds over the set you were given** - this is the third time in one session that running the thing
+over the real book found what reading it could not (B-128, B-130, this).
+
+---
+
+### B-130 - AMFI serves the same eight fields in two different column orders, and the month-end backfill read one as the other  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first run of the new month-end backfill (SPEC §52.7) over six months of the live
+archive reported **6 months fetched, 0 failed, 0 not published**, and ~1,900 equity schemes counted
+per month. It wrote **four NAV points per month**, where ~275 were due. Nothing threw, no line failed
+to parse, no status code was wrong, and `schemesDiscovered` read 0.
+
+**Root cause.** AMFI publishes the daily file and the historical report in **different column
+orders**, with the same field count:
+
+```
+daily NAVAll.txt   Scheme Code;ISIN Growth;ISIN Reinvest;Scheme Name;Plan;Option;NAV;Date
+history endpoint   Scheme Code;NAV Name;Plan;Option;ISIN Growth;ISIN Reinvest;NAV;Date
+```
+
+`AmfiNavParser` read fixed positions, written against the daily file. Applied to a historical row it
+takes the scheme code, the NAV and the date from the right places — the first and last two fields
+agree — and the scheme name, both ISINs, the plan and the option **all from the wrong ones**. So
+every row still parsed, and `isScreenable()` (which requires Direct plan and Growth option) returned
+false for essentially the entire file, because it was reading ISINs as plan names.
+
+**Blast radius.** Everything §52.8 measures rests on this series. A rolling record, a category
+median, a percentile and a Direct-versus-Regular commission would all have been computed over a
+series containing four arbitrary schemes per month — or, worse, the module would have reported
+`NOT_MEASURED` for every fund indefinitely while the backfill kept announcing success, which is the
+shape that let Institutional Interest sit constant at 40 for three months (bug #9) and Insider Pulse
+run on no stock at all (B-074). The one thing that could not happen is a visibly wrong number.
+
+**Fix.** New [AmfiColumnLayout](src/main/java/com/example/trading/funds/amfi/AmfiColumnLayout.java)
+reads field positions from the file's own `Scheme Code;...` header line, by column **name** rather
+than by position — which also survives AMFI reordering again or inserting a column. A file with no
+header falls back to the daily order and **reports its layout as assumed**, and the backfill logs a
+WARN and marks the month, so an assumption can never be mistaken for a fact (Gotcha 100's rule).
+`ParseResult` now carries the layout it used. The two ISIN columns are told apart by testing
+`REINVEST` before `GROWTH`, because `"ISIN Div Payout/ISIN Growth"` contains both words.
+
+**Verification.** Same three months re-run with `force=true`: **4 NAV points per month → 275, 277,
+278**, and `schemesDiscovered` 0 → **51** (funds present in the April-2018 archive and absent from
+today's file — the survivorship evidence §52.9 is made of). 275 matches an independent count of
+Direct-Growth equity schemes in that month, taken with `awk` straight off the raw file. Pinned by
+four cases in `AmfiNavParserTest`, including one row verbatim from the 31-Aug-2026 historical file.
+
+**Lesson.** Two lessons, and the second is the transferable one. **A field count is not a format** —
+eight fields matched, so nothing validated as wrong. And **the tell was a number being too small,
+not an error**: this is B-113's rule (run a new verdict over real rows and look at the figure before
+believing it) catching a defect that every status code, every exception handler and every invented
+test case had passed. Had the wrong number happened to be plausible — 200 instead of 4 — it would
+have shipped. Sibling of B-047 (a quarter filed as a year), B-060 (an RSI whose window could not
+reach its period) and B-120 (a per-share delta summed as money): a figure that is structurally wrong
+while every mechanism reports success.
+
+---
+
 ### B-127 - A target the share price had already passed kept dragging the median down  `[P2]`  `RESOLVED 2026-09-18`
 
 **Symptom.** The Analysts column reported CPPLUS at **minus 4.6%** "upside" to a median target of
