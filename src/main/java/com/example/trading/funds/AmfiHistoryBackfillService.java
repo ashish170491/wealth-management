@@ -237,7 +237,9 @@ public class AmfiHistoryBackfillService {
     public Written persistMonth(AmfiNavParser.ParseResult parsed, LocalDate date,
                                 Set<String> ownedIsins) {
         List<AmfiSchemeRow> relevant = parsed.rows().stream()
-                .filter(r -> r.isScreenable()
+                // See AmfiSchemeRow.isTrackable(): wider than the judged set on purpose, so index
+                // funds get a month-end series without entering any peer median (§52.14).
+                .filter(r -> r.isTrackable()
                         || (r.isinGrowth() != null && ownedIsins.contains(r.isinGrowth()))
                         || (r.isinReinvest() != null && ownedIsins.contains(r.isinReinvest())))
                 .toList();

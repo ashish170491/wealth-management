@@ -62,6 +62,13 @@ const TONE = {
   NOT_SINGULAR: 'neutral',
   OUT_OF_SCOPE: 'neutral',
   NOT_COMPARABLE: 'neutral',
+  // Whether picking on past record worked. Deliberately unopinionated colours: this is a finding
+  // about a METHOD, not about a fund, and "no better than chance" is not bad news - it is the
+  // answer. Painting it red would make an honest measurement look like a failure.
+  PERSISTENCE_FOUND: 'info',
+  WEAK_PERSISTENCE: 'info',
+  NO_BETTER_THAN_CHANCE: 'neutral',
+  REVERSAL: 'neutral',
 };
 
 /** Values that mean "this app could not look", and therefore get the striped marker. */

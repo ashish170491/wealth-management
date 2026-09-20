@@ -63,6 +63,7 @@ let lens = null;      // /api/mf/portfolio
 let holdings = null;  // /api/mf/holdings
 let history = null;   // /api/mf/history
 let coverage = null;  // /api/mf/coverage
+let persistence = null; // /api/mf/persistence
 
 // ---------------------------------------------------------------------- the money
 
@@ -286,6 +287,214 @@ function fundSection(h) {
       : h.recordVerdict === 'BEHIND_BENCHMARK' ? 'warning' : undefined });
 }
 
+// ---------------------------------------------------------------------- does picking work?
+
+/**
+ * The measurement that answers "which are the good funds to buy?" by asking whether that question
+ * has an answer (SPEC 52.13).
+ *
+ * This section leads the page after the holdings on purpose. Everything below it - the rolling
+ * record, the category standing - describes what already happened, and a reader who meets those
+ * first will naturally read them as a forecast. This says, with numbers from their own market,
+ * how much of a forecast they are.
+ */
+function persistencePanel() {
+  if (!persistence) return null;
+  if (persistence.measured === false) {
+    return empty('Not enough history yet', persistence.reason);
+  }
+
+  const chance = persistence.chancePct;
+  const share = persistence.shareStayedTopPct;
+  const lower = persistence.shareStayedTopLowerBoundPct;
+
+  const cards = el('div.grid.kpis', {},
+    kpi({
+      label: 'Stayed in the best quarter',
+      value: missing(share) ? 'not measured' : pct(share, { signed: false, digits: 0 }),
+      sub: persistence.stayedTopQuartile + ' of ' + persistence.topQuartileA
+        + ' funds, ' + pct(chance, { signed: false, digits: 0 }) + ' expected by chance',
+      tone: 'neutral',
+    }),
+    kpi({
+      label: 'Counting those that wound up',
+      value: missing(lower) ? 'not measured' : pct(lower, { signed: false, digits: 0 }),
+      sub: persistence.vanishedAfterATopQuartile
+        + ' of them stopped reporting, so they cannot appear in the second table at all',
+      tone: 'neutral',
+    }),
+    kpi({
+      label: 'One fund is worth',
+      // num(), not pp(): a resolution is a magnitude, and pp() signs it, so this read "+2.5 pp"
+      // as though the measurement had a direction.
+      value: missing(persistence.onePerFundPp) ? 'not measured'
+        : num(persistence.onePerFundPp, 1) + ' points',
+      // The resolution of the headline, said out loud. Without it the reader cannot tell a
+      // finding from a rounding difference.
+      sub: 'so no direction is claimed unless the gap beats '
+        + num(persistence.bandFloorPp, 1) + ' points',
+      tone: 'neutral',
+    }),
+    kpi({
+      label: 'Did a better place mean a better place?',
+      value: missing(persistence.rankCorrelation) ? 'not measured'
+        : num(persistence.rankCorrelation, 2),
+      sub: 'rank correlation between the two windows; 0 means no relationship at all',
+      tone: 'neutral',
+    }));
+
+  const verdictLine = el('div.info-box', {},
+    el('h4', {},
+      'The answer, on ' + shortDate(persistence.windowAFrom) + ' to '
+      + shortDate(persistence.windowBTo)),
+    el('p', {}, persistence.headline),
+    el('p', {},
+      el('strong', {}, 'What this does and does not license. '),
+      'It says the funds that had done best over ' + persistence.windowMonths
+      + ' months were not the funds that did best over the next ' + persistence.windowMonths
+      + '. It does not say fund choice is irrelevant — what it says is that ',
+      el('em', {}, 'past return'),
+      ' is the wrong thing to choose on. Cost is not a forecast; it is a charge, and it is levied '
+      + 'every year whether the fund does well or badly.'));
+
+  const caveats = (persistence.caveats || []).length
+    ? el('div', { style: 'margin-top:14px' },
+      el('h4', { style: 'margin:0 0 6px' }, 'What this measurement cannot tell you'),
+      el('ul', {}, ...(persistence.caveats || []).map((c) => el('li', {}, c))))
+    : null;
+
+  return el('div', {}, cards, verdictLine, caveats);
+}
+
+const PERSISTENCE_COLS = [
+  { key: 'categoryLabel', label: 'Category' },
+  {
+    key: 'fundsInBothWindows',
+    label: 'Funds in both windows',
+    align: 'r',
+    render: (c) => num(c.fundsInBothWindows, 0),
+  },
+  {
+    // Counts, never a percentage. On this archive every category's top quarter holds 3 to 7 funds,
+    // so one fund moving swings a share by 14 to 33 points - and "Large & Mid Cap 50%, Large Cap
+    // 0%" would read as a finding about managers rather than as four coin flips.
+    key: 'stayedTopQuartile',
+    label: 'Stayed in the best quarter',
+    align: 'r',
+    render: (c) => (c.topQuartileA
+      ? el('span', {}, c.stayedTopQuartile + ' of ' + c.topQuartileA)
+      : el('span.faint', {}, '—')),
+  },
+  {
+    key: 'fellToBottomQuartile',
+    label: 'Fell to the worst quarter',
+    align: 'r',
+    render: (c) => (c.topQuartileA
+      ? el('span', {}, c.fellToBottomQuartile + ' of ' + c.topQuartileA)
+      : el('span.faint', {}, '—')),
+  },
+  {
+    key: 'vanishedAfterA',
+    label: 'Stopped reporting',
+    align: 'r',
+    render: (c) => num(c.vanishedAfterA, 0),
+  },
+  {
+    key: 'inHeadline',
+    label: 'In the headline?',
+    render: (c) => (c.inHeadline
+      ? badge('YES', { type: 'neutral', label: 'Counted' })
+      : badge('NO', { type: 'unmeasured', label: 'Excluded' })),
+  },
+  { key: 'reason', label: 'Why', render: (c) => el('span.faint', {}, c.reason || '—') },
+];
+
+// ---------------------------------------------------------------------- vs the index fund
+
+const TRACKER_COLS = [
+  { key: 'categoryLabel', label: 'Category' },
+  {
+    key: 'windowMonths',
+    label: 'Measured over',
+    align: 'r',
+    // The window differs per category because most trackers outside large caps launched recently,
+    // and a shorter window is the honest fix - comparing an eight-year active record against a
+    // three-year tracker record would be the units error this module exists to refuse.
+    render: (r) => (r.available
+      ? el('div', {},
+        el('div', {}, num(r.windowMonths, 0) + ' months'),
+        el('div.faint', { style: 'font-size:12px' },
+          shortDate(r.windowFrom) + ' to ' + shortDate(r.windowTo)))
+      : el('span.faint', {}, '—')),
+  },
+  {
+    key: 'trackerCagrPct',
+    label: 'Index fund',
+    align: 'r',
+    render: (r) => (r.available ? pct(r.trackerCagrPct, { signed: false }) : unmeasured(r.reason)),
+  },
+  {
+    key: 'activeMedianCagrPct',
+    label: 'Typical active fund',
+    align: 'r',
+    render: (r) => (r.available
+      ? pct(r.activeMedianCagrPct, { signed: false }) : el('span.faint', {}, '—')),
+  },
+  {
+    key: 'beatTracker',
+    label: 'Beat the index fund',
+    align: 'r',
+    render: (r) => {
+      if (!r.available) return el('span.faint', {}, '—');
+      return el('div', {},
+        el('div', {}, r.beatTracker + ' of ' + r.activeFundsMeasured
+          + (missing(r.beatTrackerPct) ? '' : ' (' + pct(r.beatTrackerPct, { signed: false, digits: 0 }) + ')')),
+        // The survivorship-corrected figure, always beside the raw one. The funds with a complete
+        // series are by definition the ones that did not wind up, and a fund that wound up beat
+        // nothing - so the raw share is computed over exactly the population that survived.
+        r.activeFundsVanished
+          ? el('div.faint', { style: 'font-size:12px' },
+            missing(r.beatTrackerPctIncludingVanished)
+              ? r.activeFundsVanished + ' more wound up'
+              : pct(r.beatTrackerPctIncludingVanished, { signed: false, digits: 0 })
+                + ' counting the ' + r.activeFundsVanished + ' that wound up')
+          : null);
+    },
+  },
+  { key: 'reason', label: 'Note', render: (r) => el('span.faint', {}, r.reason || '—') },
+];
+
+/** The "what would you have got instead" panel. */
+function trackerPanel() {
+  const rows = (persistence && persistence.indexComparison) || [];
+  if (!rows.length) {
+    return empty('No comparison available',
+      'No index funds are on file yet, so there is nothing to compare an active fund against.');
+  }
+  const answered = rows.filter((r) => r.available).length;
+  return el('div', {},
+    el('div.info-box', {},
+      el('h4', {}, 'Why this is the comparison that matters'),
+      el('p', {},
+        'Every rupee in an actively managed fund is a rupee not in the index fund covering the '
+        + 'same part of the market — so the question is not whether a fund made money, it is '
+        + 'whether it made more than the cheap, automatic alternative that was available the whole '
+        + 'time.'),
+      el('p', {},
+        el('strong', {}, 'Read the second number, not the first. '),
+        'The funds with a complete record are the ones that survived. Funds that wound up mid-way '
+        + 'cannot beat anything, and leaving them out flatters active management — so the '
+        + 'figure counting them is shown underneath and it is the honest one.'),
+      el('p.faint', {},
+        'Each category is measured over the longest window both sides share, printed beside it. '
+        + 'Most index funds outside the large-cap segment launched in the last few years, so those '
+        + 'windows are shorter — a shorter window is stated, never quietly stretched.')),
+    table(TRACKER_COLS, rows, { filter: false, sortKey: 'categoryLabel', sortDir: 'asc' }),
+    el('p.faint', { style: 'font-size:12px;margin-top:8px' },
+      answered + ' of ' + rows.length + ' categories can be compared at all. The rest have no '
+      + 'index that honestly describes what those funds set out to do, and each says which.'));
+}
+
 // ---------------------------------------------------------------------- the archive
 
 /**
@@ -476,6 +685,39 @@ function paint() {
         'Nothing has been synced from the broker. That means none have been read, not that none '
         + 'are held.')));
 
+  // Placed immediately after the holdings and BEFORE the per-fund records, because everything
+  // below describes what already happened and a reader who meets those first will read them as a
+  // forecast. This says how much of a forecast they are (SPEC 52.13).
+  nodes.push(withSummary(section('Does picking a fund on its record actually work?',
+    'The app split its own month-end archive in two, ranked every fund inside its category in the '
+    + 'first half, and looked at where it landed in the second. This is the evidence behind there '
+    + 'being no "best funds" list anywhere in this app - and it is the thing that would overturn '
+    + 'that decision if it read the other way.',
+    persistencePanel()),
+  persistence && persistence.verdictLabel ? persistence.verdictLabel : null,
+  { type: 'neutral' }));
+
+  nodes.push(withSummary(collapse(section('What you would have got from the index fund instead',
+    'For each category, the plain index fund covering the same part of the market, and how many '
+    + 'actively managed funds actually beat it. This is what an active fund has to justify.',
+    trackerPanel()), { key: 'funds:tracker' }),
+  (() => {
+    const rows = (persistence && persistence.indexComparison) || [];
+    const n = rows.filter((r) => r.available).length;
+    return n ? n + ' comparable' : null;
+  })(), { type: 'info' }));
+
+  nodes.push(withCount(collapse(section('Category by category',
+    'The same measurement per category, as counts rather than percentages. Every category here '
+    + 'has between three and seven funds in its best quarter, so one fund moving would swing a '
+    + 'percentage by a third - the counts are honest where a percentage would not be.',
+    persistence && (persistence.categories || []).length
+      ? table(PERSISTENCE_COLS, persistence.categories,
+        { filter: false, sortKey: 'fundsInBothWindows' })
+      : empty('Nothing measured', 'No category has enough funds with a record in both windows.')),
+  { key: 'funds:persistence-categories' }),
+  persistence ? (persistence.categories || []).length : 0));
+
   // The coverage line goes with the sections it describes, and counts four states because the
   // rows beneath it draw four (B-117). Counting only "not measured" reported three of six
   // holdings as measured when exactly one carried a verdict.
@@ -521,16 +763,18 @@ async function reload() {
   // assigning it straight through leaves every field undefined, so the page renders its section
   // shells with nothing inside them: HTTP 200 on the page, on every module and on every
   // endpoint, the syntax checker clean, and a blank screen (SPEC 51, Gotcha 137).
-  const [p, hold, hist, cov] = await Promise.all([
+  const [p, hold, hist, cov, pers] = await Promise.all([
     get('/api/mf/portfolio').then((r) => r.data),
     get('/api/mf/holdings').then((r) => r.data),
     get('/api/mf/history').then((r) => r.data),
     get('/api/mf/coverage').then((r) => r.data),
+    get('/api/mf/persistence').then((r) => r.data),
   ]);
   lens = p;
   holdings = hold;
   history = hist;
   coverage = cov;
+  persistence = pers;
   paint();
 }
 

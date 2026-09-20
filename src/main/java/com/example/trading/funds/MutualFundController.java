@@ -48,6 +48,7 @@ public class MutualFundController {
     private final MutualFundHoldingsService holdingsService;
     private final AmfiHistoryBackfillService historyBackfillService;
     private final FundLensService lensService;
+    private final FundPersistenceService persistenceService;
 
     // ------------------------------------------------------------------ reads (DB-only)
 
@@ -97,6 +98,22 @@ public class MutualFundController {
     @GetMapping("/history")
     public Map<String, Object> history() {
         return viewService.historyCoverage();
+    }
+
+    /**
+     * Does picking a fund on its past record actually work? (SPEC §52.13, §52.14)
+     *
+     * <p>DB-only and page-load safe, though heavier than its neighbours: it reads every stored NAV
+     * point for every tracked scheme in one bulk query and ranks them twice. It makes no network
+     * call of any kind.
+     *
+     * <p>This endpoint is the evidence behind §52.11's refusal to publish a "best funds" list, and
+     * it is deliberately the thing that could overturn it. It produces <b>no verdict on any fund</b>
+     * and names no scheme as worth owning; its subject is the method, not the market.
+     */
+    @GetMapping("/persistence")
+    public Map<String, Object> persistence() {
+        return persistenceService.persistence();
     }
 
     // ------------------------------------------------------------------ writes (button-only)

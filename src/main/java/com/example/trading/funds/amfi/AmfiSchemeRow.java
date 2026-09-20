@@ -51,6 +51,36 @@ public record AmfiSchemeRow(
                 && option == SchemePlanKey.Option.GROWTH;
     }
 
+    /**
+     * True when this row's month-end series is worth <b>keeping</b>, which is a wider set than the
+     * one this module <b>judges</b>.
+     *
+     * <p>{@link #isScreenable()} answers "does this fund get a record measured against its category
+     * median", and index funds are correctly outside it: a tracker is judged on how closely it
+     * follows its stated index, not on excess return over a peer group. But that made the app blind
+     * to them entirely - no scheme row, no NAV history - and an index fund is the yardstick every
+     * actively managed fund is implicitly being bought instead of. The investor holds three of them
+     * out of six holdings and the app could not see the category.
+     *
+     * <p>So index funds are persisted and given history while {@code screenable} stays false, which
+     * is what keeps every existing number identical: peer sets are filtered on {@code screenable}
+     * AND category, and {@link SebiCategory#INDEX_EQUITY} is its own category, so a tracker could
+     * not reach an active category's median even if the flag changed. Same shape as
+     * {@code computeActualWeights()} being left alone when the fund module landed (§52.5).
+     *
+     * <p><b>Exchange-traded funds are deliberately excluded.</b> An ETF's net asset value is not
+     * what you would pay for it - it trades on the exchange at a price that can sit away from NAV -
+     * so a NAV series would answer a question nobody asked, and its plan and option columns are
+     * usually blank anyway (the units guard would refuse it downstream regardless).
+     */
+    public boolean isTrackable() {
+        return structure == SchemeStructure.OPEN_ENDED
+                && category.assetClass() == com.example.trading.funds.AssetClass.EQUITY
+                && category != SebiCategory.EQUITY_ETF
+                && plan == SchemePlanKey.Plan.DIRECT
+                && option == SchemePlanKey.Option.GROWTH;
+    }
+
     /** True when a NAV was actually published for this row. */
     public boolean hasNav() {
         return nav != null && navDate != null;

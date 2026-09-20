@@ -5874,11 +5874,143 @@ plan, IDCW, rolling window, independent windows, *not comparable*, survivorship,
 ratio, AMFI, SEBI, ELSS. Several are this app's own vocabulary rather than market usage, and a badge
 is the worst place to meet a word for the first time (§51's rule, §21 rule 1).
 
+### 52.13 Does picking a fund on its record work? ✅ (2026-09-20)
+
+The investor asked for a list of good funds to buy. §52.11 refuses to produce one, and quoting a
+non-goal at someone is not an argument — so this measures the claim on their own market instead.
+
+**The method.** Split the month-end archive into two non-overlapping windows, rank every fund inside
+its own SEBI category over the first, and see where it landed in the second. *Of the funds in the
+best quarter of their category in window A, what share were still in the best quarter in window B?*
+Chance is 25%. `FundPersistence` is pure and does the arithmetic; `FundPersistenceService` builds the
+windows and hands it a map; `GET /api/mf/persistence` serves it. It produces **no verdict on any
+fund**, adds no score, and names no scheme as worth owning — its subject is the method, not the
+market. It is the fund-side sibling of §23 and §38.9: the app measuring whether its own method
+works.
+
+**The first live run, 2018-04 → 2022-06 → 2026-08, two 50-month windows:**
+
+| | |
+|---|---|
+| Funds with a record in both windows | 149 across 8 categories |
+| In the best quarter in window A | 40 |
+| Still in the best quarter in window B | **8 — 20%, against 25% by chance** |
+| Fell to the worst quarter | 9 |
+| Rank correlation between the two windows | **0.085** |
+| Top-quartile funds that stopped reporting | 1 (so the survivorship-corrected figure is 19.5%) |
+| Verdict | `NO_BETTER_THAN_CHANCE` |
+
+So on this archive, **knowing which funds had done best told you essentially nothing about which
+would do best next**, and §52.11's refusal to publish a ranked list is now backed by Indian data
+rather than by an American paper. Note what would overturn it: this endpoint is deliberately the
+thing that could. A future run reading well above chance is the evidence that reopens the non-goal.
+
+**Five rules make it honest, and each exists because of a defect elsewhere in this codebase.**
+
+1. **Survivorship is counted, not caveated** (§52.9 with teeth). A fund that was top quartile in
+   window A and then merged cannot appear in the transition matrix at all, and the funds that vanish
+   are overwhelmingly the ones that stopped working — so dropping them silently inflates persistence.
+   The headline is a **range**: the naive figure over survivors, and a lower bound treating every
+   vanished top-quartile fund as having failed.
+2. **One split is one observation, and the fund count is not the sample size.** Funds in a category
+   hold heavily overlapping stocks, so forty large-cap funds are nothing like forty independent
+   draws. **No p-value, t-statistic or significance language is produced anywhere** (Gotcha 92,
+   Gotcha 143). A binomial test over correlated funds returns a confident number that means nothing.
+3. **A band boundary must be coarser than the resolution of the data behind it.** The first run
+   returned `REVERSAL` — a directional claim about manager skill — off a gap of **two funds**, because
+   a fixed 5-point band is two funds wide when the top quarter holds forty. The floor is now the
+   larger of the fixed threshold and **three funds' worth** of the actual sample, and both figures
+   are published. Gotcha 88's "a threshold belongs to a scale", applied to a percentage whose scale
+   is set by how many funds are in the top quarter.
+4. **A per-category percentage is withheld and the counts are kept.** Every category's top quarter
+   holds 3–7 funds on this archive, so one fund moving swings its share by 14–33 points — and a table
+   reading *Large & Mid Cap 50%, Large Cap 0%* invites a conclusion about managers from four coin
+   flips. `MIN_TOP_QUARTILE_FOR_SHARE = 8`; "1 of 7" cannot be over-read the way "14%" can. On this
+   archive **no category clears it**, which is itself the finding: only the pooled figure is
+   supportable.
+5. **Sectoral and thematic funds are measured and shown but never reach the headline.** Ranking a
+   pharma fund against a defence fund records which sector ran, not which manager was good, and they
+   are 265 of the 637 screenable schemes — folding them in would let that one artefact dominate. They
+   read a rank correlation of **−0.21**, the strongest number in the table and negative: the thematic
+   funds that led 2018–2022 tended to lag 2022–2026. That is sector rotation, and it is the clearest
+   thing on the page about chasing themes.
+
+### 52.14 Index funds are the yardstick, and are now on file ✅ (2026-09-20)
+
+Every rupee in an actively managed fund is a rupee not in the index fund covering the same part of
+the market, so *did the active funds beat the tracker* is the question a fund screen is really being
+asked. The app could not ask it: `SebiCategory.isActivelyManagedEquity()` excluded index funds and
+ETFs, correctly for **measurement** (a tracker is judged on tracking difference, not on excess return
+over peers) and disastrously for **comparison** — no scheme row, no NAV history, nothing on screen.
+The investor holds three index funds out of six holdings and the app could not see the category.
+
+**The split.** `AmfiSchemeRow.isTrackable()` is new and wider than `isScreenable()`: open-ended,
+equity, Direct, Growth, **excluding ETFs** (an ETF's NAV is not what you would pay — it trades away
+from NAV). Index funds are persisted and given history while `screenable` stays **false**, which is
+what keeps every existing number identical: peer sets filter on `screenable` *and* category, and
+`INDEX_EQUITY` is its own category. Same safety property as `computeActualWeights()` being left alone
+in §52.5. Verified live: schemes persisted 643 → **682**, `screenableSchemes` unchanged at **637**.
+The archive was re-run with `force=true` — 101/101 months, 0 failed, 13,579 NAV rows, 388 schemes
+discovered.
+
+**The mapping is made on scheme names**, because nothing links a scheme to the index it tracks.
+`IndexYardstick` contains it, and three rules keep it safe. **Phrases, not words** — `NIFTY 50`, never
+`NIFTY`, which appears in every one of these names and would map a smallcap tracker to Large Cap.
+**An exclusion list checked first** — `NIFTY 50 EQUAL WEIGHT` and `NIFTY 50 VALUE 20` both contain
+`NIFTY 50` and are different indices (Gotcha 53 in the positive direction). **Every matched fund name
+is published**, so a bad match can be rejected at a glance (§51.10's rule).
+
+**Categories with no defensible yardstick get none, by name.** Focused, Value, Contra, Dividend Yield,
+ELSS and Sectoral/Thematic each carry a written reason — an empty column reads as "nothing to report"
+where a named refusal reads as "this cannot be made honestly", which is the fact.
+
+**The window is per category, and stated.** The first build measured over the whole archive and could
+answer for exactly one category, because trackers outside the large-cap segment are mostly post-2021
+launches. The fix is not to relax the comparison but to shorten the **window** and print it: both
+sides are then measured over identical dates, and only the depth of history behind each answer
+changes. Comparing an eight-year active record against a three-year tracker record is the units error
+this module exists to refuse (B-047, B-113).
+
+**First live run** — active funds beating the median tracker, raw and then counting the funds that
+wound up mid-window:
+
+| Category | Window | Tracker | Typical active | Beat it |
+|---|---|---|---|---|
+| Large Cap | 100m, 2018-04→2026-08 | 11.0% | 11.9% | 19 of 24 (79%) → **66%** with the 5 that wound up |
+| Small Cap | 83m, 2019-09→ | 22.1% | 23.8% | 14 of 19 (74%) → **64%** |
+| Large & Mid Cap | 56m, 2021-12→ | 12.9% | 14.0% | 18 of 27 (67%) → **62%** |
+| Flexi Cap | 83m | 14.9% | 15.7% | 14 of 23 (61%) → **58%** |
+| Mid Cap | 83m | 22.7% | 22.9% | 10 of 20 (50%) → **42%** |
+| Multi Cap | 83m | 14.9% | 19.2% | 8 of 8 — **percentage withheld**, 5 more wound up |
+
+Two rules came out of reading that table. **Survivorship is counted here too**: the funds with a
+complete series are by definition the ones that did not die, so the raw share is computed over
+exactly the population that survived — the corrected figure is shown beneath it and is the honest
+one. And **a percentage over fewer than ten active funds is withheld** (`MIN_ACTIVE_FOR_SHARE`):
+Multi Cap read *8 of 8 = 100%*, one fund per 12.5 points, and "100% of multi-cap funds beat the
+index" is the most over-readable sentence this endpoint could produce.
+
+**A third defect, same family as B-117**: the note beside each row was built from the trackers the
+name table *matched* rather than the ones actually *used* after the history filter, so a row using a
+single tracker still read "13 index funds … the median of them". It is now derived from the used
+list, and the word *median* appears only where there is more than one.
+
+**Dashboard.** Three sections on `funds.html`: the persistence verdict (immediately after the
+holdings and **before** the per-fund records, because everything below describes what already
+happened and a reader who meets those first reads them as a forecast), the tracker comparison, and
+the per-category counts. `GET /api/mf/persistence` is DB-only and page-load safe — heavier than its
+neighbours, since it reads every stored NAV point in one bulk query and ranks them twice, but it
+makes no network call of any kind.
+
 ### 52.11 Non-goals
 
 - **No composite score and no ranking.** §41 and §43 are checklists of named gates, not numbers, and
   so is this. No `/api/mf/top`, no "best funds" email, and **the category table's default sort is
-  scheme name**. That last one sounds petty and is load-bearing.
+  scheme name**. That last one sounds petty and is load-bearing. **Since 2026-09-20 this is measured
+  rather than asserted** (§52.13): of the funds in the best quarter of their category over
+  2018-2022, 8 of 40 were still there over 2022-2026 - 20% against 25% by chance, rank correlation
+  0.085. `GET /api/mf/persistence` is deliberately the thing that would reopen this non-goal if a
+  later run read the other way.
 - **No buy, sell, switch or redeem verdict** (§19, §20 rule 10). The vocabulary carries no
   instruction to transact, pinned by a test matching on **word boundaries** — the §51 version of
   that test failed in its first draft on *"whoever **sells** the servers"* (Gotcha 53), and the same

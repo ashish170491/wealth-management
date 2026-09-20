@@ -97,7 +97,10 @@ public class MutualFundNavSyncService {
                 .collect(Collectors.toSet());
 
         List<AmfiSchemeRow> toPersist = parsed.rows().stream()
-                .filter(r -> r.isScreenable()
+                // Trackable rather than screenable: index funds are kept so the app can show what
+                // an active fund was an alternative TO, while `screenable` stays false for them so
+                // no peer median, percentile or coverage count moves (§52.14).
+                .filter(r -> r.isTrackable()
                         || (r.isinGrowth() != null && ownedIsins.contains(r.isinGrowth()))
                         || (r.isinReinvest() != null && ownedIsins.contains(r.isinReinvest())))
                 .toList();

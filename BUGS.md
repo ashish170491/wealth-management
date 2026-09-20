@@ -179,6 +179,59 @@ unit test of either would have caught.
 
 ---
 
+### B-134 - A two-fund gap from chance was published as a verdict on whether fund managers have skill  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first live run of the new fund-persistence measurement (SPEC §52.13) reported
+`REVERSAL` - *"past winners did worse than chance"* - across the whole equity universe. The figure
+behind it: **8 of 40** top-quartile funds held their place, 20% against a 25% null.
+
+**Root cause.** The verdict bands were fixed percentage-point margins (15 for a clear result, 5 for a
+weak one) chosen before any data existed. With 40 funds in the top quarter **one fund is worth 2.5
+percentage points**, so the 5-point band is two funds wide, and 20% vs 25% - a difference of two
+funds - landed exactly on the REVERSAL boundary. The arithmetic was correct throughout and no
+mechanism reported anything wrong.
+
+**Blast radius.** This is the one screen built to tell the investor that ranking funds on past
+return does not work. Publishing a *directional* claim - that past winners systematically become
+losers - off two funds would have been the same over-claiming, pointed the other way, on the page
+whose entire purpose is restraint. Fourth instance in this module of a figure that is structurally
+wrong while every status code says success (B-130, B-131, B-113's family).
+
+**Fix.** The band floor is now `max(fixed threshold, 3 × one fund's worth)`, and both the resolution
+(2.5 points) and the effective floor (7.5) are published beside the verdict rather than buried. The
+live reading became `NO_BETTER_THAN_CHANCE`, which is the honest answer. Gotcha 88's fourth rule -
+*a collapse threshold belongs to a scale* - applied to a percentage whose scale is set by the size of
+the top quarter.
+
+**Two more of the same shape, found in the same pass and fixed with it.**
+
+1. **Per-category percentages over 3-7 funds.** Every category's top quarter holds three to seven
+   funds, so one fund moving swings its share by 14 to 33 points - and the table read *"Large & Mid
+   Cap 50%, Large Cap 0%"* as though that were a finding about managers rather than four coin flips.
+   `MIN_TOP_QUARTILE_FOR_SHARE = 8`; counts are kept ("1 of 7"), the percentage is withheld. **No
+   category on this archive clears the floor**, which is itself the finding.
+2. **A tracker comparison over eight funds.** Multi Cap read *8 of 8 = 100% beat the index* - one
+   fund per 12.5 points, with five more funds in the category having wound up. `MIN_ACTIVE_FOR_SHARE
+   = 10` withholds it.
+
+**And a caveat that described rules that were not in force.** The prose naming the bands quoted the
+fixed constants (40% and 30%) while the resolution guard had widened the weak band to 32.5%. It is
+now derived from the floor actually applied - B-117's shape in prose, and Gotcha 126(l) exactly: a
+caveat describing a different system from the one running is worse than no caveat.
+
+**Verification.** Live re-run against the real archive: verdict `NO_BETTER_THAN_CHANCE`,
+`onePerFundPp` 2.5, `bandFloorPp` 7.5, per-category shares null with counts intact, Multi Cap
+percentage withheld with its reason. Pinned by `FundPersistenceTest.theBandIsCoarserThanTheData`,
+built verbatim from the live figures.
+
+**Lesson.** B-113 said to run a new verdict over real rows and look at the spread before shipping.
+This is the second time that rule has caught its own author, and the spread is what exposed it: the
+per-category column read 0%, 14%, 20%, 25%, 25%, 50% over top quarters of three to seven funds. **A
+threshold chosen before the data exists must be re-checked against the data's resolution once it
+does.**
+
+---
+
 ### B-133 - The drift heading read a field that does not exist, so it printed "On target" on a portfolio where every bucket was breaching  `[P1]`  `RESOLVED 2026-09-20`
 
 **Symptom.** *"Are you still following your plan?"* on My Portfolio carried a green **On target**
