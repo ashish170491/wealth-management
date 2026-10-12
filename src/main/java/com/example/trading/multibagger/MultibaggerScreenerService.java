@@ -878,10 +878,10 @@ public class MultibaggerScreenerService {
         }
 
         // 6. Institutional Interest Score — per-stock FII/DII accumulation (fix for constant-40 bug).
-        //    Unmeasurable without shareholding history AND without sector flow data.
-        Integer instScore = (shHistory == null && (sectorFlows == null || sectorFlows.isEmpty()))
-                ? null
-                : scoreInstitutionalInterest(symbol, sector, sectorFlows, shHistory, bullishFactors, bearishFactors);
+        //    Null unless a stock-level FII or DII change was measured (B-168): the scorer returns
+        //    null itself, so a present-but-empty history can no longer score a neutral 50.
+        Integer instScore = scoreInstitutionalInterest(symbol, sector, sectorFlows, shHistory,
+                bullishFactors, bearishFactors);
 
         // 7. Financial Quality Score (balance-sheet / cash-flow depth — SPEC §6)
         String fqTradingSymbol = symbol.contains(":") ? symbol.substring(symbol.indexOf(":") + 1) : symbol;
@@ -1989,13 +1989,24 @@ public class MultibaggerScreenerService {
      * belongs to the Insider Activity bonus to avoid double-counting.
      */
     // Package-private for characterisation tests (SPEC §25.6: the scoring engine was untested).
-    int scoreInstitutionalInterest(String symbol,
+    //
+    // Returns NULL when neither a stock-level FII change nor a DII change was measured (B-168).
+    // It used to start at 50 and return it untouched, which stored an unmeasured dimension as a
+    // measured neutral 50 - the B-019 / Gotcha 21 rule broken. That was invisible while the fake
+    // 50/50 split always produced a change; on the first run after B-012 made a missing quarter
+    // honestly null, 302 of 306 stocks scored exactly 50 and the dimension's spread collapsed from
+    // sd 18.6 to 4.1. The sector-flow tilt alone does not count as a measurement: it is the sparse,
+    // mismatched feed that produced the constant-40 bug, so it only adjusts a real reading.
+    Integer scoreInstitutionalInterest(String symbol,
                                            String sector,
                                            Map<String, Double> sectorFlows,
                                            NseDataService.ShareholdingHistory shHistory,
                                            List<String> bullish,
                                            List<String> bearish) {
-        int score = 50; // true-midpoint neutral default
+        if (shHistory == null || (shHistory.getFiiChange() == null && shHistory.getDiiChange() == null)) {
+            return null;
+        }
+        int score = 50; // the midpoint the measured changes move from - never returned unmeasured
 
         // === Primary signal: per-stock FII holding trend ===
         if (shHistory != null && shHistory.getFiiChange() != null) {

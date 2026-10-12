@@ -308,6 +308,51 @@ class MultibaggerDimensionScoringTest {
     // ==================== Cross-cutting: the missing-data asymmetry ====================
 
     @Nested
+    @DisplayName("Institutional Interest (B-168)")
+    class InstitutionalInterest {
+
+        private com.example.trading.ai.NseDataService.ShareholdingHistory history(Double fii, Double dii) {
+            com.example.trading.ai.NseDataService.ShareholdingHistory h =
+                    new com.example.trading.ai.NseDataService.ShareholdingHistory();
+            h.setFiiChange(fii);
+            h.setDiiChange(dii);
+            return h;
+        }
+
+        @Test
+        @DisplayName("A history whose FII and DII changes are both unmeasured is null, not a neutral 50")
+        void emptyHistoryIsUnmeasured() {
+            // The exact shape of 2026-10-12: the history object existed, both changes were null,
+            // and 302 of 306 stocks were stored as a measured 50.
+            assertThat(screener.scoreInstitutionalInterest("NSE:X", "IT", Map.of("IT", 900.0),
+                    history(null, null), bullish, bearish)).isNull();
+            assertThat(screener.scoreInstitutionalInterest("NSE:X", "IT", Map.of(), null, bullish, bearish)).isNull();
+        }
+
+        @Test
+        @DisplayName("A sector-flow tilt alone is not a measurement - that feed is what produced the constant-40 bug")
+        void sectorFlowAloneIsNotAMeasurement() {
+            assertThat(screener.scoreInstitutionalInterest("NSE:X", "IT", Map.of("IT", -900.0),
+                    history(null, null), bullish, bearish)).isNull();
+        }
+
+        @Test
+        @DisplayName("The real TCS change over two years scores below neutral (FII -3.6pp, DII +2.56pp)")
+        void realTcsChange() {
+            // 50 - 25 (FII heavily reducing) + 10 (DII accumulating); opposite sides, no confluence.
+            assertThat(screener.scoreInstitutionalInterest("NSE:TCS", null, null,
+                    history(-3.60, 2.56), bullish, bearish)).isEqualTo(35);
+        }
+
+        @Test
+        @DisplayName("One measured leg is enough to measure the dimension")
+        void oneLegIsMeasured() {
+            assertThat(screener.scoreInstitutionalInterest("NSE:X", null, null,
+                    history(null, 0.8), bullish, bearish)).isEqualTo(60);
+        }
+    }
+
+    @Nested
     @DisplayName("Cross-cutting missing-data semantics")
     class MissingDataSemantics {
 

@@ -422,13 +422,23 @@ public class NseDataService {
     }
 
     /**
-     * Pure reader for a shareholding-pattern XBRL. The institutional subtotals are the filing's
-     * own {@code InstitutionsForeign_ContextI} / {@code InstitutionsDomestic_ContextI} values of
-     * {@code ShareholdingAsAPercentageOfTotalNumberOfShares}, stored as ratios (0.0906) and
-     * returned as percent (9.06).
+     * Pure reader for a shareholding-pattern XBRL: the filing's own institutional subtotals of
+     * {@code ShareholdingAsAPercentageOfTotalNumberOfShares}, returned as percent.
+     *
+     * <p><b>NSE files two generations, and they differ in the label AND the scale</b> (B-168,
+     * measured on TCS): filings up to Mar-2025 use {@code InstitutionsForeignI} /
+     * {@code InstitutionsDomesticI} with values in <i>percent</i> (12.66); filings from Jun-2025
+     * use {@code InstitutionsForeign_ContextI} / {@code InstitutionsDomestic_ContextI} with
+     * <i>ratios</i> (0.0906). Matching only the new labels made every comparison quarter read null,
+     * which collapsed Institutional Interest to a constant; matching the old labels without the
+     * scale would have read 12.66 as 1,266%. Each filing carries its own grand total
+     * ({@code ShareholdingPatternI} = 100, {@code ShareholdingPattern_ContextI} = 1), so the scale
+     * is taken from the document rather than guessed; only when the total is absent does the
+     * generation decide it.
      */
     public static ShareholdingFacts parseShareholdingFacts(String xml) {
-        Double fii = null, dii = null;
+        Double fii = null, dii = null, total = null;
+        boolean newGeneration = false;
         try {
             javax.xml.parsers.DocumentBuilderFactory dbf =
                     javax.xml.parsers.DocumentBuilderFactory.newInstance();
@@ -449,9 +459,16 @@ public class NseDataService {
                 String txt = n.getTextContent();
                 if (txt == null || txt.isBlank()) continue;
                 try {
-                    double v = Double.parseDouble(txt.trim()) * 100.0;
-                    if ("InstitutionsForeign_ContextI".equals(c)) fii = v;
-                    else if ("InstitutionsDomestic_ContextI".equals(c)) dii = v;
+                    double v = Double.parseDouble(txt.trim());
+                    switch (c) {
+                        case "InstitutionsForeign_ContextI" -> { fii = v; newGeneration = true; }
+                        case "InstitutionsDomestic_ContextI" -> { dii = v; newGeneration = true; }
+                        case "ShareholdingPattern_ContextI" -> { total = v; newGeneration = true; }
+                        case "InstitutionsForeignI" -> fii = v;
+                        case "InstitutionsDomesticI" -> dii = v;
+                        case "ShareholdingPatternI" -> total = v;
+                        default -> { }
+                    }
                 } catch (NumberFormatException ignored) {
                     // an unreadable figure stays null - never zero
                 }
@@ -459,7 +476,10 @@ public class NseDataService {
         } catch (Exception e) {
             return new ShareholdingFacts(parsePledge(xml), null, null);
         }
-        return new ShareholdingFacts(parsePledge(xml), fii, dii);
+        double toPercent = (total != null && total > 0) ? 100.0 / total : (newGeneration ? 100.0 : 1.0);
+        return new ShareholdingFacts(parsePledge(xml),
+                fii == null ? null : fii * toPercent,
+                dii == null ? null : dii * toPercent);
     }
 
     /** The pledge read, unchanged from the original parser (kept separate so it cannot regress). */

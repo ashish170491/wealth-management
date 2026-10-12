@@ -746,7 +746,7 @@ and they should be read with §40.2's frame in mind: **54% of the composite is p
 a 98 today is substantially a statement that the stock has been rising, and none of these names has
 a single day of forward return on record.
 
-**The 4 failures are a finding, filed under B-013** (its fourth instance): NSE:HEG, NSE:HFCL,
+**The 4 failures are a finding, filed under B-013** (its fourth instance). *(Corrected 2026-10-12 by B-169: HFCL, STLTECH and MTARTECH were not renames but stocks in NSE's trade-to-trade series, which Kite lists as `-BE`; the quote lookup now finds them. HEG alone is a rename, to HEGAM.)* NSE:HEG, NSE:HFCL,
 NSE:STLTECH and NSE:MTARTECH each return `{status=success, data={}}` from `/quote`, Gotcha 14's
 signature for a tradingsymbol the broker does not recognise, while every other symbol in the same
 pass resolved. All four are real, liquid companies, so the likely cause is a tradingsymbol change
