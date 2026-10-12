@@ -44,14 +44,31 @@ public class RecommendationAccuracyService {
 
     private static final DateTimeFormatter ISO_DATE = DateTimeFormatter.ISO_DATE;
 
-    /** Full accuracy summary grouped by source × horizon. */
+    /**
+     * Accuracy of the app's <b>picks</b>, grouped by source x horizon. {@code MACRO_EVENT} is not
+     * here: a reading that a business faces a costlier input is not a pick (its own javadoc says
+     * every "the app's picks" surface must filter it out, Gotcha 124), and from 2026-10-12 its first
+     * 113 readings mature into this table - mostly HEADWIND, so a correct call would draw as a red
+     * underperformance (B-162). Read it with {@link #macroReadings()}.
+     */
     public List<SourceHorizonStats> summarize() {
         List<SourceHorizonStats> out = new ArrayList<>();
         for (RecommendationEntity.Source source : RecommendationEntity.Source.values()) {
+            if (source == RecommendationEntity.Source.MACRO_EVENT) continue;
             for (int horizon : RecommendationOutcomeEntity.DEFAULT_HORIZONS) {
                 SourceHorizonStats stats = computeFor(source, horizon);
                 if (stats.getSampleSize() > 0) out.add(stats);
             }
+        }
+        return out;
+    }
+
+    /** Macro-exposure readings, scored as readings: verdict-signed, never as picks (B-162). */
+    public List<SourceHorizonStats> macroReadings() {
+        List<SourceHorizonStats> out = new ArrayList<>();
+        for (int horizon : RecommendationOutcomeEntity.DEFAULT_HORIZONS) {
+            SourceHorizonStats stats = computeFor(RecommendationEntity.Source.MACRO_EVENT, horizon);
+            if (stats.getSampleSize() > 0) out.add(stats);
         }
         return out;
     }
@@ -102,12 +119,18 @@ public class RecommendationAccuracyService {
         List<double[]> xy = new ArrayList<>();
 
         for (RecommendationOutcomeEntity o : outcomes) {
-            sumReturn += o.getReturnPercent();
+            // Signed the way the reading was made, at aggregation only (stored outcomes are
+            // untouched): for a directional reading "+" must mean "the reading was right", or a
+            // correct HEADWIND call averages into a red loss and a wrong one into a win (B-162).
+            // Signing here and not per row also keeps a house's correct Sells from cancelling its
+            // correct Buys, the same rule SPEC 49.9 applies to analyst calls.
+            double sign = directional
+                    && "HEADWIND".equalsIgnoreCase(verdictById.get(o.getRecommendationId())) ? -1.0 : 1.0;
+            sumReturn += sign * o.getReturnPercent();
             if (directional) {
                 Double basis = o.getExcessReturnPercent() != null
                         ? o.getExcessReturnPercent() : o.getReturnPercent();
-                boolean headwind = "HEADWIND".equalsIgnoreCase(verdictById.get(o.getRecommendationId()));
-                if (headwind ? basis < 0 : basis > 0) positive++;
+                if (sign * basis > 0) positive++;
             } else if (o.getReturnPercent() > 0) {
                 positive++;
             }
@@ -123,11 +146,13 @@ public class RecommendationAccuracyService {
                 if (Boolean.TRUE.equals(o.getStopLossHit())) slHit++;
             }
             if (o.getExcessReturnPercent() != null) {
-                sumExcess += o.getExcessReturnPercent();
+                sumExcess += sign * o.getExcessReturnPercent();
                 excessCount++;
             }
             Integer score = scoreById.get(o.getRecommendationId());
-            if (score != null) xy.add(new double[]{score, o.getReturnPercent()});
+            // No IC for a directional reading: correlating a score with an unsigned return across a
+            // mix of TAILWIND and HEADWIND readings measures nothing.
+            if (score != null && !directional) xy.add(new double[]{score, o.getReturnPercent()});
         }
 
         int n = outcomes.size();

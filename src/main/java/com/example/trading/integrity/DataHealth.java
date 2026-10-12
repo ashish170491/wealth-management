@@ -173,6 +173,13 @@ public final class DataHealth {
         // measurement pass runs every weekday whatever the news did (SPEC 49.6).
         m.put("analystTargets", ScheduleSpec.fixed("analystTargets", "Analyst targets",
                 "AnalystTargetScheduler.captureAndMeasure", 13, 20, false, false));
+        // SPEC 52.6. Stamped with when the JOB RAN, never with the NAV date. A mutual fund has one
+        // price a day, struck after the cut-off, so a Monday pull legitimately carries Friday's NAV
+        // and a stamp on that date would read "3 days ago" on a job that worked perfectly. Not
+        // sparse: this runs every weekday whatever AMFI published, so a stamp that stops moving
+        // really does mean the job stopped.
+        m.put("fundNav", ScheduleSpec.fixed("fundNav", "Fund NAVs",
+                "MutualFundNavScheduler.pullDailyNav", 12, 30, false, false));
         // Quarterly results are captured inside the 14:00 screening from filings it already
         // fetches, so they have no cron of their own and are checked against the screening's
         // (SPEC 50.4). Saturday counts, because the 08:00 weekly screening captures them too.

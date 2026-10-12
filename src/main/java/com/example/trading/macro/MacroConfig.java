@@ -43,16 +43,14 @@ public class MacroConfig {
     public static class Ingest {
 
         /**
-         * <b>Does not create a scheduler, and is false.</b> No {@code @Scheduled} method exists for
-         * extraction in this phase; the flag is bound and logged at boot so the intent is on the
-         * record. Adding a cron needs a SPEC §15 row and an argument for the slot (09:16, 12:40 and
-         * 14:20 are the candidates, all inside the 09:15-15:30 window SPEC §3.4 allows).
-         *
-         * <p>Extraction runs only from {@code POST /api/macro/ingest} - the button on the Events
-         * page - which is what keeps a model call an act the investor chose rather than a standing
-         * cost.
+         * Whether {@link MacroIngestScheduler} reads the news at 12:40 on a weekday (SPEC 48.9,
+         * revised 2026-10-12). It was false and nothing scheduled the read, so the news went unread
+         * from 2026-09-12 and every holding drew "nothing applies" off an empty window (B-154). The
+         * original objection was the cost of a model call; on the keyword reader a run costs nothing
+         * but ~84 s of RSS fetches, and with a model configured it is a rupee or two a day. Set false
+         * to go back to the button only.
          */
-        private boolean scheduled = false;
+        private boolean scheduled = true;
 
         /** Headlines older than this are not offered to the extractor. */
         private int headlineLookbackHours = 36;
@@ -75,8 +73,8 @@ public class MacroConfig {
     @PostConstruct
     void announce() {
         log.info("Macro event exposure: window {} days, dedup {} days, ingest cap {} headlines. "
-                        + "Scheduled extraction is {} - extraction runs only from POST /api/macro/ingest.",
+                        + "Scheduled extraction is {}; POST /api/macro/ingest still runs it on demand.",
                 windowDays, dedupWindowDays, ingest.getMaxHeadlines(),
-                ingest.isScheduled() ? "ENABLED IN CONFIG BUT NO CRON EXISTS (SPEC 48.6)" : "off");
+                ingest.isScheduled() ? "on (12:40 MON-FRI)" : "off");
     }
 }

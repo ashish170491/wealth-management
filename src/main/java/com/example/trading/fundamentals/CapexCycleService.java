@@ -57,8 +57,9 @@ public class CapexCycleService {
             return cc;
         }
 
-        boolean isFinancial = bs.isBanking() || (industryHint != null && industryHint.toLowerCase()
-                .matches(".*(bank|financ|nbfc|insur|capital market|holding).*"));
+        // The shared lender test (B-136, B-144): this was a third copy of the industry regex, so an
+        // asset manager's capex read NA_FINANCIAL after capital efficiency had stopped calling it a lender.
+        boolean isFinancial = NseDataService.isLender(bs, industryHint);
 
         Double priorCwip = null;
         Double priorPpe = null;

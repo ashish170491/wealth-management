@@ -41,6 +41,7 @@ public class FundamentalsController {
     private final com.example.trading.fundamentals.FundamentalsBackfillService backfillService;
     private final com.example.trading.fundamentals.FundamentalsBackfillConfig backfillConfig;
     private final LongHorizonRecordService longHorizonService;
+    private final com.example.trading.persistence.MultibaggerScoreRepository scoreRepository;
 
     /**
      * Import a decade of fundamentals for one stock from a CSV export.
@@ -149,7 +150,30 @@ public class FundamentalsController {
     public ResponseEntity<ForensicScreenService.ForensicResult> forensics(
             @PathVariable String symbol,
             @RequestParam(defaultValue = "false") boolean announcements) {
-        return ResponseEntity.ok(forensicService.screen(normalize(symbol), announcements));
+        String sym = normalize(symbol);
+        return ResponseEntity.ok(forensicService.screen(sym, announcements, isLender(sym)));
+    }
+
+    /**
+     * The lender marker for one stock, from its newest screening row under any spelling - the
+     * same row the screener judged it on (B-144). DB-only. No row means "not known to be a
+     * lender", which leaves the cash-conversion check running, as it always did.
+     */
+    private boolean isLender(String symbol) {
+        try {
+            var rows = scoreRepository.findLatestForSymbolsSince(
+                    com.example.trading.holdings.SymbolVariants.candidates(symbol),
+                    java.time.LocalDate.now().minusDays(400));
+            return rows.stream()
+                    .max(java.util.Comparator.comparing(com.example.trading.persistence.MultibaggerScoreEntity::getScreeningDate))
+                    .map(r -> ("NA_FINANCIAL".equals(r.getCapexVerdict())
+                            || com.example.trading.ai.NseDataService.isLenderIndustry(r.getIndustry()))
+                            && !com.example.trading.ai.NseDataService.isFeeFinancialByReturns(
+                                    r.getRoaPercent(), r.getRoePercent()))
+                    .orElse(false);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
@@ -291,6 +315,19 @@ public class FundamentalsController {
         requireOutsideNseCrunch();
         int n = limit != null && limit > 0 ? limit : backfillConfig.getBatchSize();
         return ResponseEntity.ok(backfillService.runBatch(n));
+    }
+
+    /**
+     * Fill the integrated feed's older year-end filings (FY2025) for symbols the archive pass has
+     * visited (B-166). The 11:30 job runs this after its batch; this is the manual trigger. POST,
+     * live NSE calls, same 09:40-10:15 refusal, and it stops at the configured deadline.
+     */
+    @PostMapping("/backfill-gaps")
+    public ResponseEntity<FundamentalsBackfillService.GapResult> backfillGaps(
+            @RequestParam(required = false) Integer limit) {
+        requireOutsideNseCrunch();
+        int n = limit != null && limit > 0 ? limit : backfillConfig.getBatchSize();
+        return ResponseEntity.ok(backfillService.fillIntegratedGaps(n));
     }
 
     /**

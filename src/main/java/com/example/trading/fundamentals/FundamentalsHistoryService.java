@@ -107,6 +107,39 @@ public class FundamentalsHistoryService {
     }
 
     /**
+     * Fill the years the legacy archive cannot supply and the screening does not maintain: the
+     * integrated feed's older March filings, in practice FY2025 (B-166).
+     *
+     * <p>Only years that have no balance sheet on file are fetched, so after the first pass a
+     * symbol costs no requests. A year on a different reporting basis from the stored majority is
+     * skipped, never converted (Gotcha 73) - the integrated feed prefers consolidated, and mixing
+     * it into a standalone series would manufacture a step that never happened.
+     *
+     * @return {@code [written, skippedForBasis]}
+     */
+    public int[] fillIntegratedYears(String symbol) {
+        String tradingSymbol = symbol.contains(":") ? symbol.substring(symbol.indexOf(':') + 1) : symbol;
+        List<AnnualFundamentalsEntity> existing = repository.findHistory(symbol);
+        java.util.Set<Integer> have = new java.util.HashSet<>();
+        int cons = 0, standalone = 0;
+        for (AnnualFundamentalsEntity r : existing) {
+            if (r.getEquity() != null && r.getFiscalYear() != null) have.add(r.getFiscalYear());
+            if (Boolean.TRUE.equals(r.getConsolidated())) cons++;
+            else if (Boolean.FALSE.equals(r.getConsolidated())) standalone++;
+        }
+        Boolean majorityConsolidated = (cons + standalone) == 0 ? null : cons >= standalone;
+        int written = 0, skipped = 0;
+        for (NseDataService.BalanceSheetData bs : nseDataService.fetchIntegratedAnnualYears(tradingSymbol, have)) {
+            if (majorityConsolidated != null && bs.isConsolidated() != majorityConsolidated) {
+                skipped++;
+                continue;
+            }
+            if (recordYear(symbol, bs)) written++;
+        }
+        return new int[]{written, skipped};
+    }
+
+    /**
      * One-time backfill of a symbol's pre-2025 annual history from NSE's own filing archive
      * (SPEC §32.5).
      *

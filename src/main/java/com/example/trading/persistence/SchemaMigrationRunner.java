@@ -41,6 +41,7 @@ public class SchemaMigrationRunner {
         }
         addMissingColumns();
         widenColumns();
+        dropStaleEnumCheckConstraints();
         dropObsoleteNotNullConstraints();
         normalizeRecommendationSymbols();
         backfillOutcomeDaysElapsed();
@@ -58,6 +59,9 @@ public class SchemaMigrationRunner {
      */
     private static final List<String[]> ENSURE_COLUMNS = List.<String[]>of(
             new String[]{"annual_fundamentals", "consolidated", "boolean"},
+            // B-166: the integrated-feed gap pass records when it last tried a symbol. Gotcha 74:
+            // if this column is silently missing the pass re-queues every symbol on every run.
+            new String[]{"fundamentals_backfill_status", "integrated_gap_checked_on", "date"},
             // B-097: a seeded thesis is not a statement. Gotcha 74 case - a silently missing
             // column here would make every investor-written thesis read as generated.
             new String[]{"holding_conviction", "thesis_stated", "boolean"},
@@ -152,6 +156,74 @@ public class SchemaMigrationRunner {
             new String[]{"multibagger_scores", "fii_holding_pct", "double precision"},
             new String[]{"multibagger_scores", "dii_holding_pct", "double precision"}
     );
+
+    /**
+     * Columns holding an {@code @Enumerated(STRING)} value whose enum has since gained members.
+     * Format: {table, column}.
+     *
+     * <p><b>Gotcha 74's fourth face, and the most silent of them.</b> When Hibernate creates a
+     * table for a string-valued enum it also writes a {@code CHECK} constraint enumerating the
+     * values that existed <em>that day</em>. {@code ddl-auto=update} adds columns, never alters an
+     * existing column's type (B-116), never relaxes a NOT NULL (B-026) - and never rewrites one of
+     * these either. So the day an enum gains a member, every row carrying it is rejected by the
+     * database with a constraint violation, and because the write is usually a {@code saveAll} the
+     * whole batch rolls back with it (B-128's shape).
+     *
+     * <p>It cost a live run on 2026-09-20: §52.15 added eighteen debt and seven hybrid categories
+     * to {@code SebiCategory}, and the first NAV pull afterwards failed outright on
+     * {@code mf_scheme_category_check} - 1,306 schemes rejected because the constraint still listed
+     * the equity-only set. Nothing in the application was wrong; the table simply remembered an
+     * older version of the enum.
+     *
+     * <p>The constraints are <b>dropped rather than rewritten</b>. Rewriting means regenerating the
+     * list on every enum change and getting it exactly right each time, and a stale hand-written
+     * constraint fails in precisely the same silent way. The enum is already enforced in Java on
+     * the way in, so the database copy adds nothing but a second thing to keep in step (Gotcha 85).
+     */
+    private static final List<String[]> ENUM_CHECK_COLUMNS = List.<String[]>of(
+            new String[]{"mf_scheme", "category"},
+            new String[]{"mf_scheme", "asset_class"},
+            new String[]{"mf_scheme", "structure"},
+            new String[]{"mf_scheme", "plan"},
+            new String[]{"mf_scheme", "nav_option"},
+            new String[]{"mf_holding", "scheme_resolved_from"}
+    );
+
+    /**
+     * Drop the check constraint Postgres is enforcing on each enum column, if one is there.
+     *
+     * <p>Idempotent and safe to keep: the constraint name is read from {@code pg_constraint} rather
+     * than guessed, because Hibernate's naming has changed across versions and a guessed name that
+     * does not match fails silently - leaving the real constraint in place and the symptom
+     * unchanged, which is the worst possible outcome for a fix.
+     */
+    private void dropStaleEnumCheckConstraints() {
+        for (String[] spec : ENUM_CHECK_COLUMNS) {
+            String table = spec[0];
+            String column = spec[1];
+            try {
+                List<String> names = jdbc.queryForList(
+                        "SELECT con.conname FROM pg_constraint con "
+                                + "JOIN pg_class rel ON rel.oid = con.conrelid "
+                                + "JOIN pg_attribute att ON att.attrelid = rel.oid "
+                                + "  AND att.attnum = ANY(con.conkey) "
+                                + "WHERE con.contype = 'c' AND rel.relname = ? AND att.attname = ?",
+                        String.class, table, column);
+                for (String name : names) {
+                    jdbc.execute("ALTER TABLE " + table + " DROP CONSTRAINT IF EXISTS \"" + name + "\"");
+                    log.info("Schema migration: dropped stale enum check constraint {} on {}.{} - "
+                            + "the enum is enforced in Java and the database copy could only go "
+                            + "out of date (Gotcha 74).", name, table, column);
+                }
+            } catch (Exception e) {
+                // Never fatal: the table may not exist yet on a first boot. WARN rather than DEBUG
+                // because the symptom downstream is a whole feature writing nothing.
+                log.warn("Schema migration: could not check enum constraints on {}.{} ({}). If that "
+                        + "enum has gained a value, writes carrying it will fail.",
+                        table, column, e.getMessage());
+            }
+        }
+    }
 
     /**
      * Columns whose declared width grew after the table was created. Hibernate's

@@ -70,7 +70,6 @@ and renaming it over the original is the version of this that cannot lose data.
 | B-116 | P2 | One free-text field from NSE froze the whole IPO table for two days | 2026-09-16 | `ipo_issues.issue_type` is NSE's own words for the offer structure, stored in a `varchar(32)`. A **further public offer** entered the pipeline reading *"100% Book Building ( Further Public Offer)"* - **42 characters** - and every capture since **2026-09-14** died on `value too long for type character varying(32)`. Two failures in one: the column was sized for the values seen at build time rather than for third-party prose, and `IpoTrackingService` ends its run with a single `repository.saveAll(...)`, so one bad row rolled back **all 255** and discarded ~4 minutes of paced NSE and Kite calls - the same shape as B-049. The scheduler logged the exception and moved on, and the only outward sign was `ipoIssues` sitting at 2026-09-14 on the freshness strip, which `/api/dashboard/data-health` correctly reported as WATCH. **Fix**: column widened to 160 with an explicit `ALTER ... TYPE` in `SchemaMigrationRunner` (Gotcha 74 - `ddl-auto=update` never alters an existing column's type), the value truncated on write so no future length can abort a run, and rows saved one at a time with the failure count reported in the capture note. Verified: capture returns 200, 255 rows touched, 232 prices refreshed, 0 failures; data-health back to OK. Resolved 2026-09-16. |
 | B-008 | P2 | Logback `maxHistory` is 1 day — audit windows are tiny | 2026-05-10 | `trading-app.log` rolls daily, only one rolled file kept. A 5-day audit can only see ~2 days of data. Bump retention in `logback-spring.xml`. |
 | B-010 | P2 | Depreciation no longer in NSE quarterly JSON | 2026-05-10 | Lives only in XBRL files. `IntrinsicValuationService` falls back to net profit as FCF proxy (conservative). `FinancialQuality` cash-flow ratio treated as missing (neutral 50). Add XBRL parser if precision needed. |
-| B-012 | P2 | FII vs DII split is approximated 50/50 in shareholding | 2026-05-10 | Per-record split is in XBRL only. JSON has total promoter % and public %. Trend detection still works (FII and DII change directions are correlated), but absolute split is no longer authoritative. |
 | B-023 | P1 | Re-weight the scoring engine once clean IC data exists | 2026-08-22 | Per-dimension IC says the three price dimensions (Technical Momentum, Relative Strength, Price Structure) carry **0.42 of the weight** while being mutually collinear (r = 0.72–0.79) and individually near-zero IC (−0.034 / +0.003 / −0.031 at 30d). Financial Quality is the only dimension above the +0.10 useful-signal bar (+0.110) and carries just 0.15. **Deliberately NOT acted on yet**: that IC was measured on scores from the broken engine (constant Valuation dimension, weights summing to 1.15, absolute-only capture gate), so re-weighting on it would be tuning against corrupted measurements — exactly what SPEC §25.5 warns against. Revisit once ~3 months of post-2026-08-22 outcomes exist and IC is stable across two consecutive weekly runs. Same applies to recalibrating the verdict bands (§12.5), which were designed for a mean-50 distribution. **⚠ Superseded by B-028 (2026-08-24)**: the IC quoted here was computed over outcomes whose horizons were mislabelled (20.8% of 30d rows, 29.4% of 90d rows ran longer than their label), so these figures describe a longer holding period than they claim. Re-read after the next outcome run before drawing any conclusion. |
 | B-042 | P2 | PIT endpoint has no circuit breaker; a failed fetch is cached as "no rows" for 6h; B-031 guard misses `txDate > disclosureDate` | 2026-08-26 | `NseDataService.java:1277–1304`: no failure counter (only quote-equity has one), and the empty list is `putCache`d on exception, so a manual `POST /api/insider/capture` retry within 6h silently returns 0. B-031's guard rejects only `txDate > today`, so the SOLARINDS rows (tx Nov-2026, disclosed Mar-2026) re-ingest after 2026-11-09 and count as "recent" for 90 days. **Fix**: reuse the 10-failure/6h breaker; don't cache on exception; also reject `txDate > disclosureDate`. |
 | B-056 | P1 | `BOOK_PROFIT` flags the best compounders while they run — a momentum rule inside a long-term portfolio app | 2026-08-26 | `HoldingsAnalysisService.determineRecommendation()` returns `BOOK_PROFIT` on `pnlPercent > 50 && rsi > 70`, i.e. exactly the holdings that are winning and still strong. The mission pivoted to long-term investing on 2026-04-18 but this rule did not: it tells the investor to trim their strongest positions, and the same method returns `SELL` on `overallScore < 40` or a bearish trend, so a quality compounder in a routine 20% drawdown is marked for exit. Fires into the daily 3:18 PM holdings email today. Found during the review of CORE_HOLDINGS_RECYCLING_PLAN.md (§15, R-12); that plan's §5 is the proposed fix (rank by forward weakness per rupee, tax-gated, paired with destinations) but the defect stands on its own. **Fix, part 1 shipped 2026-08-26** (SPEC §35.5): core holdings are excluded from both the Book Profit and Exit Required tables — a technical SELL on one now appears under *"Core holdings — hold through the noise"* with its durability and reason, so the signal is shown rather than deleted — and the Book Profit header carries the caveat naming the rule as a momentum rule from the intraday era, to be read as a prompt to check valuation rather than a sell instruction. **Still open** for non-core holdings: the rule itself is unchanged, and roughly half the portfolio is UNCLASSIFIED at launch (SPEC §35.4) so the caveat is carrying most of the weight. Part 2 is the plan's §5 replacement (rank by forward weakness per rupee, tax-gated, paired with destinations), which is deferred behind its own evidence gate — next review **2026-11-30**. This entry moves to Resolved when that ships, not before. |
@@ -94,7 +93,6 @@ and renaming it over the original is the version of this that cannot lose data.
 | B-121 | P2 | Half the landing page's attention list was permanent noise from allocation targets nobody chose | 2026-09-18 | The "what needs your attention today" list is the app's action surface. Measured live: **20 items, of which 10 were `ALLOCATION_DRIFT`** - every single sector and market-cap bucket over tolerance - against a profile named **"Default Portfolio"**, seeded at first boot. Targets were 20% IT against 0.43% held and 25% Banking against 3.77%, so every bucket breached every day and none could ever clear until the investor edited a profile they do not know exists. A reader shown the same ten alerts daily has been trained to skip the section (the Gotcha 132 lesson, landing on the most-read screen). Worse, one of them was **`OTHER` carrying a 15% target** - a placeholder given an allocation goal, which Gotcha 110 forbids outright, and since `SectorMapping.resolve` now classifies every holding its actual weight is **0.0%**, making that warning unsatisfiable by construction. Second-order finding from the same load: **all 20 items were severity `WARNING`**, so `severityRank` sorted a constant while the section copy promised "most urgent first". **Fixed 2026-09-18**: `portfolio_profile.targets_stated` (nullable `Boolean`, ensured in `SchemaMigrationRunner` per Gotcha 74) records whether the investor set the targets themselves - the same rule as `thesis_stated` (B-097) and `horizon_stated` (B-057): **a default is not a statement** (Gotcha 68). It is set by `AllocationService.replaceTargetWeights`, i.e. the `PUT /api/portfolio/profile` write, and never by the seeder; **null means unknown and is not read as true**. While targets are unstated the attention list raises **one `INFO` row** naming how many buckets breach and what would make the comparison meaningful, instead of one `WARNING` per bucket - the information is reported, not discarded, and the drift table on My Portfolio is untouched. Placeholder sector buckets are dropped from drift entirely. Verified live: attention **20 -> 11** (3 exit, 7 thesis, 1 info), `OTHER` gone, 49 buckets still rendered on the drift table. Pinned by `OverviewTruthTest` (5 cases incl. that a stated profile still raises every breach, and that an exit signal still outranks the info row). |
 | B-122 | P2 | The landing page quoted 4,979 overlapping rows as if it were a sample size | 2026-09-18 | The Overview's track-record panel rendered `MULTIBAGGER - 90-day results - from **4,979 picks**`, hit rate **55.5%**, excess **+3.21%**, IC **0.114** - just above the conventional 0.10 "useful signal" line - under a heading saying this is "whether the app's own past picks actually beat the index", with no caveat. That count is ~82 screening dates x ~300 stocks whose returns move together, measured over windows that share most of their days: Gotcha 88 puts the effective independent sample near **five periods** at t=1.24, p=0.28, and the app's **own** recorded walk-forward review for this horizon reads `independentPeriods: 1`. The display gate was `MIN_SAMPLE_FOR_DISPLAY = 10` - a row count, which is precisely the quantity Gotcha 92 says never to read as a sample size - so it cannot catch this. The panel's own code comment warns that "a hit rate from 3 picks looks exactly as authoritative as one from 300" and then enforces the row count. Direction: **flatters the engine**, on the screen that decides whether the investor trusts everything else, which is the failure that ended the previous ML chain (SPEC 25.5). **Partly fixed 2026-09-18**: the three figures stay on screen - they are real, they are merely not yet distinguishable from luck, and saying so is the discipline - beneath a caveat naming the overlap and linking to Track Record. **Still open**: `accuracyHeadline()` filters on horizon only and takes `max(sampleSize)` across **every** `RecommendationEntity.Source`, including `MACRO_EVENT`, whose own javadoc says anything presenting "the app's picks" must filter it out, and the deleted `SECTOR_REVERSAL` engine (IC **-0.167** at 90d, 431 rows). Both have too few matured rows to surface today; neither will stay that way. Fix: restrict the headline to pick sources, and print `independentPeriods` from the latest `weight_reviews` row beside (or instead of) the count. |
 | B-123 | P2 | The attention list prints no denominator, and its all-clear covers a third of the book nobody checked | 2026-09-18 | Measured on 30 holdings: thesis drift is computed on **21**, because 9 are `NO_DATA` (SKYGOLD, EMCURE, LCCPROJECT, PREMIERENE, GULPOLY, NITINSPIN, RATHIST, VMM, WAAREEENER - outside the screening universe, or too recently added to measure a 30-day delta). `DashboardService.attention` excludes them, which is **correct** - a gap in our coverage is not a finding about the stock - but nothing on the page says so. When the list is empty the page prints *"Nothing needs your attention today - No exit signals, no thesis drift, and your allocation is within the tolerance you set"*: three specific absences asserted over a book of which 30% could not be checked for the second. Gotcha 44 in the most damaging position available, a clean bill of health on the landing page. Every comparable surface here prints its coverage (the holdings email's forensic line, `CompoundingLensService`, `AnalystTrackRecord.caveat()`, all of SPEC 44); the most-read screen does not. **Fix**: a mandatory coverage line derived from the lists it describes (Gotcha 98) - "3 exit signals from 30 holdings; 7 thesis alerts from 21 checked, 9 could not be" - and an empty state that states the same denominators rather than three absences. Found by the SME review; deliberately left open because the scope agreed was the misleading numbers. |
-| B-124 | P2 | The app's only armed risk control never reaches the attention list | 2026-09-18 | `BSE:ABCAPITAL` is held. Its 2026-09-17 screening row carries `forensicFlags = CASH_CONVERSION:HIGH` - the severity tier that disqualifies (Gotcha 77) - plus `financialQualityVerdict = HIGH_RISK` and `compositeScore = 54`, the HIGH_RISK hard cap itself; compounding reads `NO`. It appears **nowhere** on the Overview. `DashboardService.attention` draws from exactly four sources: `holdings.recommendation` in {SELL, STRONG_SELL} (the momentum rule B-069 and B-056 are about), thesis decay, allocation drift and concentration alerts. Forensic flags and the financial-quality verdict are not among them, although both sit on the screening row the same service reads two methods away. A business that is structurally fragile but whose chart is fine is therefore invisible - while the list had room for ten allocation-bucket rows (B-121). **Direction: silently flatters a holding the app itself judged HIGH_RISK.** Forensic is the one signal that ships **armed** (`forensic-actionable: true`, Gotcha 42) precisely because a risk control being wrong costs capital; arming it and then not showing it on the action surface removes the asymmetry it was armed for. **Fix**: a `FORENSIC_FLAG` kind (URGENT for HIGH, WARNING for MEDIUM naming the flag, INFO never raised) and a `QUALITY_RISK` kind for `HIGH_RISK`, both resolved across exchange prefixes via `SymbolVariants` and both carrying the screening date they came from - surfacing verdicts the engine already computes, adding no new vocabulary and no points. |
 | B-125 | P2 | My Portfolio's allocation heading reads a green "On target" while the Overview lists the same buckets as drifting | 2026-09-18 | `page-holdings.js:1096-1100` filters `data.drift.buckets` on `b.status === 'OVER_TOLERANCE'`. **`AllocationDto.DriftBucket` has no `status` field** - it has `alertLevel`, which `driftPanel()` itself reads correctly at line 1000. The filter therefore always yields 0, so the folded section heading renders **"On target"** with `{type:'success'}` - a green all-clear - from the same response that produced 10 over-tolerance buckets on the Overview. Under SPEC 27.15 a folded heading is the only thing the reader sees, so a green badge means the section is never opened. Two screens answering one question with different answers (Gotcha 85), and the wrong one is the reassuring one. Adjacent, same file, line 468: the thesis-drift count is `verdict !== 'INTACT'`, which includes the **9 `NO_DATA`** holdings, so that heading reads 16 where the Overview's list has 7 - "could not check" counted as "not intact" (Gotcha 44/68). Both arrived with the uncommitted collapsible-sections work and neither is on the Overview, so both are filed rather than fixed. **Fix**: read `alertLevel`; derive each count from the list it sits above (Gotcha 98); exclude or separately label the unmeasured decay rows. |
 | B-126 | P3 | Every section on every page folds by default, including the landing page's action surface | 2026-09-18 | Headless render of `index.html`: all five sections carry `hidden="until-found"`, so a first-time reader's landing page is five collapsed headings - one of which is *"What needs your attention today (11)"*. `ui.js` `foldSections()` calls `collapse(node, { key, open: false })` unconditionally. SPEC 27.15 specifies the opposite: *"The default is data-driven, not positional... the first section **with a non-zero count** opens and the rest fold. A page whose one open section is the empty one is the opposite of a contents page."* Count pills make this safe rather than dangerous - the reader can see there are 11 items - so it is a specification mismatch and a usability regression, not a correctness bug, which is why it is P3. Affects all eleven folding pages; it costs most on the Overview, whose own javadoc says it "answers two questions and then gets out of the way" and which in this state answers neither without a click. **Fix**: open the first section whose heading carries a non-zero `.count` pill, falling back to all-folded when none does, with a reader's stored choice still winning over the default. |
 | B-128 | P3 | Two junk analyst targets survived capture, one of them filed 10x off | 2026-09-18 | Found while measuring B-127. Two rows in `analyst_targets` carry a target that cannot belong to the stock it is filed against: **NSE:LT, Emkay, Rs 330** against a price at call of **Rs 4,037.70** (the price is 1091% above the target), and **NSE:SOLARINDS, Prabhudas Lilladher, Rs 2,191** against **Rs 13,445.00** (917%). Both carry a **BUY** rating, which is what gives them away - nobody publishes a Buy at a twelfth of the current price. Root cause not diagnosed; most likely the structured feed carrying a figure from another field, or a stock-id collision of the kind SPEC 49.11(g) describes. `AnalystTargetParser`'s currency-marker rule (Gotcha 126a) guards the *headline* path, and these came through the **structured** path, which has no equivalent sanity check on magnitude. **Blast radius is bounded but real**: the coverage median is already protected, because B-127 excludes any target the price has run past and both of these qualify, so no screen quotes them - but they still pollute `AnalystTrackRecord`. Each will resolve MISSED at its horizon and count against its house's hit rate, and both Emkay and Prabhudas Lilladher sit in the 15+ resolved-call set where a hit rate is published. Two rows in 6,986, so the effect is small, but it records a fact about the feed as a fact about the desk. **Fix**: a magnitude guard at capture - reject a target more than ~5x or less than ~0.2x the price at the call and log it rather than storing it - with the threshold set against the measured distribution first rather than assumed, the same discipline SPEC 49.12 used for `MIN_HOUSES_FOR_AGREEMENT`. Filed rather than fixed: it is a capture-side change with its own measurement to do, and it is not what was asked for. |
@@ -107,6 +105,479 @@ and renaming it over the original is the version of this that cannot lose data.
 ---
 
 ## Resolved Bugs
+
+### B-136 / B-137 / B-142 - fee financials, missing colour classes, watchlist sector  `RESOLVED 2026-10-12`
+
+- **B-136 (P1) asset managers, registrars and wealth managers were judged as lenders.** The discriminator the entry asked for is the balance sheet, not the name: a financial is a lender only when equity is **under half of total assets** (or it files the banking taxonomy). Measured gap on 2026-10-10: fee/investment businesses 0.67-0.90 (NAM-INDIA, UTIAMC, JIOFIN, ANANDRATHI, CAMS, PAYTM), lenders 0.06-0.34. `NseDataService.isLender` / `isFeeFinancial` / `isFeeFinancialByReturns` (ROA Ã· ROE = equity Ã· assets, for callers holding only a screening row) are now the single test - three more copies of the industry regex (capex cycle, macro exposure, and the forensic callers) were replaced. The sector lens's FINANCIALS refusal is lifted (`MIXED_BUCKETS` now empty), because lenders and non-lenders in one bucket never share a denominator. **Verified live:** CAMS evaluates with ROCE 48.2%, capex STEADY (was NA_FINANCIAL); `/api/dashboard/sector-standing?symbol=NSE:CAMS` is a non-lender with six fee peers (too few, said so) instead of a lender ranked on ROA; BAJFINANCE is ranked among 19 financials lenders. Pinned in `SectorStandingTest`.
+- **B-137 (P3) `.positive` / `.negative` were undefined outside `.summary-card`.** `span.positive` / `span.negative` defined in `app.css`, scoped to inline elements so the summary-card rules are untouched; the compounding, long-horizon, earnings and analyst ticks now carry colour.
+- **B-142 (P3) the watchlist's Sector column printed the raw industry**, including GENERAL and Other. It now resolves through `SectorMapping.resolve` like every other screen, renders through `humanLabel`, and a placeholder reads "not classified" (10 of 24 rows today) rather than a fake bucket.
+
+### B-166 / B-124 / B-012 - history depth, business warnings and the FII/DII split  `RESOLVED 2026-10-12`
+
+- **B-166 (P2) no FY2025 accounts, and the capital-allocation record read the oldest year.** The legacy archive stops at FY2024 and the screening maintains only the newest year, so the March-2025 integrated filing sat in neither. New `NseDataService.fetchIntegratedAnnualYears` + `FundamentalsHistoryService.fillIntegratedYears` (skips years already holding a balance sheet, and skips - never converts - a year on the other reporting basis, Gotcha 73) + `FundamentalsBackfillService.fillIntegratedGaps`, run by the 11:30 job after its batch and manually via `POST /api/fundamentals/backfill-gaps`; `fundamentals_backfill_status.integrated_gap_checked_on` stops a tried symbol being re-queued. `CapitalAllocationRecord` now opens on the earliest year that HAS a balance sheet, and sums depreciation over the years after it (the old sum included the opening year's own charge). **Verified live:** one pass wrote **346 FY2025 years across 399 symbols** (16 skipped for basis); RELIANCE, TCS, KAJARIACER now hold balance sheets for 2023-2026; TCS's reinvestment and incremental-return components, "not measured" for every company before, now read ADEQUATE and STRONG, and its return-persistence gate passes on four years. `CapitalAllocationRecordTest` pins the oldest-year case.
+- **B-124 (P2) the armed risk control never reached the attention list.** `DashboardService.businessAttention` adds FORENSIC_FLAG (HIGH only; MEDIUM and INFO never) and QUALITY_RISK (HIGH_RISK) items from each holding's newest screening row in one bulk query, worded as reasons to look, never to sell. The momentum item is renamed "Price-trend rule reads SELL - check the business before acting" (B-153's class). **Verified live** - and note what it shows today: ABCAPITAL's two items come from the 2026-10-10 row, i.e. the lender false positives B-144 removed; they clear at the next 14:00 screening.
+- **B-012 (P2, open since 2026-05-10) FII and DII were a 50/50 split of public holding** - identical on 297 of 297 stocks, so Institutional Interest scored the change in public holding. `NseDataService.parseShareholdingFacts` reads the filing's own `InstitutionsForeign_ContextI` / `InstitutionsDomestic_ContextI` subtotals from the shareholding XBRL the app already downloads for pledge (TCS June-2026: 9.06% / 13.47%); each filed quarter is stored once in the new `shareholding_split` table, the comparison quarter is fetched once if never seen, and a quarter with no filed figure is null rather than a guess. `ShareholdingFactsTest` uses facts verbatim from that filing. The XBRL client buffer is 16 MB (B-054). **Verified:** parser on the live TCS file; the universe-wide effect lands with the next screening (it moves Institutional Interest for every stock - see the scoring-revision note under B-143).
+
+### B-160 / B-161 / B-162 / B-164 / B-165 - the trust instruments  `RESOLVED 2026-10-12`
+
+All found by the 2026-10-11 whole-app review (Tier 3).
+
+- **B-160 (P2) Track Record headlined the best of six cells** (+11.51%, QUANT_DISCOVERY 90d - 65 picks, one window) and coloured "2 of 6 beating noise" green. **Fix:** no cell is singled out; the first tile is **Independent Test Periods** (from the latest recorded walk-forward review at 30 and 90 days, against the 12 the gate needs), "Scored Picks" is relabelled **Scored Rows** with why it is not a sample size, the IC tile is neutral and says it cannot yet be told from luck, and the folded heading carries the period count instead of a green return. `page-accuracy.js` reads `/api/learning/reviews` (DB-only). **Verified:** rendered headless - "3 Â· 1 independent periods", no "Best Excess Return".
+- **B-161 (P2) the Friday email advised re-weighting on the IC panel** and ran IC for every source. **Fix:** the copy now says not to change any weight on that table, quotes the recorded independent-period counts (`WeightReviewService.latestIndependentPeriods`) and points to the Â§38.10 gate; the row-count guidance ("fewer than ~20 picks") is replaced; per-dimension IC runs for MULTIBAGGER and QUANT_DISCOVERY only (the deleted SECTOR_REVERSAL and the sub-score-less MACRO_EVENT were 4 of the 8 Kite-backed passes). **Not verified by sending** - the endpoint emails.
+- **B-162 (P2) macro readings would join the picks table unsigned from 2026-10-12.** `summarize()` now excludes MACRO_EVENT (picks only); `computeFor` signs mean return and excess by verdict for directional readings and drops their IC; `GET /api/accuracy/macro` serves them as readings. The Overview headline also excludes the deleted SECTOR_REVERSAL (the still-open half of B-122). **Verified:** `/api/accuracy/summary` lists MULTIBAGGER, QUANT_DISCOVERY, SECTOR_REVERSAL only; `/api/accuracy/macro` is empty until Monday's 15:22 pass.
+- **B-164 (P3) the TWR caveat asserted "reads slightly low".** `PerformanceMath.TwrResult` carries the cost sold on uncorrected days and the average value; the caveat now states the size and says the direction is unknown. **Verified live:** "About Rs 134,063 of cost was sold on those days; if those sales were 10% above or below cost, the return would be off by about 5.2 percentage points in either direction."
+- **B-165 (P3) two reviews minutes apart satisfied "two consecutive reviews".** `WeightReviewService.loadPriors` counts a prior only if at least one horizon (in days) separates it from the next; a closer one is a re-run of the same evidence and is skipped. Adoption stays permanently off.
+
+### B-143 / B-145 / B-146 - scoring inputs and the forensic cap  `RESOLVED 2026-10-11`
+
+All found by the 2026-10-11 whole-app review (Tier 1). One scoring revision (`MULTIBAGGER_CODE_REVISION` 2 -> 3) covers these and B-144, so the stored `scoring_version` splits cleanly at the 14:00 run of the next trading day - merging two different engines is not recoverable, splitting two identical ones is (Gotcha 88).
+
+- **B-143 (P1) Financial Quality's "cash conversion" could not fail.** It was (profit + depreciation) / profit, which is >= 1 whenever profit is positive (min 1.0006 over 263 rows), so the accounting-quality trigger was unreachable and 112 stocks printed "Strong cash conversion", 14 with a real CFO/PAT below 0.5. **Fix:** `analyzeFinancialQuality` reads the real operating cash flow from the latest annual filing; an unmeasured input now leaves the score and the other 80 points are rescaled (the old fill-in scored a neutral 10, which ranked "no data" below every measured row). The single-year weak-cash flag is reworded so it is NOT one of `classifyQuality`'s critical triggers: one year of CFO is noisy and arming it would cap 18 more non-lenders, 8 of them candidates, on an unvalidated measure - the armed version stays the three-year forensic check. **Live (computed, not saved):** GRASIM real CFO/PAT -1.73 (was "strong"), FQ 87 -> 70, composite 33 -> 28; APARINDS 0.99, FQ 82 -> 77, 89 -> 83; TCS 1.05.
+- **B-145 (P1) the DCF compared ten-year implied growth with one quarter's YoY change** (272 of 272 rows). Now the profit CAGR over >= 4 years of annual accounts (`AnalystTargetPlausibility.growthRecord`, B-113's benchmark); thinner history is INSUFFICIENT_DATA, so the valuation dimension falls back to its P/E half. PEG uses the same growth. **Live:** CENTUM (benchmark was +2,257%) UNDERVALUED -> INSUFFICIENT_DATA, 91 -> 86; GLENMARK (+928%) UNDERVALUED -> EXPENSIVE, 74 -> 64; TCS UNDERVALUED -> FAIRLY_VALUED. The universe-wide verdict mix is not reported: it needs a screening run, which is a write.
+- **B-146 (P3) documents said a HIGH forensic flag caps at 54; the code deducts 5.** **Decision:** the code is right and the documents were wrong. SPEC Â§32.4's table and `ForensicScreenService` agree (HIGH = -5; only an auditor problem forces the cap), and turning a deduction into a cap would move 16 more stocks (3 of them candidates) on thin evidence in one step (Gotcha 27). Corrected SPEC Â§32.6, CLAUDE.md Gotcha 86 and 102. The 16 HIGH-flag rows above 54 stay: each already shows AVOID on every timing surface. If a hard cap is wanted it is a deliberate, separate decision with its own SPEC change.
+
+### B-151 / B-152 / B-153 / B-154 / B-155 - holdings emails and macro cells  `RESOLVED 2026-10-11`
+
+All found by the 2026-10-11 whole-app review (Tier 2 and 3). B-154 was reported twice (also as B-163).
+
+- **B-151 (P2) both 15:18 emails printed the raw momentum signal.** `HoldingsReportService` read `recommendation` in 35 places and never went through `SignalReconciliation`, so PETRONET and LGEINDIA read "BUY MORE" in the email beside HOLD on the dashboard. **Fix:** `withReconciledSignals` attaches `displaySignal` (transient fields only - not the full view decorator, which also rewrites sector) on the send paths and the preview path, and every read goes through `signalOf(h)`. `holdings.recommendation` is untouched (Gotcha 69). **Verified:** the live preview now carries the reconciled list ("ACCUMULATE 14", was 15). **Not changed, on purpose:** the reviewer also suggested HOLD_OFF + BUY -> HOLD; `SignalReconciliationTest` pins the opposite ("a caution is not a disqualification"), a deliberate earlier decision, and that was a suggestion rather than a defect. NITINSPIN-type rows therefore still print BUY beside "Hold off" in the table.
+- **B-152 (P3) tax summary counted an unknown horizon as long-term.** A third bucket: "CHECK THE HOLDING PERIOD on N winner(s) - no purchase lots on record, so the tax rate cannot be stated". **Verified live:** VMM left the "12.5%" line and appears alone in the new step.
+- **B-153 (P2) DEEP_LOSS / broke-support alerts told the investor to exit from a price rule.** Wording now a review prompt: "Deep loss with a falling trend - re-read your thesis ... sees only the price and its trend, not the business, so a fall on its own is a reason to look, never a reason to sell"; "Broke below support - Review the Position". SPEC Â§19's bar on instructions to transact; the core retitle was already right and is now the default for everyone.
+- **B-154 (P2) macro NOT_EXPOSED on an empty window.** `MacroExposureRead.Input` gains `newsReadOn`; an empty window with the news last read before the window opened (or never) is `NOT_MEASURED` ("the news was last read on ..., so an empty window says nothing"), never the all-clear (Gotcha 121). The portfolio note and window note say the feed is unread. `MacroExposureReadTest` pins stale, never-read, fresh and fresh-with-untouched-events. **Verified live:** `/api/macro/exposure/portfolio` no longer reports NOT_EXPOSED for any of 27 holdings and says the feed is unread. It will read NOT_EXPOSED again after the next "Read the news now" - nothing schedules that, so see the daily-news improvement.
+- **B-155 (P3) holdings-actions preview.** CLAUDE.md corrected (it is not DB-only: ~74 live NSE calls, ~160 s). A per-report lock makes a concurrent request wait and share the result. **Verified:** two overlapping requests produced one build; the first version stored the result outside the lock, so the waiter rebuilt once - the cache write is now inside it.
+
+### B-150 - Holdings buy-timing and core tiering read a six-month-old one-off BSE row ahead of today's NSE row  `[P1]`  `RESOLVED 2026-10-11`
+
+**Found by** the whole-app review (Tier 2). Both resolvers took the first exchange spelling with *any* screening history. Seven BSE holdings had a single 2026-04-18 row under the BSE prefix, so it beat the daily NSE rows: ABCAPITAL read ACCUMULATE from a 53, WAAREEENER HOLD_OFF from 56, PETRONET AVOID from 35, LGEINDIA AVOID from 41. Gotcha 107's class: "first hit wins" is right for finding a row and wrong for picking one when spellings hold rows of different ages. Nothing showed the row's age.
+
+**Blast radius:** "Good time to buy more?", the reconciled Signal and the core tier on 8 holdings. Flattered 2, discarded 2.
+
+**Fix:** `SymbolVariants.newestAcrossSpellings` - the newest row across every spelling, an exact spelling winning only a tie (never a blend); used by `HoldingsBuyTimingService` and `CoreClassificationService`. `HoldingBuyTiming` gains `qualityDate`, and the portfolio cell prints "Scored from NSE:X, screened <date>" or "Quality scored <date>" when the reading is over a week old. `SymbolVariantsNewestTest` pins stale-beats-nothing, tie order and no-history.
+
+**Verification (live `/api/trading/holdings/buy-timing`):** PETRONET AVOID -> **BUY_NOW** (75, NSE 2026-10-10), LGEINDIA AVOID -> **BUY_NOW** (66), WAAREEENER HOLD_OFF -> **AVOID** (42), ABCAPITAL ACCUMULATE -> AVOID (54, the pre-B-144 stored row; it will move with the next screening), HDFCBANK/TMPV now quote 37/26. All carry `qualityDate`. **Not verified live:** core tiering - the snapshot is only written by the 10:30 job and a manual classify writes a Sunday-dated row, so the 11 UNCLASSIFIED still show until Monday's run. Two oldest-row cases remain by design: VMM's only row is 2026-04-18 (it is not in the screening universe) and GULPOLY's newest is 2026-09-08; both now say so.
+
+### B-144 - Lenders were scored on cash conversion and interest coverage, which measure lending, not distress  `[P1]`  `RESOLVED 2026-10-11`  (also closes B-140)
+
+**Found by** the 2026-10-11 whole-app review. B-092 gave the compounding lens a lender exemption; four places never got it: the forensic three-year `CASH_CONVERSION` check (fired on all 17 NBFCs with the history), the capital-efficiency cash term (-2), the capital-efficiency red flag text ("accounting-quality watch" beside a lender's growing loan book) and `scoreLeverage` (interest coverage <= 1.5 = "danger zone" = forced HIGH_RISK, though interest is a lender's cost of goods).
+
+**Blast radius:** about -7 points and AVOID on every buy-timing surface for ~18 lenders, and a 54 cap on ABCAPITAL, LICHSGFIN and IRFC. Discards.
+
+**Fix:** one lender test, `NseDataService.isLenderIndustry`, shared by capital efficiency, the capex cycle, financial quality and the forensic screen. For a lender, `analyzeFinancialQuality(symbol, industry)` drops the interest and cash sub-scores (45 of 100 points) and rescales the other three, the not-applicable rule (Gotcha 68) rather than a neutral fill-in; `ForensicScreenService.screen(..., lender)` skips the cash check and reports it under a new `notApplicable` list, not `notMeasured`; capital efficiency marks cash conversion `NA_FINANCIAL`, keeps the figure and adds no strength or red flag. The five callers pass the industry. B-140: IRFC was filed `Infrastructure` in the hand sector map while NSE files it under Financial Services - now `Finance`, so it reaches every exemption. New `POST /api/multibagger/evaluate?symbol=` computes a full score without writing a row (Gotcha 50), which is how this was verified.
+
+**Verification (live, computed without persisting):** ABCAPITAL 54 -> **69** (HIGH_RISK -> DECENT), LICHSGFIN 54 -> **72** (-> HIGH_QUALITY), IRFC 38 -> **49** (-> HIGH_QUALITY, no flags, capex NA_FINANCIAL), non-lender control PETRONET 75 -> 76. `GET /api/fundamentals/forensics/NSE:ABCAPITAL` returns no flags and lists the check under `notApplicable`. Tests: `ForensicScreenTest` (a lender's negative CFO is not flagged, other checks still run, one lender test). The 22 non-lenders that still carry the flag (APARINDS, KRBL, BHEL, ...) are genuine reads of this check, whose input is B-143's concern. **Not yet visible on screens**: stored rows update at the next 14:00 screening.
+
+### B-138 - The sector lens put tied stocks at the bottom of their tie, the opposite of what SPEC §54.4 said  `[P2]`  `RESOLVED 2026-10-11`
+
+**Found by** the independent SME review of SPEC §54, the same day it shipped. `SectorStanding.quartile` counted only peers
+*strictly worse*, so a tied group landed at the bottom of its tie, while the Javadoc and SPEC §54.4 said ties share the better
+quartile - and `SectorStandingTest.tiesShareTheBetterQuartile` used a case (`{1..7,9,9,9}`, v=9) that returns TOP under either
+rule, so it could not tell them apart. Live: TCS and six other debt-free IT companies read "upper middle" on debt; HDFCBANK read
+"Earnings steadiness 60 against a median of 60 - lower middle".
+
+**Blast radius:** the sector-standing verdict on every surface; it understated. Zero points to any score.
+
+**Fix:** mid-rank position - peers strictly worse plus half the *other* tied peers, over n-1 ([SectorStanding.java](src/main/java/com/example/trading/multibagger/SectorStanding.java) `quartile`).
+The literal "better quartile" rule was rejected as well: 12 of 40 capital-goods companies tie at the steadiness floor of 0 and it
+would lift them out of the bottom quarter. SPEC §54.4 rewritten to the rule actually used. The test was replaced by two that
+disagree under the two rules: the live IT debt distribution (debt-free reads TOP) and a 12-way tie at a floor (stays BOTTOM).
+
+**Verification:** `/api/dashboard/sector-standing?symbol=NSE:TCS` now reads debt TOP_QUARTILE; HDFCBANK and ICICIBANK read
+ABOVE_PEERS 3/3. An independent Python recomputation of all 300 rows under the new rule: 0 mismatches.
+
+### B-139 - ENERGY ranked power utilities against oil and gas, so the verdict mostly reflected sub-industry  `[P2]`  `RESOLVED 2026-10-11`
+
+**Found by** the same review. `SectorMapping` folds Power, Oil & Gas and Utilities into ENERGY (24). Power read 1 ABOVE / 5 BELOW,
+oil and gas 5 ABOVE / 1 BELOW: median debt-to-equity 1.47 against 0.45, so a regulated utility's normal leverage read as "weaker
+than most of its sector", while the same capital intensity gave 5 of 12 power names the top quarter on cash conversion.
+
+**Fix:** `SectorStanding.peerGroup` splits ENERGY into POWER and OIL_GAS by the screening row's industry, inside the lens only -
+`SectorMapping` is untouched because allocation drift reads it. Pinned by `SectorStandingTest.energyIsSplit`.
+
+**Verification:** live, NTPC reads 3/5 and POWERGRID 4/5 "among its power peers"; RELIANCE and PETRONET read 3/5 among
+"oil and gas peers". 0 mismatches in the independent recomputation.
+
+### B-141 - The sector-standing cache could miss a same-day re-screen  `[P3]`  `RESOLVED 2026-10-11`
+
+**Found by** the same review, from the code. The cache keyed on (screening date, row count), but `persistScores` upserts by
+delete-then-save, which keeps the count; and `fromRun` returned the cached snapshot even when handed fresher rows, so the screener
+could show a new ROCE beside a standing computed from the old one.
+
+**Fix:** `latest()` keys on date + count + `MAX(id)` (`MultibaggerScoreRepository.findMaxIdByScreeningDate`), which a
+delete-then-save moves; `fromRun` always rebuilds from the rows it is given (milliseconds for ~300).
+
+**Verification:** reasoned, not triggered - reproducing it needs a re-screen, a write. Covered by the rebuild-always path.
+
+### B-128 - An AMC name containing brackets was read as a category, silently mis-filing 18% of the AMFI feed  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** On the first run of the new AMFI parser (SPEC §52) over the live 1.5 MB file, 13
+category headers came back `UNCLASSIFIED` — and the largest of them, accounting for **2,535 scheme
+rows (18% of the file)**, was `IL&FS Mutual Fund (IDF)`. Nothing threw, no line failed to parse, and
+the total row count was exactly right at 14,375.
+
+**Root cause.** `AmfiNavParser.looksLikeCategoryHeader()` identified a category block by testing for
+a parenthesis on any semicolon-free line. AMFI's category headers do carry one
+(`Open Ended Schemes(Equity Scheme - Mid Cap Fund)`), but so does that AMC's *name*. The line was
+therefore taken as a new category, resolved to `UNCLASSIFIED`, and **every scheme printed beneath it
+inherited a category that does not exist** until the next real header reset it.
+
+**Blast radius.** Category is the peer group. A mis-filed scheme leaves its true category's
+cross-section and lands in a bucket with no benchmark and no peers, so its percentile, its category
+standing and its category's own median are all computed over the wrong population — while every
+screen renders normally. It would also have understated the screenable universe and inflated the
+"unclassified headers" figure that the coverage endpoint publishes as a measure of the app's own
+gaps.
+
+**Fix.** [AmfiNavParser.java](src/main/java/com/example/trading/funds/amfi/AmfiNavParser.java) — a
+category header must now *begin* with a known structure word (`Open Ended`, `Close Ended`,
+`Interval`). A semicolon-free line that carries a category separator but no structure word is still
+treated as an AMC name **and reported** in `ambiguousHeadings`, so that if AMFI ever introduces a
+fourth structure the mis-read is visible rather than silently re-categorising the rows beneath it.
+
+**Verification.** Re-run over the same live file: unclassified headers **13 → 1** (a genuinely new
+`Silver ETF` category, since given a rule), ambiguous headings 0, category headers 105 → 104 (the
+AMC no longer counted as one), screenable universe unchanged at 571. Pinned by
+`AmfiNavParserTest.amcNameContainingBracketsIsNotACategory`.
+
+**Lesson.** B-113's rule, applied to its own author: **run a new rule over real rows and look at the
+distribution before shipping it.** An invented test case would have used a tidy AMC name, and every
+one of them passed. What exposed this was counting rows per category on the real file — the same
+instrument that found Institutional Interest constant at 40 and monthly RSI constant at 50.
+
+---
+
+### B-129 - A fresh install reported the investor's own mutual funds as unmatched, for a full day  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** First live run of the two fund syncs in their natural order: the AMFI pull wrote 571
+schemes, then the broker sync fetched **6 real holdings and resolved none of them** —
+`"6 holding(s) could not be matched to an AMFI scheme by ISIN"`. Running the AMFI pull a second time
+wrote 577 schemes and the next broker sync resolved all 6.
+
+**Root cause.** An ordering flaw in the new code, not in the data. `MutualFundNavSyncService`
+deliberately persists only the screenable universe **plus every scheme the investor owns** — the
+second clause exists so the module is not blind to a Regular plan or a debt fund it would otherwise
+never store. But that clause reads `mf_holding`, which on a fresh install is empty, so the schemes
+behind the investor's own funds were never written; the broker sync then resolved against a table
+that could not contain them.
+
+**Blast radius.** Six holdings rendering as unresolved reads on screen as *"AMFI has no record of the
+funds you hold"* — a false statement about the data, caused entirely by which pass ran first, and
+self-correcting only after the next day's 12:30 job. Worse than a visible error because it is a
+plausible-looking finding: AMFI genuinely does omit some schemes, so nobody would question it.
+
+**Fix.** `MutualFundHoldingsService.resolveUnmatched()` retries resolution for active holdings with
+no scheme code, and `MutualFundNavSyncService.persist()` calls it immediately after saving schemes.
+A scheme persisted in this pass now rescues its holding in the same pass. Idempotent, and it never
+un-resolves anything.
+
+**Verification.** Live: 6 of 6 unresolved after the first pair of runs, **0 of 6** after the loop was
+closed; scheme count 571 → 577. Re-running the pull is a no-op.
+
+**Lesson.** When a feature has two writers that read each other's output, check the **first** run and
+not the steady state. Both passes were individually correct and their combination was not, which no
+unit test of either would have caught.
+
+---
+
+### B-135 - Postgres was still enforcing an older version of a Java enum, so the whole NAV pull failed and rolled back 1,509 scheme writes  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first `POST /api/mf/nav/refresh` after the universe was widened to debt and hybrid
+(SPEC §52.15) returned a bare **500**. The log carried
+`ERROR: new row for relation "mf_scheme" violates check constraint "mf_scheme_category_check"`,
+followed by `current transaction is aborted, commands ignored until end of transaction block` - so
+the `mf_sync_run` row that records the failure could not be written either. Nothing was persisted:
+not the 624 new schemes, not the NAV points, not the record of the attempt.
+
+**Root cause.** When Hibernate creates a table for an `@Enumerated(STRING)` column it also writes a
+`CHECK` constraint enumerating the enum members **that existed on the day the table was created**.
+`ddl-auto=update` adds columns, and that is all it reliably does: it never alters an existing
+column's type (B-116), never relaxes a NOT NULL (B-026), never reliably adds a declared column
+(Gotcha 74) - and it never rewrites one of these. `SebiCategory` gained eighteen debt and seven
+hybrid members; the database was still refusing anything outside the equity-only list it had
+memorised months earlier.
+
+Nothing in the application was wrong. The parser resolved every header, the predicate kept the right
+rows, the entity carried the right values. The table simply remembered an older version of the enum.
+
+**Blast radius.** Total for the feature and silent for the rest of the app. The 12:30 scheduled pull
+catches its exception and carries on, so this would have presented exactly as B-116 did: a freshness
+stamp that stops moving while every job reports success and no alert fires. Worse than B-116 in one
+respect - that failure was a single third-party string outgrowing a column, so it began on the day a
+particular row appeared; this one begins the moment an enum gains a member, which is a routine code
+change nobody would connect to a database error days later.
+
+**Why a `saveAll` made it total.** `MutualFundNavSyncService.persist` ends with one
+`schemeRepository.saveAll(...)`, so a single rejected row discards the whole batch - B-128's lesson,
+which had been learned on the IPO capture and not carried here. The constraint fix removes the
+trigger; the batch-save shape remains and is worth revisiting if a second row-level rejection ever
+appears on this path.
+
+**Fix.** `SchemaMigrationRunner.dropStaleEnumCheckConstraints()` drops the check constraint on each
+enum column of `mf_scheme` and `mf_holding` at boot. Three details carry weight:
+
+1. **Dropped, not rewritten.** Rewriting means regenerating the value list on every enum change and
+   getting it right each time, and a stale hand-written constraint fails in exactly the same silent
+   way. The enum is already enforced in Java on the way in, so the database copy adds nothing but a
+   second thing to keep in step (Gotcha 85).
+2. **The constraint name is read from `pg_constraint`, never guessed.** Hibernate's naming has
+   changed across versions, and a guessed name that does not match fails *silently* - leaving the
+   real constraint in place and the symptom unchanged, which is the worst outcome a fix can have.
+3. **Idempotent and non-fatal.** The table may not exist on a first boot. Logged at WARN rather than
+   DEBUG, because the downstream symptom is a whole feature writing nothing (B-054's rule).
+
+**Verification.** Restarted and confirmed six constraints dropped by name in the boot log
+(`mf_scheme_category_check`, `_asset_class_check`, `_structure_check`, `_plan_check`,
+`_nav_option_check`, `mf_holding_scheme_resolved_from_check`). The next pull returned
+`succeeded: true`, 14,375 rows parsed, **1,509 schemes written, zero unclassified headers**, and
+`schemesPersisted` moved 1,031 → 1,616 while **`screenableSchemes` stayed at 637** - the safety
+property §52.15 rests on.
+
+**The general rule, now Gotcha 74's fourth face:** *adding a value to a persisted enum is a schema
+change.* Any `@Enumerated(STRING)` column whose enum can grow needs its check constraint dropped
+once, or the first write carrying the new value fails at the database and takes its whole batch
+with it.
+
+### B-134 - A two-fund gap from chance was published as a verdict on whether fund managers have skill  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first live run of the new fund-persistence measurement (SPEC §52.13) reported
+`REVERSAL` - *"past winners did worse than chance"* - across the whole equity universe. The figure
+behind it: **8 of 40** top-quartile funds held their place, 20% against a 25% null.
+
+**Root cause.** The verdict bands were fixed percentage-point margins (15 for a clear result, 5 for a
+weak one) chosen before any data existed. With 40 funds in the top quarter **one fund is worth 2.5
+percentage points**, so the 5-point band is two funds wide, and 20% vs 25% - a difference of two
+funds - landed exactly on the REVERSAL boundary. The arithmetic was correct throughout and no
+mechanism reported anything wrong.
+
+**Blast radius.** This is the one screen built to tell the investor that ranking funds on past
+return does not work. Publishing a *directional* claim - that past winners systematically become
+losers - off two funds would have been the same over-claiming, pointed the other way, on the page
+whose entire purpose is restraint. Fourth instance in this module of a figure that is structurally
+wrong while every status code says success (B-130, B-131, B-113's family).
+
+**Fix.** The band floor is now `max(fixed threshold, 3 × one fund's worth)`, and both the resolution
+(2.5 points) and the effective floor (7.5) are published beside the verdict rather than buried. The
+live reading became `NO_BETTER_THAN_CHANCE`, which is the honest answer. Gotcha 88's fourth rule -
+*a collapse threshold belongs to a scale* - applied to a percentage whose scale is set by the size of
+the top quarter.
+
+**Two more of the same shape, found in the same pass and fixed with it.**
+
+1. **Per-category percentages over 3-7 funds.** Every category's top quarter holds three to seven
+   funds, so one fund moving swings its share by 14 to 33 points - and the table read *"Large & Mid
+   Cap 50%, Large Cap 0%"* as though that were a finding about managers rather than four coin flips.
+   `MIN_TOP_QUARTILE_FOR_SHARE = 8`; counts are kept ("1 of 7"), the percentage is withheld. **No
+   category on this archive clears the floor**, which is itself the finding.
+2. **A tracker comparison over eight funds.** Multi Cap read *8 of 8 = 100% beat the index* - one
+   fund per 12.5 points, with five more funds in the category having wound up. `MIN_ACTIVE_FOR_SHARE
+   = 10` withholds it.
+
+**And a caveat that described rules that were not in force.** The prose naming the bands quoted the
+fixed constants (40% and 30%) while the resolution guard had widened the weak band to 32.5%. It is
+now derived from the floor actually applied - B-117's shape in prose, and Gotcha 126(l) exactly: a
+caveat describing a different system from the one running is worse than no caveat.
+
+**Verification.** Live re-run against the real archive: verdict `NO_BETTER_THAN_CHANCE`,
+`onePerFundPp` 2.5, `bandFloorPp` 7.5, per-category shares null with counts intact, Multi Cap
+percentage withheld with its reason. Pinned by `FundPersistenceTest.theBandIsCoarserThanTheData`,
+built verbatim from the live figures.
+
+**Lesson.** B-113 said to run a new verdict over real rows and look at the spread before shipping.
+This is the second time that rule has caught its own author, and the spread is what exposed it: the
+per-category column read 0%, 14%, 20%, 25%, 25%, 50% over top quarters of three to seven funds. **A
+threshold chosen before the data exists must be re-checked against the data's resolution once it
+does.**
+
+---
+
+### B-133 - The drift heading read a field that does not exist, so it printed "On target" on a portfolio where every bucket was breaching  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** *"Are you still following your plan?"* on My Portfolio carried a green **On target**
+summary while all nine allocation buckets underneath it read `OVER_TOLERANCE`.
+
+**Root cause.** The heading filtered on `b.status === 'OVER_TOLERANCE'`. A drift bucket has no
+`status` field - it is `alertLevel` - so the filter matched nothing on every portfolio that has ever
+existed, and the ternary fell through to "On target" with `type: 'success'`. There is no build step
+for `static/js/**`, so an undefined property is not an error; it is simply `undefined !== '...'`.
+
+**Blast radius.** Every section on every screen folds by default since SPEC §27.15, which makes the
+heading **the only thing the reader sees** until they open it. A summary that cannot disagree with
+itself is worse there than no summary at all: it does not merely fail to warn, it actively reassures.
+Same family as B-117 (a summary distinguishing fewer states than the rows beneath it) and B-098 (a
+count rendered beside a list must be derived from that list).
+
+**Fix.** [page-holdings.js](src/main/resources/static/js/page-holdings.js) computes `offTarget` once
+from `alertLevel` and both the text and the tone read that one value, so they cannot disagree. The
+section text also now says in words when the targets were **seeded rather than chosen**, so a breach
+against weights nobody set reads as "this comparison has not been set up" rather than as a fault in
+the portfolio (B-121's rule, on the screen rather than on the attention list).
+
+**Verification.** Live render of `holdings.html#analysis` against the real book: the heading reads
+**"9 off target"** in amber where it read "On target" in green before.
+
+---
+
+### B-132 - The combined asset-class weights were computed, put on the wire and never drawn  `[P1]`  `RESOLVED 2026-09-20`
+
+**Symptom.** `GET /api/portfolio/drift` returned four `ASSET_CLASS` buckets - EQUITY_FUND 61.9%,
+EQUITY_DIRECT 25.6%, HYBRID_FUND 10.7%, CASH 1.8% - and no screen in the app drew any of them. The
+investor's portfolio page continued to present **₹2.60 L of directly-held shares as "your
+portfolio"** when total wealth was ₹10.16 L.
+
+**Root cause.** `AllocationService.computeDrift()` appends `BUCKET_ASSET_CLASS` alongside the sector,
+size and stock buckets, and `page-holdings.js` ended its drift renderer with
+`return el('div', {}, coverage, group('SECTOR'), group('MARKET_CAP'));`. A third bucket type was
+added to the payload and the renderer was never told. **Second instance of B-099** - a shared payload
+needs a renderer that draws all of it - and this time the un-drawn half was the headline finding of
+the whole mutual-fund module.
+
+Two smaller faults sat underneath it. `group()` chose its heading with a two-way ternary
+(`type === 'SECTOR' ? 'By sector' : 'By company size'`), so a third type would have been labelled
+"By company size" (B-098's shape). And `DriftResponse` carried the asset-class *percentages* without
+`combinedTotalValue`, `fundValue`, `cashMeasured` or `unclassifiedFundWeightPercent`, so a fund whose
+asset class could not be resolved would have **vanished from the buckets with nothing to explain the
+shortfall** - the percentages silently failing to sum to 100 and reading as a smaller portfolio
+(B-054, B-096).
+
+**Blast radius.** Not a cosmetic gap. Every other percentage on that screen - the sector mix, HHI,
+the single-stock limits, the drift rows - is denominated in the **equity book**, deliberately and
+permanently (§52.5: a 16% position is a 16% bet on one business whatever share of combined wealth it
+is, and rescaling it would delete a working risk control by arithmetic). Without the asset-class
+block on screen, the reader has no way to know that, and every one of those figures reads as a share
+of everything they own. That is a figure quoted on a scale it was not measured on - B-047's family -
+across a whole screen rather than in one cell.
+
+**Fix.** `DriftResponse` gained the five combined-wealth fields.
+[page-holdings.js](src/main/resources/static/js/page-holdings.js) gained `assetClassPanel()` and a
+new **"What your money is actually in"** section, placed *above* the sector mix and the concentration
+score: a reader who meets those first has already been told a number is "your portfolio". The panel
+names **both totals in rupees** in a box beneath it, because two denominators on one screen are safe
+only when each one is named; it says in words that a fund's weight is never squared into the
+concentration score and that look-through overlap is **not measured** rather than zero; and it draws
+an unresolved fund as a named warning rather than letting it leave the total quietly. The sector and
+concentration headings were reworded from *money* to *shares* for the same reason.
+
+**Verification.** Live render of `holdings.html#analysis`: the section draws ₹10.16 L across four
+rows, and the box beneath names ₹10.16 L and ₹2.60 L as the two denominators. `funds.html` renders
+the per-fund record from the same data (§52.12).
+
+**Lesson, and it is not "remember the other screen".** The endpoint work and the rendering work were
+two commits, and between them the app *held* the finding and could not *show* it. When a payload
+grows a new kind of row, the renderer that consumes it needs a case for it in the same change -
+otherwise the feature is complete by every test and invisible to the only person it was built for.
+
+---
+
+### B-131 - An income-distribution series was measured against Growth peers, understating a fund the investor owns  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first live run of the fund lens over the investor's real book produced a full
+rolling record and a category percentile for **Motilal Oswal ELSS Tax Saver Fund Direct - IDCW
+Payout**: behind its category in 47 of 66 rolling 36-month windows, median excess **-2.34
+percentage points**, `BEHIND_BENCHMARK`. Every peer in that comparison was a Direct-**Growth**
+series. Nothing threw, no figure was out of range, and the verdict was confidently wrong.
+
+**Root cause.** Under the Income Distribution cum Capital Withdrawal option the fund pays money out
+and **its net asset value drops by the amount paid**. An IDCW series therefore records the
+investor's return *after* every distribution ever made, while a Growth series records it before.
+The two compound rates are different quantities that look identical on screen. SPEC §52.4 and
+Gotcha 139(b) both state the rule - *measure Growth only; IDCW is NOT_MEASURED, never a low
+reading* - and the Stage 2 measurement simply never enforced it, because the screenable universe is
+Direct-Growth by construction and it did not occur to me that an **owned** scheme need not be.
+
+**Blast radius.** The bias has a direction: an IDCW series always reads **worse**. So the failure
+mode is a fund the investor holds being reported as a laggard when it is not - and the reader has no
+way to see that the comparison was invalid, because the arithmetic is flawless and the peer count,
+the window count and the median are all real. Same family as B-047 (a quarter filed as a year),
+B-060 (an RSI whose window could not reach its period), B-113 (two years against ten) and B-120 (a
+per-share delta summed as money).
+
+**Fix.** New [SeriesComparability](src/main/java/com/example/trading/funds/SeriesComparability.java),
+checked **before** anything is measured rather than corrected afterwards. A non-Growth series yields
+`NOT_COMPARABLE` with a reason that names the units problem and points at the Growth series of the
+same scheme as the thing that would be measurable. An **unresolved** option is refused on the same
+grounds: "probably Growth" is the assumption that produces a confident wrong number (Gotcha 68).
+
+**Verification.** Live re-run: the ELSS holding reads `NOT_COMPARABLE` / `NOT_MEASURED` carrying its
+reason, and the five Growth holdings are unaffected. Pinned by `SeriesComparabilityTest`, including
+a case asserting the refusal text never itself reads as a judgement on the fund.
+
+**Two more defects found in the same run, both fixed with it.**
+
+1. **A blank plan in the scheme master made a Direct-Growth fund unmeasurable.** The daily file
+   leaves Plan and Option **empty** for *Motilal Oswal Midcap Fund* and its scheme name carries no
+   plan words either, so the master stored `UNSPECIFIED` - and after the guard above, that reads as
+   "cannot confirm this is comparable". The historical feed names it in full:
+   `Motilal Oswal Midcap Fund-Direct Plan-Growth Option`. The backfill now **fills a blank plan or
+   option and may never overwrite a resolved one** - a share class is an immutable property of the
+   scheme, so filling a blank is safe in a way that overwriting a category would not be. After one
+   forced month the fund reads `GROWTH` / `DIRECT_PLAN` / `AHEAD_OF_BENCHMARK` / `UPPER_HALF`.
+
+2. **The coverage line counted four states as two.** `holdingsMeasured` tested only for
+   `NOT_MEASURED`, so it reported **3 of 6 holdings measured** when exactly **one** carried a
+   verdict - the two `NOT_COMPARABLE` rows were swept in with the real one. That is B-117's shape
+   exactly: *a summary over the same rows must distinguish the same number of states the renderer
+   does.* The line now reports measured / not comparable / not measured / unresolved separately and
+   says which of them are gaps in this app.
+
+**Lesson.** The screenable universe is Direct-Growth **by construction**, so every invented test
+case was a Growth series and every one of them passed. What the investor actually owns is not
+constrained that way. **When a rule holds by construction over the set you built, check whether it
+holds over the set you were given** - this is the third time in one session that running the thing
+over the real book found what reading it could not (B-128, B-130, this).
+
+---
+
+### B-130 - AMFI serves the same eight fields in two different column orders, and the month-end backfill read one as the other  `[P2]`  `RESOLVED 2026-09-20`
+
+**Symptom.** The first run of the new month-end backfill (SPEC §52.7) over six months of the live
+archive reported **6 months fetched, 0 failed, 0 not published**, and ~1,900 equity schemes counted
+per month. It wrote **four NAV points per month**, where ~275 were due. Nothing threw, no line failed
+to parse, no status code was wrong, and `schemesDiscovered` read 0.
+
+**Root cause.** AMFI publishes the daily file and the historical report in **different column
+orders**, with the same field count:
+
+```
+daily NAVAll.txt   Scheme Code;ISIN Growth;ISIN Reinvest;Scheme Name;Plan;Option;NAV;Date
+history endpoint   Scheme Code;NAV Name;Plan;Option;ISIN Growth;ISIN Reinvest;NAV;Date
+```
+
+`AmfiNavParser` read fixed positions, written against the daily file. Applied to a historical row it
+takes the scheme code, the NAV and the date from the right places — the first and last two fields
+agree — and the scheme name, both ISINs, the plan and the option **all from the wrong ones**. So
+every row still parsed, and `isScreenable()` (which requires Direct plan and Growth option) returned
+false for essentially the entire file, because it was reading ISINs as plan names.
+
+**Blast radius.** Everything §52.8 measures rests on this series. A rolling record, a category
+median, a percentile and a Direct-versus-Regular commission would all have been computed over a
+series containing four arbitrary schemes per month — or, worse, the module would have reported
+`NOT_MEASURED` for every fund indefinitely while the backfill kept announcing success, which is the
+shape that let Institutional Interest sit constant at 40 for three months (bug #9) and Insider Pulse
+run on no stock at all (B-074). The one thing that could not happen is a visibly wrong number.
+
+**Fix.** New [AmfiColumnLayout](src/main/java/com/example/trading/funds/amfi/AmfiColumnLayout.java)
+reads field positions from the file's own `Scheme Code;...` header line, by column **name** rather
+than by position — which also survives AMFI reordering again or inserting a column. A file with no
+header falls back to the daily order and **reports its layout as assumed**, and the backfill logs a
+WARN and marks the month, so an assumption can never be mistaken for a fact (Gotcha 100's rule).
+`ParseResult` now carries the layout it used. The two ISIN columns are told apart by testing
+`REINVEST` before `GROWTH`, because `"ISIN Div Payout/ISIN Growth"` contains both words.
+
+**Verification.** Same three months re-run with `force=true`: **4 NAV points per month → 275, 277,
+278**, and `schemesDiscovered` 0 → **51** (funds present in the April-2018 archive and absent from
+today's file — the survivorship evidence §52.9 is made of). 275 matches an independent count of
+Direct-Growth equity schemes in that month, taken with `awk` straight off the raw file. Pinned by
+four cases in `AmfiNavParserTest`, including one row verbatim from the 31-Aug-2026 historical file.
+
+**Lesson.** Two lessons, and the second is the transferable one. **A field count is not a format** —
+eight fields matched, so nothing validated as wrong. And **the tell was a number being too small,
+not an error**: this is B-113's rule (run a new verdict over real rows and look at the figure before
+believing it) catching a defect that every status code, every exception handler and every invented
+test case had passed. Had the wrong number happened to be plausible — 200 instead of 4 — it would
+have shipped. Sibling of B-047 (a quarter filed as a year), B-060 (an RSI whose window could not
+reach its period) and B-120 (a per-share delta summed as money): a figure that is structurally wrong
+while every mechanism reports success.
+
+---
 
 ### B-127 - A target the share price had already passed kept dragging the median down  `[P2]`  `RESOLVED 2026-09-18`
 

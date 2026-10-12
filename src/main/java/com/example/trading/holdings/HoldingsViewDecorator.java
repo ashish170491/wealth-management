@@ -52,6 +52,9 @@ public class HoldingsViewDecorator {
     /** SPEC 50.5. DB-only: the quarters the screening already captured, never a live NSE fetch. */
     private final com.example.trading.earnings.QuarterlyResultService quarterlyResultService;
 
+    /** SPEC 54. DB-only: the cross-section of the latest screening run, cached by run. */
+    private final com.example.trading.multibagger.SectorStandingService sectorStandingService;
+
     /** Decorates every row in place and returns the same list, for use inline in a controller. */
     public List<HoldingsEntity> decorate(List<HoldingsEntity> holdings) {
         if (holdings == null || holdings.isEmpty()) {
@@ -119,10 +122,20 @@ public class HoldingsViewDecorator {
                     e.getMessage());
         }
 
+        // One cross-section for the whole table (SPEC 54), cached per screening run.
+        com.example.trading.multibagger.SectorStandingService.Snapshot standing = null;
+        try {
+            standing = sectorStandingService.latest();
+        } catch (Exception e) {
+            log.warn("Sector standing failed - every holding will read 'not measured' in the "
+                    + "sector column, which must not be read as 'weak for its sector': {}", e.getMessage());
+        }
+
         for (HoldingsEntity h : holdings) {
             try {
                 decorateOne(h, timing.get(h.getSymbol()));
                 applyCompounding(h, compounding.get(h.getSymbol()));
+                applySectorStanding(h, standing, compounding.get(h.getSymbol()));
                 applyHoldingPeriod(h);
                 applyIpo(h);
                 applyMacro(h, macro.get(h.getSymbol()));
@@ -138,6 +151,25 @@ public class HoldingsViewDecorator {
         return holdings;
     }
 
+    /**
+     * The sector-relative lens (SPEC 54). Looks up the spelling the compounding lens already chose
+     * - one resolution rule, not two (Gotcha 85, 107) - and falls back to the first spelling in the
+     * latest run only when that one is not there. Null-safe: no snapshot or no row leaves every
+     * field null, which renders "not measured".
+     */
+    static void applySectorStanding(HoldingsEntity h,
+                                    com.example.trading.multibagger.SectorStandingService.Snapshot snap,
+                                    com.example.trading.multibagger.CompoundingLensService.Reading lens) {
+        if (h == null || snap == null) return;
+        com.example.trading.multibagger.SectorStanding.Result r = snap.readResolved(h.getSymbol(), lens);
+        if (r == null) return;
+        h.setSectorStanding(r.verdict().name());
+        h.setSectorStandingReason(r.reason());
+        h.setSectorStandingAbove(r.above());
+        h.setSectorStandingRanked(r.ranked());
+        h.setSectorStandingPeers(r.peers());
+    }
+
     /** Decorates a single row (the by-symbol endpoint and the stock page). */
     public HoldingsEntity decorateOne(HoldingsEntity h) {
         if (h == null) {
@@ -145,7 +177,10 @@ public class HoldingsViewDecorator {
         }
         try {
             decorateOne(h, buyTimingService.buildAll().get(h.getSymbol()));
-            applyCompounding(h, compoundingLensService.forSymbol(h.getSymbol()));
+            com.example.trading.multibagger.CompoundingLensService.Reading lens =
+                    compoundingLensService.forSymbol(h.getSymbol());
+            applyCompounding(h, lens);
+            applySectorStanding(h, sectorStandingService.latest(), lens);
             applyHoldingPeriod(h);
             applyIpo(h);
             applyMacro(h, macroExposureService.forSymbol(h.getSymbol()));

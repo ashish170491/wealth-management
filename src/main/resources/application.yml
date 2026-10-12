@@ -646,6 +646,23 @@ portfolio:
     max-quarters-per-symbol: 12     # Quarters returned per company by the API (3 years)
     recent-limit: 200               # Cap on rows from /api/earnings/recent
 
+  # ===== Mutual Fund Record (SPEC 52) =====
+  # Tracks the funds held on Zerodha Coin and measures them honestly. There is deliberately NO
+  # actionable/bonus/weight/points key here and a test fails if one appears anywhere in the
+  # funds package - that is what makes "contributes zero points to any score" checkable.
+  funds:
+    nav-pull-enabled: true
+    nav-all-url: https://portal.amfiindia.com/spages/NAVAll.txt
+    # 16 MB, not the WebClient default of 256 KB. The AMFI body is ~1.5 MB, so on the default this
+    # feature is born broken: the fetch fails, the catch degrades to nothing, and every consumer
+    # reads that as "there are no mutual funds" (B-054, and the same failure twice before it).
+    max-response-bytes: 16777216
+    timeout-seconds: 90
+    store-nav-for-screenable-universe: true
+    # A refusal, not a tuning knob: below this a rolling record reads NOT_MEASURED rather than
+    # returning a constant that looks like a measurement (B-060, monthly RSI at exactly 50.0).
+    min-months-to-measure: 36
+
 # ===== Macro & Geopolitical Event Exposure (SPEC 48) =====
 # Which events change the ground a business stands on, and which of your stocks they touch.
 # A risk-pillar reading over quarters. It is not a market-direction call, it never says buy or
@@ -655,11 +672,10 @@ macro:
   calendar-days: 30               # Look-ahead for the "coming up" calendar
   dedup-window-days: 3            # Two reports of the same factor+direction this close are one event
   ingest:
-    # NO SCHEDULER EXISTS for extraction in this phase, and this flag does not create one. It is
-    # bound and logged at boot so the intent is on the record: adding a cron needs a SPEC 15 row
-    # and a slot argument (09:16 / 12:40 / 14:20 are the candidates - all inside 09:15-15:30).
-    # Extraction runs only from POST /api/macro/ingest, i.e. the button on the Events page.
-    scheduled: false
+    # MacroIngestScheduler reads the news at 12:40 MON-FRI when this is true (SPEC 48.9, revised
+    # 2026-10-12): unread, every holding drew "nothing applies" off an empty window (B-154).
+    # POST /api/macro/ingest still runs it on demand.
+    scheduled: true               # 12:40 MON-FRI read (B-154 improvement, 2026-10-12). Costs nothing on the keyword reader.
     headline-lookback-hours: 36   # Headlines older than this are not offered to the extractor
     max-headlines: 120            # Per ingest. Bounds both the token bill and the wall clock.
     refuse-from: "14:00"          # Live-call guard: the 14:00 screening onwards is spoken for

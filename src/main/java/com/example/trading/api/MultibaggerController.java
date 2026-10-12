@@ -60,6 +60,41 @@ public class MultibaggerController {
      *
      * @param limit how many symbols to attempt this pass; the rest are reported as not reached
      */
+    /**
+     * Compute one stock's full score <b>without publishing it</b> - no screening row, no
+     * recommendation (Gotcha 50's compute-to-decide path). Exists so a scoring change can be
+     * checked against real stocks before the next scheduled run rewrites the table: reading a
+     * fix's effect off a fresh screening row means writing one.
+     *
+     * <p>POST although it writes nothing, because it costs ~2 paced broker calls and several NSE
+     * fetches, and a GET here would be one page-load away from that (Gotcha 17). Same broker-crunch
+     * refusal as the pass below.
+     */
+    @PostMapping("/evaluate")
+    public ResponseEntity<?> evaluate(@RequestParam String symbol) {
+        java.time.LocalTime now =
+                java.time.ZonedDateTime.now(marketHoursService.getMarketZone()).toLocalTime();
+        if (marketHoursService.isMarketOpen()
+                && !now.isBefore(BROKER_CRUNCH_START) && !now.isAfter(BROKER_CRUNCH_END)) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "status", 409, "error", "Not now",
+                    "reason", "Between 14:00 and 15:30 the daily screening owns the broker rate limit."));
+        }
+        if (!tokenManagementService.hasValidToken()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "status", 409, "error", "No broker session",
+                    "reason", "There is no valid Kite token; restart the app to trigger a login."));
+        }
+        String sym = symbol.contains(":") ? symbol.toUpperCase() : "NSE:" + symbol.toUpperCase();
+        var score = screenerService.evaluateSingleStock(sym);
+        if (score == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of("status", 422, "error", "Not evaluated",
+                            "reason", "The stock could not be scored (no price history or no data)."));
+        }
+        return ResponseEntity.ok(score);
+    }
+
     @PostMapping("/screen-unscored")
     public ResponseEntity<?> screenUnscored(@RequestParam(defaultValue = "60") int limit,
                                             @RequestParam(defaultValue = "12") int maxMinutes) {

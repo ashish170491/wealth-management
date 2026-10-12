@@ -8,6 +8,7 @@ import com.example.trading.marketdata.MarketDataService;
 import com.example.trading.persistence.HoldingsEntity;
 import com.example.trading.persistence.HoldingsRepository;
 import com.example.trading.persistence.MultibaggerScoreEntity;
+import com.example.trading.holdings.SymbolVariants;
 import com.example.trading.persistence.MultibaggerScoreRepository;
 import com.example.trading.portfolio.conviction.HoldingConvictionEntity;
 import com.example.trading.portfolio.conviction.HoldingConvictionRepository;
@@ -201,8 +202,16 @@ public class CoreClassificationService {
     HoldingEvidence evidenceFor(HoldingsEntity h, HoldingsDecayService.DecayAlert decay) {
         List<String> missing = new ArrayList<>();
 
-        MultibaggerScoreEntity score = latestScore(h.getSymbol());
-        String scoreSymbol = h.getSymbol();
+        // Newest row across spellings (B-150): a BSE holding with a one-off old row under its own
+        // prefix used to be judged on that row, leaving every gate "missing" while the NSE row
+        // carried the real evidence.
+        MultibaggerScoreEntity score = SymbolVariants.newestAcrossSpellings(h.getSymbol(),
+                scoreRepository::findHistoryBySymbol, MultibaggerScoreEntity::getScreeningDate);
+        String scoreSymbol = score != null ? score.getSymbol() : h.getSymbol();
+        if (score != null && !scoreSymbol.equals(h.getSymbol())) {
+            missing.add("Quality evidence comes from " + scoreSymbol + ", the same company's other "
+                    + "exchange line, screened " + score.getScreeningDate() + " - the newest reading on file");
+        }
         if (score == null && h.getTradingSymbol() != null && !h.getSymbol().startsWith("NSE:")) {
             // A BSE holding has no NSE score row under its own symbol (SPEC §6.4). The company is
             // the same one, so its NSE screening history is the right evidence — matched on
@@ -222,7 +231,13 @@ public class CoreClassificationService {
 
         ForensicScreenService.ForensicResult forensic = null;
         try {
-            forensic = forensicScreenService.screen(scoreSymbol, false);
+            // Lender exemption on the cash-conversion check (B-144), read from the same
+            // screening row the other gates read.
+            boolean lender = score != null && ("NA_FINANCIAL".equals(score.getCapexVerdict())
+                    || com.example.trading.ai.NseDataService.isLenderIndustry(score.getIndustry()))
+                    && !com.example.trading.ai.NseDataService.isFeeFinancialByReturns(
+                            score.getRoaPercent(), score.getRoePercent());
+            forensic = forensicScreenService.screen(scoreSymbol, false, lender);
         } catch (Exception e) {
             log.debug("Forensic screen unavailable for {}: {}", h.getSymbol(), e.getMessage());
         }

@@ -68,6 +68,8 @@ public class HoldingsBuyTimingService {
             Integer qualityScore,
             /** The screening symbol the quality score and score trend were read from (B-061). */
             String qualityFrom,
+            /** The screening date of that row, so a stale reading can be seen to be stale (B-150). */
+            java.time.LocalDate qualityDate,
             List<String> notMeasured,
             /**
              * What the Signal column should display, after a quality problem has been allowed to
@@ -100,7 +102,7 @@ public class HoldingsBuyTimingService {
         WatchlistItemView watched = findTracked(tracked, h.getSymbol());
         if (watched != null && watched.verdict() != null) {
             return withSignal(h, h.getSymbol(), watched.verdict().name(), watched.verdictReason(),
-                    Source.WATCHLIST, watched.qualityScore(), watched.symbol(), List.of());
+                    Source.WATCHLIST, watched.qualityScore(), watched.symbol(), null, List.of());
         }
 
         // 2. Quality + red flags from the latest screening row, found under any exchange prefix.
@@ -130,7 +132,8 @@ public class HoldingsBuyTimingService {
                 BuyTimingVerdict.Thresholds.from(watchlistConfig.getVerdict()));
 
         return withSignal(h, h.getSymbol(), r.verdict().name(), r.reason(), Source.HOLDING,
-                score != null ? score.getCompositeScore() : null, qualityFrom, r.notMeasured());
+                score != null ? score.getCompositeScore() : null, qualityFrom,
+                score != null ? score.getScreeningDate() : null, r.notMeasured());
     }
 
     /**
@@ -143,10 +146,11 @@ public class HoldingsBuyTimingService {
      */
     private HoldingBuyTiming withSignal(HoldingsEntity h, String symbol, String verdict,
                                         String reason, Source source, Integer quality,
-                                        String qualityFrom, List<String> notMeasured) {
+                                        String qualityFrom, java.time.LocalDate qualityDate,
+                                        List<String> notMeasured) {
         SignalReconciliation.Result signal =
                 SignalReconciliation.reconcile(h.getRecommendation(), verdict, reason);
-        return new HoldingBuyTiming(symbol, verdict, reason, source, quality, qualityFrom,
+        return new HoldingBuyTiming(symbol, verdict, reason, source, quality, qualityFrom, qualityDate,
                 notMeasured, signal.displaySignal(), signal.note());
     }
 
@@ -157,12 +161,10 @@ public class HoldingsBuyTimingService {
 
     /** Latest screening row for the stock under any exchange prefix, or null if never screened. */
     private MultibaggerScoreEntity latestScore(String symbol) {
-        for (String candidate : SymbolVariants.candidates(symbol)) {
-            List<MultibaggerScoreEntity> history =
-                    multibaggerScoreRepository.findHistoryBySymbol(candidate); // DESC by date
-            if (!history.isEmpty()) return history.get(0);
-        }
-        return null;
+        // Newest across spellings, not first spelling with anything (B-150).
+        return SymbolVariants.newestAcrossSpellings(symbol,
+                multibaggerScoreRepository::findHistoryBySymbol, // DESC by date
+                MultibaggerScoreEntity::getScreeningDate);
     }
 
     private HoldingsDecayService.DecayAlert quietDecay(String symbol, Double pnlPercent) {

@@ -16,6 +16,13 @@ public interface MultibaggerScoreRepository extends JpaRepository<MultibaggerSco
 
     List<MultibaggerScoreEntity> findByScreeningDateOrderByCompositeScoreDesc(LocalDate screeningDate);
 
+    /** Row count for one run - the cheap freshness half of the sector-standing cache key (SPEC 54). */
+    long countByScreeningDate(LocalDate screeningDate);
+
+    /** Highest row id in one run - a delete-then-save re-screen moves it while the count stays (B-141). */
+    @Query("SELECT MAX(m.id) FROM MultibaggerScoreEntity m WHERE m.screeningDate = :date")
+    Long findMaxIdByScreeningDate(@Param("date") LocalDate date);
+
     @Query("SELECT m FROM MultibaggerScoreEntity m WHERE m.screeningDate = :date AND m.compositeScore >= :minScore ORDER BY m.compositeScore DESC")
     List<MultibaggerScoreEntity> findCandidates(@Param("date") LocalDate date, @Param("minScore") int minScore);
 

@@ -95,6 +95,7 @@ import {
   marketCapCell, sectorCell, ownedLine, worstFlag,
 } from './fundamentals-cells.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
+import { sectorStandingCol } from './sector-standing.js';
 import { macroExposureCol } from './macro-cells.js';
 import { themeCol } from './theme-cells.js';
 import {
@@ -259,6 +260,7 @@ function underRadarSection(rows) {
     watchCol('From discovery: under-the-radar candidate'),
     { key: 'compositeScore', label: 'Score', align: 'r', render: scoreCell },
     compoundingCol(),
+    sectorStandingCol(),
     macroCol(),
     themeColumn(),
     analystCol(),
@@ -464,6 +466,7 @@ function contrarianSection(rows) {
     watchCol('From discovery: quality business near its 52-week low'),
     { key: 'rangePosition52w', label: 'How far down', align: 'r', value: (r) => r.rangePosition52w, render: fallCell },
     compoundingCol(),
+    sectorStandingCol(),
     macroCol(),
     themeColumn(),
     analystCol(),

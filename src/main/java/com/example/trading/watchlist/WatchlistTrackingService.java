@@ -54,6 +54,8 @@ public class WatchlistTrackingService {
 
     /** SPEC 48.8 - the one DB-backed reader of the exposure map, shared with every other screen. */
     private final com.example.trading.macro.MacroExposureService macroExposureService;
+    /** SPEC 54. DB-only: the cross-section of the latest screening run, cached by run. */
+    private final com.example.trading.multibagger.SectorStandingService sectorStandingService;
     private final WatchlistConfig config;
 
     // ---------------------------------------------------------------- errors
@@ -126,12 +128,24 @@ public class WatchlistTrackingService {
             analyst = Map.of();
         }
 
+        // One cross-section for the table (SPEC 54), cached per screening run.
+        com.example.trading.multibagger.SectorStandingService.Snapshot standing;
+        try {
+            standing = sectorStandingService.latest();
+        } catch (Exception e) {
+            log.warn("Sector standing failed - every watchlist row will read 'not measured' in the "
+                    + "sector column, which must not be read as 'weak for its sector': {}", e.getMessage());
+            standing = null;
+        }
+
         List<WatchlistItemView> out = new ArrayList<>(rows.size());
         for (WatchlistEntity w : rows) {
             try {
+                var lens = compounding.get(w.getSymbol());
                 out.add(toView(w, seriesBySymbol.getOrDefault(w.getSymbol(), List.of()), niftyNow, niftyAsOf,
-                        held.contains(w.getSymbol()), compounding.get(w.getSymbol()),
-                        macro.get(w.getSymbol()), analyst.get(w.getSymbol())));
+                        held.contains(w.getSymbol()), lens,
+                        macro.get(w.getSymbol()), analyst.get(w.getSymbol()),
+                        standing == null ? null : standing.readResolved(w.getSymbol(), lens)));
             } catch (Exception e) {
                 log.warn("Watchlist view failed for {} — row omitted, not defaulted: {}", w.getSymbol(), e.getMessage());
             }
@@ -147,7 +161,8 @@ public class WatchlistTrackingService {
                                      Double niftyNow, LocalDate niftyAsOf, boolean heldNow,
                                      com.example.trading.multibagger.CompoundingLensService.Reading compounding,
                                      com.example.trading.macro.MacroExposureService.Reading macro,
-                                     com.example.trading.analyst.AnalystTargetViewService.Coverage analyst) {
+                                     com.example.trading.analyst.AnalystTargetViewService.Coverage analyst,
+                                     com.example.trading.multibagger.SectorStanding.Result standing) {
         MultibaggerScoreEntity score = latestScore(w.getSymbol());
         HoldingsDecayService.DecayAlert decay = quietDecay(w.getSymbol());
 
@@ -163,8 +178,13 @@ public class WatchlistTrackingService {
         Double excess = WatchlistReturnMath.excess(sinceAdd, niftyRet);
 
         Integer quality = score != null ? score.getCompositeScore() : null;
-        String sector = score != null && notBlank(score.getIndustry()) ? score.getIndustry()
+        // The shared sector vocabulary, as on the screener and the portfolio (B-142): the raw
+        // industry printed "GENERAL" and "Other" on 11 of 24 rows, beside a "Vs sector" cell that
+        // ranks in the resolved bucket. A placeholder resolves to null, never to a bucket.
+        String rawIndustry = score != null && notBlank(score.getIndustry()) ? score.getIndustry()
                 : notBlank(w.getIndustry()) ? w.getIndustry() : null;
+        String resolvedSector = com.example.trading.portfolio.SectorMapping.resolve(w.getSymbol(), rawIndustry);
+        String sector = com.example.trading.portfolio.SectorMapping.isUnknown(resolvedSector) ? null : resolvedSector;
 
         BuyTimingVerdict.Result verdict = BuyTimingVerdict.evaluate(new BuyTimingVerdict.Input(
                 quality, w.getEntrySignal(), w.getSignalReason(), w.getRsi14(), currentPrice, w.getEma50(),
@@ -270,7 +290,12 @@ public class WatchlistTrackingService {
                 themeTags.stream().map(
                         com.example.trading.universe.theme.UniverseThemes.Tag::policy).distinct().toList(),
                 themeTags.stream().map(
-                        com.example.trading.universe.theme.UniverseThemes.Tag::role).toList());
+                        com.example.trading.universe.theme.UniverseThemes.Tag::role).toList(),
+                standing != null ? standing.verdict().name() : null,
+                standing != null ? standing.reason() : null,
+                standing != null ? standing.above() : null,
+                standing != null ? standing.ranked() : null,
+                standing != null ? standing.peers() : null);
     }
 
     /**

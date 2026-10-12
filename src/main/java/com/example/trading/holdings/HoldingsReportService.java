@@ -64,6 +64,8 @@ public class HoldingsReportService {
     private final com.example.trading.portfolio.core.CoreClassificationService coreClassificationService;
     private final com.example.trading.portfolio.core.CoreOverlayService coreOverlayService;
     private final com.example.trading.portfolio.core.CoreHoldingConfig coreConfig;
+    /** SPEC 6.6 / B-151: the one place a holding's displayed signal is reconciled. */
+    private final HoldingsBuyTimingService buyTimingService;
 
     @Value("${spring.mail.username}")
     private String senderEmail;
@@ -91,6 +93,7 @@ public class HoldingsReportService {
 
             // Drop fully-exited rows (qty == 0) so they don't clutter the report
             holdings = filterActiveHoldings(holdings);
+            holdings = withReconciledSignals(holdings);
             if (holdings.isEmpty()) {
                 log.info("No active holdings to report (all rows had zero quantity)");
                 return;
@@ -148,6 +151,7 @@ public class HoldingsReportService {
 
             // Drop fully-exited rows (qty == 0)
             holdings = filterActiveHoldings(holdings);
+            holdings = withReconciledSignals(holdings);
             if (holdings.isEmpty()) {
                 log.info("No active holdings for weekly report (all rows had zero quantity)");
                 return;
@@ -206,7 +210,40 @@ public class HoldingsReportService {
             return List.of();
         }
         holdings = deduplicateHoldings(holdings);
-        return filterActiveHoldings(holdings);
+        return withReconciledSignals(filterActiveHoldings(holdings));
+    }
+
+    /**
+     * The signal the email shows: the dashboard's reconciled one, never the raw momentum rule
+     * (B-151). The emails were the one holdings read path that skipped {@code SignalReconciliation},
+     * so PETRONET and LGEINDIA read "BUY MORE" in the 15:18 email beside HOLD on the dashboard, and
+     * "ACCUMULATE 15" counted names the dashboard held off. {@code holdings.recommendation} is
+     * untouched (Gotcha 69); this reads {@code displaySignal} and falls back to it.
+     */
+    private static String signalOf(HoldingsEntity h) {
+        return h.getDisplaySignal() != null ? h.getDisplaySignal() : h.getRecommendation();
+    }
+
+    /**
+     * Attach the reconciled signal to each row's transient fields only - not the full view
+     * decorator, which also rewrites sector and would change what the sector-flow sections match.
+     * A failed lookup leaves the raw signal in place and says so in the log rather than failing
+     * the email.
+     */
+    private List<HoldingsEntity> withReconciledSignals(List<HoldingsEntity> holdings) {
+        try {
+            var timing = buyTimingService.buildAll();
+            for (HoldingsEntity h : holdings) {
+                var t = timing.get(h.getSymbol());
+                if (t == null) continue;
+                h.setDisplaySignal(t.displaySignal());
+                h.setSignalNote(t.signalNote());
+            }
+        } catch (Exception e) {
+            log.warn("Holdings email: signal reconciliation unavailable, the email will show the raw "
+                    + "momentum signal and may disagree with the dashboard: {}", e.getMessage());
+        }
+        return holdings;
     }
 
     /** The "Holdings 1/2: Action Items" email body, for on-screen display. Sends nothing. */
@@ -464,11 +501,11 @@ public class HoldingsReportService {
         long losing = holdings.stream().filter(h -> h.getPnl() < 0).count();
 
         // Stocks by recommendation
-        long exitCount = holdings.stream().filter(h -> h.getRecommendation() != null &&
-            (h.getRecommendation().equals("SELL") || h.getRecommendation().equals("STRONG_SELL"))).count();
-        long bookProfitCount = holdings.stream().filter(h -> "BOOK_PROFIT".equals(h.getRecommendation())).count();
-        long buyCount = holdings.stream().filter(h -> h.getRecommendation() != null &&
-            (h.getRecommendation().equals("BUY") || h.getRecommendation().equals("STRONG_BUY"))).count();
+        long exitCount = holdings.stream().filter(h -> signalOf(h) != null &&
+            (signalOf(h).equals("SELL") || signalOf(h).equals("STRONG_SELL"))).count();
+        long bookProfitCount = holdings.stream().filter(h -> "BOOK_PROFIT".equals(signalOf(h))).count();
+        long buyCount = holdings.stream().filter(h -> signalOf(h) != null &&
+            (signalOf(h).equals("BUY") || signalOf(h).equals("STRONG_BUY"))).count();
 
         // Overbought / oversold
         long overbought = holdings.stream().filter(h -> h.getRsi14() != null && h.getRsi14() > 70).count();
@@ -540,8 +577,8 @@ public class HoldingsReportService {
         if (exitCount > 0) {
             stepNum++;
             List<String> exitSymbols = holdings.stream()
-                .filter(h -> h.getRecommendation() != null &&
-                    (h.getRecommendation().equals("SELL") || h.getRecommendation().equals("STRONG_SELL")))
+                .filter(h -> signalOf(h) != null &&
+                    (signalOf(h).equals("SELL") || signalOf(h).equals("STRONG_SELL")))
                 .map(h -> h.getTradingSymbol() + " (" + String.format("%.1f%%", h.getPnlPercent()) + ")")
                 .collect(Collectors.toList());
             content.append(buildNextStepItem(stepNum, "danger",
@@ -578,17 +615,23 @@ public class HoldingsReportService {
         // step so we don't suggest realizing 20% short-term tax.
         Map<String, HoldingsEntity> nextStepProfitCandidates = new LinkedHashMap<>();
         holdings.stream()
-                .filter(h -> "BOOK_PROFIT".equals(h.getRecommendation()))
+                .filter(h -> "BOOK_PROFIT".equals(signalOf(h)))
                 .forEach(h -> nextStepProfitCandidates.put(h.getSymbol(), h));
         for (HoldingsEntity h : bigWinners) nextStepProfitCandidates.putIfAbsent(h.getSymbol(), h);
 
         List<HoldingsEntity> nextStepLtcg = new ArrayList<>();
         List<HoldingsEntity> nextStepStcg = new ArrayList<>();
+        List<HoldingsEntity> nextStepUnknown = new ArrayList<>();
         Map<String, TaxAwareExitClassification> nextStepClassifications = new HashMap<>();
         for (HoldingsEntity h : nextStepProfitCandidates.values()) {
             TaxAwareExitClassification cls = classify(h);
             nextStepClassifications.put(h.getSymbol(), cls);
-            if (cls.hasLtcgEligible() || "UNKNOWN".equals(cls.dataSource())) {
+            if ("UNKNOWN".equals(cls.dataSource())) {
+                // No lots and no purchase date: the horizon is unknown, and an unknown is neither
+                // the 12.5% nor the 20% rate. Counting it as long-term quoted the lower rate for a
+                // holding whose tax the app cannot state (B-152).
+                nextStepUnknown.add(h);
+            } else if (cls.hasLtcgEligible()) {
                 nextStepLtcg.add(h);
             } else if (cls.fullyShortTerm()) {
                 nextStepStcg.add(h);
@@ -604,6 +647,18 @@ public class HoldingsReportService {
             content.append(buildNextStepItem(stepNum, "warning",
                 "BOOK PROFIT on " + nextStepLtcg.size() + " long-term winner" + (nextStepLtcg.size() > 1 ? "s" : ""),
                 "LTCG-eligible (>365d held) — partial exit at 12.5% tax instead of 20% STCG: " + String.join(", ", profitSymbols)));
+        }
+
+        if (!nextStepUnknown.isEmpty()) {
+            stepNum++;
+            String names = nextStepUnknown.stream()
+                .map(h -> h.getTradingSymbol() + " (+" + String.format("%.1f%%", h.getPnlPercent()) + ")")
+                .limit(5)
+                .collect(Collectors.joining(", "));
+            content.append(buildNextStepItem(stepNum, "info",
+                "CHECK THE HOLDING PERIOD on " + nextStepUnknown.size() + " winner" + (nextStepUnknown.size() > 1 ? "s" : ""),
+                "No purchase lots are on record, so the tax rate (12.5% long-term or 20% short-term) cannot be stated. "
+                    + "Confirm when you bought before booking anything: " + names));
         }
 
         if (!nextStepStcg.isEmpty()) {
@@ -654,8 +709,8 @@ public class HoldingsReportService {
         if (buyCount > 0) {
             stepNum++;
             List<String> buySymbols = holdings.stream()
-                .filter(h -> h.getRecommendation() != null &&
-                    (h.getRecommendation().equals("BUY") || h.getRecommendation().equals("STRONG_BUY")))
+                .filter(h -> signalOf(h) != null &&
+                    (signalOf(h).equals("BUY") || signalOf(h).equals("STRONG_BUY")))
                 .map(h -> h.getTradingSymbol() + " (Score: " + h.getOverallScore() + ")")
                 .collect(Collectors.toList());
             content.append(buildNextStepItem(stepNum, "success",
@@ -810,7 +865,7 @@ public class HoldingsReportService {
         List<HoldingsEntity> exitCandidates = new ArrayList<>();
         List<HoldingsEntity> coreHeldThrough = new ArrayList<>();
         for (HoldingsEntity h : holdings) {
-            String rec = h.getRecommendation();
+            String rec = signalOf(h);
             if (rec == null || !(rec.equals("SELL") || rec.equals("STRONG_SELL"))) continue;
             if (isCoreProtected(h)) coreHeldThrough.add(h);
             else exitCandidates.add(h);
@@ -820,14 +875,14 @@ public class HoldingsReportService {
         // P&L > 50% AND RSI > 70, i.e. it flags the best compounders precisely while they run
         // (B-056). Trimming a core holding is not something a momentum rule should propose.
         List<HoldingsEntity> bookProfit = holdings.stream()
-                .filter(h -> "BOOK_PROFIT".equals(h.getRecommendation()))
+                .filter(h -> "BOOK_PROFIT".equals(signalOf(h)))
                 .filter(h -> !isCoreProtected(h))
                 .collect(Collectors.toList());
 
         // Accumulate
         List<HoldingsEntity> accumulate = holdings.stream()
-                .filter(h -> h.getRecommendation() != null &&
-                        (h.getRecommendation().equals("BUY") || h.getRecommendation().equals("STRONG_BUY")))
+                .filter(h -> signalOf(h) != null &&
+                        (signalOf(h).equals("BUY") || signalOf(h).equals("STRONG_BUY")))
                 .collect(Collectors.toList());
 
         // Exit Alert — sell-signal exits (cut losses or trim weak names regardless of horizon).
@@ -985,7 +1040,7 @@ public class HoldingsReportService {
                     "<strong>" + truncate(h.getTradingSymbol(), 12) + "</strong>",
                     String.format("%.2f", h.getCurrentPrice()),
                     templateService.formatPercent(h.getPnlPercent()),
-                    coreOverlayService.displayRecommendation(h.getSymbol(), h.getRecommendation()),
+                    coreOverlayService.displayRecommendation(h.getSymbol(), signalOf(h)),
                     v == null ? "&mdash;" : durabilityCell(v),
                     v == null ? "&mdash;" : keyStrength(v)));
             }
@@ -1129,7 +1184,7 @@ public class HoldingsReportService {
         table.append(templateService.tableStart("Symbol", "Qty", "Avg Price", "CMP", "P&L%", "Stop Loss", "Target 1", "Target 2", "Score", "Action"));
 
         for (HoldingsEntity h : holdings) {
-            String recommendation = h.getRecommendation() != null ? h.getRecommendation() : "HOLD";
+            String recommendation = signalOf(h) != null ? signalOf(h) : "HOLD";
             String action = templateService.getActionText(recommendation);
             String badgeType = templateService.getRecommendationBadgeType(recommendation);
 
@@ -1232,11 +1287,11 @@ public class HoldingsReportService {
     }
 
     private String buildRecommendationsSummary(List<HoldingsEntity> holdings) {
-        long strongBuy = holdings.stream().filter(h -> "STRONG_BUY".equals(h.getRecommendation())).count();
-        long buy = holdings.stream().filter(h -> "BUY".equals(h.getRecommendation())).count();
-        long hold = holdings.stream().filter(h -> "HOLD".equals(h.getRecommendation())).count();
-        long sell = holdings.stream().filter(h -> "SELL".equals(h.getRecommendation())).count();
-        long strongSell = holdings.stream().filter(h -> "STRONG_SELL".equals(h.getRecommendation())).count();
+        long strongBuy = holdings.stream().filter(h -> "STRONG_BUY".equals(signalOf(h))).count();
+        long buy = holdings.stream().filter(h -> "BUY".equals(signalOf(h))).count();
+        long hold = holdings.stream().filter(h -> "HOLD".equals(signalOf(h))).count();
+        long sell = holdings.stream().filter(h -> "SELL".equals(signalOf(h))).count();
+        long strongSell = holdings.stream().filter(h -> "STRONG_SELL".equals(signalOf(h))).count();
 
         StringBuilder content = new StringBuilder();
         content.append("<div class=\"summary-grid\">");
@@ -1266,7 +1321,7 @@ public class HoldingsReportService {
                         h.getCurrentPrice(),
                         h.getPnlPercent(),
                         h.getTrendDirection() != null ? h.getTrendDirection() : "N/A",
-                        h.getRecommendation() != null ? h.getRecommendation() : "HOLD",
+                        signalOf(h) != null ? signalOf(h) : "HOLD",
                         h.getOverallScore() != null ? h.getOverallScore().toString() : "N/A"));
             }
 
@@ -1328,7 +1383,7 @@ public class HoldingsReportService {
                 String tradingSymbol = h.getSymbol().contains(":")
                         ? h.getSymbol().substring(h.getSymbol().indexOf(":") + 1)
                         : h.getSymbol();
-                NseDataService.FinancialQualityData fq = nseDataService.analyzeFinancialQuality(tradingSymbol);
+                NseDataService.FinancialQualityData fq = nseDataService.analyzeFinancialQuality(tradingSymbol, h.getIndustry());
                 if (fq == null || fq.getQualityVerdict() == null) continue;
                 if (!"HIGH_RISK".equals(fq.getQualityVerdict()) && !"WEAK".equals(fq.getQualityVerdict())) continue;
 
@@ -1412,7 +1467,8 @@ public class HoldingsReportService {
                     continue;
                 }
                 checked++;
-                var fr = forensicScreenService.screen(h.getSymbol(), true);
+                var fr = forensicScreenService.screen(h.getSymbol(), true,
+                        nseDataService.isLender(h.getTradingSymbol(), h.getIndustry()));
                 if (fr.isClean()) continue;
 
                 for (var flag : fr.getFlags()) {
@@ -2649,10 +2705,10 @@ public class HoldingsReportService {
                             String symbol = h.getSymbol().replace("NSE:", "").replace("BSE:", "");
                             if (matchedFlow.getFiiNetValue() < -50) {
                                 warnings.add(String.format("<b>%s</b> (%s) — FII selling %.0f Cr in %s sector",
-                                    symbol, h.getRecommendation(), Math.abs(matchedFlow.getFiiNetValue()), matchedFlow.getSector()));
+                                    symbol, signalOf(h), Math.abs(matchedFlow.getFiiNetValue()), matchedFlow.getSector()));
                             } else if (matchedFlow.getFiiNetValue() > 50) {
                                 positives.add(String.format("<b>%s</b> (%s) — FII buying %.0f Cr in %s sector",
-                                    symbol, h.getRecommendation(), matchedFlow.getFiiNetValue(), matchedFlow.getSector()));
+                                    symbol, signalOf(h), matchedFlow.getFiiNetValue(), matchedFlow.getSector()));
                             }
                         }
                     }
@@ -2779,7 +2835,7 @@ public class HoldingsReportService {
                     sym, h.getCurrentPrice(), h.getPnlPercent(),
                     h.getPnl(),
                     h.getOverallScore() != null ? h.getOverallScore().toString() : "-",
-                    h.getRecommendation() != null ? h.getRecommendation() : "-"));
+                    signalOf(h) != null ? signalOf(h) : "-"));
             }
             sb.append("</table>");
         }
@@ -2806,7 +2862,7 @@ public class HoldingsReportService {
                     sym, h.getCurrentPrice(), h.getPnlPercent(),
                     h.getPnl(),
                     h.getOverallScore() != null ? h.getOverallScore().toString() : "-",
-                    h.getRecommendation() != null ? h.getRecommendation() : "-"));
+                    signalOf(h) != null ? signalOf(h) : "-"));
             }
             sb.append("</table>");
         }

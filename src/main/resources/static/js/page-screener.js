@@ -30,6 +30,7 @@ import { barChart, radar } from './charts.js';
 import { loadWatchedSet, watchButton } from './watch-button.js';
 import { buyTimingCell, buyTimingRank, entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
+import { sectorStandingCol } from './sector-standing.js';
 import { macroExposureCol } from './macro-cells.js';
 import { themeCol, themeFilterGroup, themeCoverageLine } from './theme-cells.js';
 import {
@@ -184,6 +185,16 @@ const FILTERS = chipFilters([
     // the list, so it must never make the bar report the table as filtered.
   },
   {
+    key: 'showSectorStanding',
+    toggle: true,
+    text: 'Show vs sector',
+    title: 'Adds the "Vs sector" column: how each business compares with others in its own sector '
+      + 'on return on capital, cash, debt and steadiness. Off by default because this table is at '
+      + 'its column budget. It explains the Compounds? column; it never overrides it and '
+      + 'contributes zero points to any score.',
+    // No `test` - a display toggle, never a filter (SPEC 27.13).
+  },
+  {
     key: 'showScores',
     toggle: true,
     text: 'Show the seven scores',
@@ -306,6 +317,12 @@ function scoreTable(data) {
   // page. Gated purely for width, exactly like the column above.
   if (FILTERS.state.showThemes) {
     cols.push(themeCol());
+  }
+
+  // Opt-in (SPEC 54), same renderer as the portfolio, watchlist, discovery and the stock page.
+  // Gated purely for width, like the two above.
+  if (FILTERS.state.showSectorStanding) {
+    cols.push(sectorStandingCol());
   }
 
   // Opt-in: one compact bar per dimension. Nulls become the striped "not measured" marker, which

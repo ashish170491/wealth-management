@@ -92,9 +92,23 @@ public final class MacroExposureRead {
      * @param events        candidate events; filtered here rather than by the caller so the window
      *                      rule lives in one place
      * @param windowDays    how far back an event still counts
+     * @param newsReadOn    the day the ledger was last written from the news; null when it never
+     *                      has been. If that is before the window opens, an empty window is the
+     *                      absence of reading, not the absence of events
      */
     public record Input(String symbol, String sector, boolean lender, Double debtToEquity,
-                        List<Entry> exposures, List<Event> events, LocalDate asOf, int windowDays) {
+                        List<Entry> exposures, List<Event> events, LocalDate asOf, int windowDays,
+                        LocalDate newsReadOn) {
+
+        /**
+         * Convenience for a caller that vouches the news is current (as of {@code asOf}). The
+         * production path never uses it: it passes the real date of the last ingest, because an
+         * empty window means "nothing happened" only if somebody was looking (B-154).
+         */
+        public Input(String symbol, String sector, boolean lender, Double debtToEquity,
+                     List<Entry> exposures, List<Event> events, LocalDate asOf, int windowDays) {
+            this(symbol, sector, lender, debtToEquity, exposures, events, asOf, windowDays, asOf);
+        }
     }
 
     /**
@@ -156,6 +170,20 @@ public final class MacroExposureRead {
             Strength strength = adjustedStrength(rule, e, in);
             reasons.add(new Reason(e.id(), e.factor(), e.direction(), effect, strength, rule.channel(),
                     e.occurredAt(), sentence(e, rule, effect, strength), rule.rationale(), rule.from()));
+        }
+
+        if (reasons.isEmpty() && live.isEmpty()
+                && (in.newsReadOn() == null || in.newsReadOn().isBefore(cutoff))) {
+            // Nobody has read the news inside this window, so "no event recorded" is not a finding.
+            // Drawing it as NOT_EXPOSED ("checked, nothing applies") would turn an unread feed into
+            // an all-clear on every stock (B-154, Gotcha 121).
+            return new Result(Verdict.NOT_MEASURED, null, List.of(), 0, null,
+                    in.newsReadOn() == null
+                            ? "The news has never been read, so the app cannot say whether anything "
+                                    + "affects this business. Press \"Read the news now\" on the Events page."
+                            : "The news was last read on " + in.newsReadOn() + ", before the last "
+                                    + in.windowDays() + " days began, so an empty window says nothing. "
+                                    + "Press \"Read the news now\" on the Events page.");
         }
 
         if (reasons.isEmpty()) {

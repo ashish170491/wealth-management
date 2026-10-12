@@ -28,6 +28,7 @@ import {
 } from './ui.js';
 import { lineChart, legend, radar, COLORS } from './charts.js';
 import { compoundingPanel } from './compounding.js';
+import { sectorStandingPanel, SECTOR_STANDING } from './sector-standing.js';
 import { macroExposurePanel } from './macro-cells.js';
 import { resultPanel, resultHistoryRows } from './earnings-cells.js';
 import { trackRecordPanel, capitalAllocationPanel } from './long-horizon.js';
@@ -533,7 +534,7 @@ function resultHistoryTable(earnings) {
 }
 
   const [holding, series, trend, recs, coreHistory, watch, compounding, longHorizon,
-    macro, analyst, earnings] = await Promise.all([
+    macro, analyst, earnings, sectorStanding] = await Promise.all([
     get(`/api/trading/holdings/${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
     get(`/api/dashboard/series/holding?symbol=${enc}&days=1095`, { fallback: [] }).then((r) => r.data).catch(() => []),
     getList(`/api/multibagger/trend/${enc}?days=365`).then((r) => r.data).catch(() => []),
@@ -563,6 +564,10 @@ function resultHistoryTable(earnings) {
     // a 404 when nothing has been captured, so "no filed quarter on record here" never renders
     // as "the company reported badly" (SPEC 50.6).
     get(`/api/earnings/result?symbol=${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
+    // DB-only (the latest screening run, cached per run), verified by hand. 404 when the stock
+    // is not in the latest run -> null, "never screened"; a 200 carrying NOT_RANKED means it was
+    // screened but no peer group could rank it - a different fact (SPEC 54).
+    get(`/api/dashboard/sector-standing?symbol=${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
   ]);
 
   const score = (trend && trend.length) ? trend[trend.length - 1] : null;
@@ -614,6 +619,19 @@ function resultHistoryTable(earnings) {
     compoundingPanel(compounding)
       || empty('Never screened', 'This stock is not in the screening universe, so its accounts have not been read.')),
     compounding && compounding.compounding));
+
+  nodes.push(withSummary(section('How does it compare with its sector?',
+    'The check above compares this business with the whole market, which is right for asking '
+    + 'whether it can compound and unfair to sectors that are cyclical or capital-hungry by nature. '
+    + 'This one compares it only with the other businesses in its own sector that the app screens: '
+    + 'where it sits, by quarter, on return on capital, cash, debt and steadiness. It explains the '
+    + 'check above; it never overrides it, and it changes no score.',
+    sectorStandingPanel(sectorStanding)
+      || empty('Never screened', 'This stock is not in the latest screening run, so there is no sector to compare it with.')),
+    sectorStanding && sectorStanding.sectorStanding,
+    sectorStanding && SECTOR_STANDING[sectorStanding.sectorStanding]
+      ? { label: SECTOR_STANDING[sectorStanding.sectorStanding].long, type: SECTOR_STANDING[sectorStanding.sectorStanding].type }
+      : {}));
 
   nodes.push(withSummary(section('What did it report last quarter?',
     'Every three months a company publishes what it actually earned. That is the one regular '

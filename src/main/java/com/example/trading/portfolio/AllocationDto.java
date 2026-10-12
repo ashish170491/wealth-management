@@ -69,6 +69,42 @@ public final class AllocationDto {
              * statement (Gotcha 68), and treating one as a statement put ten permanent warnings
              * on the landing page against weights nobody chose.
              */
-            boolean targetsStated
+            boolean targetsStated,
+
+            /**
+             * Total wealth: directly-held shares + funds + broker cash, in rupees.
+             *
+             * <p>The denominator for every {@code ASSET_CLASS} bucket, and <b>only</b> for those.
+             * {@code totalPortfolioValue} above is the equity book and remains the denominator for
+             * the sector, size and stock buckets, for the reason in
+             * {@link AllocationService#BUCKET_ASSET_CLASS}: a 16% position is still a 16% bet on one
+             * business whatever share of total wealth it is. Rendering two differently-denominated
+             * percentages without saying which is which is B-047's family, so both totals are on the
+             * wire and the screen names them.
+             */
+            double combinedTotalValue,
+
+            /** Market value of non-equity holdings, in rupees. */
+            double fundValue,
+
+            /**
+             * False means the broker payload carried no equity segment — we could not see the cash,
+             * which is a different fact from there being none (SPEC §46.4). When false the asset
+             * class percentages are of a total that excludes an unknown amount, and the screen must
+             * say so rather than presenting them as shares of everything.
+             */
+            boolean cashMeasured,
+
+            /**
+             * Funds whose asset class could not be resolved, as a share of combined wealth.
+             *
+             * <p>These are <b>absent</b> from the asset-class buckets rather than filed under a
+             * bucket called "Other" (B-096, Gotcha 110), which means the buckets do not sum to 100
+             * whenever this is non-zero. Reported by weight and by name so that gap cannot be
+             * mistaken for a smaller portfolio — the empty-collection-read-as-fact failure (B-054).
+             */
+            double unclassifiedFundWeightPercent,
+
+            List<String> unclassifiedFunds
     ) {}
 }

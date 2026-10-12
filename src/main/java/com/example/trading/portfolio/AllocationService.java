@@ -36,6 +36,18 @@ public class AllocationService {
     public static final String BUCKET_MARKET_CAP = "MARKET_CAP";
     public static final String BUCKET_STOCK = "STOCK";
 
+    /**
+     * Direct equity vs funds vs cash (SPEC §5.2, implemented 2026-09-20 with §52.5).
+     *
+     * <p>Fed <b>only</b> by {@link #computeCombinedWeights()}. {@link #computeActualWeights()} is
+     * untouched and still denominated in the equity book, which is the safety property for the
+     * whole mutual-fund integration: every existing consumer — HHI, sector concentration, stock
+     * concentration, the rebalance plan, the donut — keeps reading the weights it has always read.
+     * Changing that denominator would silently rescale all of them, and a 16% position that becomes
+     * 11% of combined wealth is still a 16% bet on one business.
+     */
+    public static final String BUCKET_ASSET_CLASS = "ASSET_CLASS";
+
     public static final String ALERT_IN_TOLERANCE = "IN_TOLERANCE";
     public static final String ALERT_OVER_TOLERANCE = "OVER_TOLERANCE";
     public static final String ALERT_NO_TARGET = "NO_TARGET";
@@ -44,6 +56,15 @@ public class AllocationService {
     private final PortfolioProfileRepository profileRepository;
     private final PortfolioTargetWeightRepository targetRepository;
     private final PortfolioConfig config;
+
+    /**
+     * Never a hard dependency (the {@code ObjectProvider<ChatModel>} pattern from §48). The
+     * allocation module must start and work with no fund module present at all; the asset-class
+     * bucket then holds direct equity and cash, which is a true statement rather than a broken one.
+     */
+    private final org.springframework.beans.factory.ObjectProvider<FundAllocationSource> fundAllocationSource;
+
+    private final com.example.trading.portfolio.performance.PortfolioCashSnapshotRepository cashRepository;
 
     public PortfolioProfileEntity getActiveProfile() {
         return profileRepository.findByActiveTrue()
@@ -105,6 +126,7 @@ public class AllocationService {
         PortfolioProfileEntity profile = getActiveProfile();
         List<PortfolioTargetWeightEntity> targets = getTargetWeights(profile.getId());
         ActualWeights actual = computeActualWeights();
+        CombinedWeights combined = computeCombinedWeights(actual);
 
         double tolerancePp = profile.getToleranceAbsolutePp() != null
                 ? profile.getToleranceAbsolutePp() : config.getDefaultTolerancePp();
@@ -126,7 +148,7 @@ public class AllocationService {
                 continue;
             }
             double targetWeight = target.getTargetWeight();
-            double actualWeight = actualFor(actual, target.getBucketType(), target.getBucketKey());
+            double actualWeight = actualFor(actual, combined, target.getBucketType(), target.getBucketKey());
             double driftPp = actualWeight - targetWeight;
             double driftRel = targetWeight > 0 ? Math.abs(driftPp) / targetWeight : 0.0;
             String alert = (Math.abs(driftPp) > tolerancePp || driftRel > toleranceRel)
@@ -141,11 +163,18 @@ public class AllocationService {
         appendUntargetedBuckets(actual.bySector(), BUCKET_SECTOR, seenKeys, buckets);
         appendUntargetedBuckets(actual.byCap(), BUCKET_MARKET_CAP, seenKeys, buckets);
         appendUntargetedBuckets(actual.byStock(), BUCKET_STOCK, seenKeys, buckets);
+        appendUntargetedBuckets(combined.byAssetClass(), BUCKET_ASSET_CLASS, seenKeys, buckets);
 
         return new AllocationDto.DriftResponse(
                 profile.getName(), actual.totalValue(), actual.holdingsCount(), buckets,
                 actual.unclassifiedWeight(), actual.unclassifiedSymbols(),
-                targetsStated(profile));
+                targetsStated(profile),
+                // The combined figures travel WITH the buckets they denominate. Sending the
+                // ASSET_CLASS percentages alone would leave the reader unable to tell a portfolio
+                // that is 61.9% funds from one where a fund could not be classified and simply
+                // left the total (Gotcha 44).
+                combined.totalValue(), combined.fundValue(), combined.cashMeasured(),
+                combined.unclassifiedFundWeight(), combined.unclassifiedFunds());
     }
 
     /**
@@ -196,15 +225,84 @@ public class AllocationService {
         return "LARGE_CAP";
     }
 
-    private double actualFor(ActualWeights actual, String bucketType, String bucketKey) {
+    private double actualFor(ActualWeights actual, CombinedWeights combined,
+                            String bucketType, String bucketKey) {
         return switch (bucketType) {
             // A target key is normalised through the same table as a holding's industry, so a
             // profile seeded as "Banking" or "BANKING" both meet a holding written as "Banks".
             case BUCKET_SECTOR -> actual.bySector().getOrDefault(SectorMapping.normalize(bucketKey), 0.0);
             case BUCKET_MARKET_CAP -> actual.byCap().getOrDefault(bucketKey, 0.0);
             case BUCKET_STOCK -> actual.byStock().getOrDefault(bucketKey, 0.0);
+            // Denominated in TOTAL wealth, not the equity book - the only bucket that is.
+            case BUCKET_ASSET_CLASS -> combined.byAssetClass()
+                    .getOrDefault(bucketKey == null ? "" : bucketKey.trim().toUpperCase(java.util.Locale.ROOT), 0.0);
             default -> 0.0;
         };
+    }
+
+    /**
+     * Direct equity, funds and cash as shares of <b>total</b> wealth (SPEC §5.2, §52.5).
+     *
+     * <p>This is a second, additive method precisely so that {@link #computeActualWeights()} does
+     * not change. Everything that already reads equity-denominated weights keeps doing so, and only
+     * {@link #BUCKET_ASSET_CLASS} reads this.
+     *
+     * <p>Three rules the implementation must keep:
+     * <ul>
+     *   <li><b>A fund's weight never reaches HHI.</b> Concentration is computed from
+     *       {@code byStock()}, which this method does not touch. A mid-cap fund at 20% of combined
+     *       wealth is ~60 businesses; squaring 20 would assert concentration that does not exist.</li>
+     *   <li><b>An unresolved fund is named, not bucketed.</b> Same treatment as an unclassified
+     *       sector: reported by weight so a coverage gap cannot masquerade as an asset class.</li>
+     *   <li><b>Cash is absent rather than zero</b> when the broker payload carries none (§46.4) —
+     *       {@code cashMeasured} says which, because zero cash is a fact about the account and
+     *       absence is a fact about the feed.</li>
+     * </ul>
+     */
+    public CombinedWeights computeCombinedWeights() {
+        return computeCombinedWeights(computeActualWeights());
+    }
+
+    private CombinedWeights computeCombinedWeights(ActualWeights equity) {
+        double equityValue = equity.totalValue();
+        double fundValue = 0.0;
+        double unresolvedFundValue = 0.0;
+        List<String> unresolvedFunds = new ArrayList<>();
+        Map<String, Double> valueByClass = new HashMap<>();
+
+        FundAllocationSource source = fundAllocationSource.getIfAvailable();
+        List<FundAllocationSource.FundSlice> slices =
+                source == null ? List.of() : source.fundSlices();
+        for (FundAllocationSource.FundSlice f : slices) {
+            fundValue += f.value();
+            if (f.assetClass() == null || f.assetClass().isBlank()) {
+                unresolvedFundValue += f.value();
+                unresolvedFunds.add(f.label());
+            } else {
+                valueByClass.merge(f.assetClass(), f.value(), Double::sum);
+            }
+        }
+
+        // Absent, not zero, when the broker payload carried no equity segment (SPEC §46.4):
+        // zero cash is a fact about the account, absence is a fact about the feed.
+        Double cash = cashRepository.findTopByOrderBySnapshotDateDesc()
+                .map(com.example.trading.portfolio.performance.PortfolioCashSnapshotEntity::getAvailableCash)
+                .orElse(null);
+        double cashValue = cash == null ? 0.0 : cash;
+        double total = equityValue + fundValue + cashValue;
+
+        Map<String, Double> byAssetClass = new HashMap<>();
+        if (total > 0) {
+            if (equityValue > 0) byAssetClass.put("EQUITY_DIRECT", equityValue / total * 100.0);
+            valueByClass.forEach((k, v) -> byAssetClass.put(k, v / total * 100.0));
+            if (cash != null && cashValue > 0) byAssetClass.put("CASH", cashValue / total * 100.0);
+        }
+
+        return new CombinedWeights(
+                total, equityValue, fundValue, cash, cash != null,
+                byAssetClass,
+                total > 0 ? unresolvedFundValue / total * 100.0 : 0.0,
+                unresolvedFunds);
     }
 
     private void appendUntargetedBuckets(
@@ -236,5 +334,30 @@ public class AllocationService {
             Map<String, Double> byStock,
             double unclassifiedWeight,
             List<String> unclassifiedSymbols
+    ) {}
+
+    /**
+     * Direct equity, funds and cash as shares of total wealth (SPEC §5.2, §52.5).
+     *
+     * <p>The only weights in this class denominated in anything other than the equity book, and the
+     * only ones {@link #BUCKET_ASSET_CLASS} reads. Nothing here reaches HHI, the single-stock cap or
+     * the sector limits — those stay measured on directly-held stocks and carry a caveate naming the
+     * fund value they exclude, because rescaling a 16% position down to 11% of combined wealth would
+     * delete a working risk control by arithmetic (Gotcha 42's asymmetry).
+     *
+     * @param totalCash    null when the broker payload carried no equity segment — unknown, not zero
+     * @param cashMeasured false means "we could not see it", which is different from "there is none"
+     * @param unclassifiedFundWeight funds whose asset class could not be resolved, reported by
+     *                               weight and name rather than bucketed (B-096)
+     */
+    public record CombinedWeights(
+            double totalValue,
+            double directEquityValue,
+            double fundValue,
+            Double totalCash,
+            boolean cashMeasured,
+            Map<String, Double> byAssetClass,
+            double unclassifiedFundWeight,
+            List<String> unclassifiedFunds
     ) {}
 }

@@ -709,6 +709,15 @@ All use `zone = "Asia/Kolkata"` for IST execution:
 // Kite quote per listing under a year old. NSE-light, Kite-light, and in a genuine gap.
 @Scheduled(cron = "0 15 12 * * MON-FRI", zone = "Asia/Kolkata")  // 12:15 PM — clear of 09:45/10:00/11:30 NSE jobs and the 14:00 screening
 
+// Macro news read (SPEC §48.9 revised, §55.3) — RSS feeds + one Kite quote when readings are
+// filed. Off when macro.ingest.scheduled is false. Unread, every holding drew "nothing applies" (B-154).
+@Scheduled(cron = "0 40 12 * * MON-FRI", zone = "Asia/Kolkata")  // 12:40 PM
+
+// AMFI daily NAV pull (SPEC §52) — ONE HTTP GET of ~1.5 MB from a third host. No Kite call and no
+// NSE call, so it competes for neither budget. 12:30 is the last genuine weekday gap, between the
+// 12:15 IPO capture and the 13:00 watchlist run.
+@Scheduled(cron = "0 30 12 * * MON-FRI", zone = "Asia/Kolkata")  // 12:30 PM
+
 // Quantitative Stock Discovery Scan
 @Scheduled(cron = "0 0 10 * * MON-FRI", zone = "Asia/Kolkata")   // 10:00 AM daily discovery
 
@@ -723,7 +732,7 @@ All use `zone = "Asia/Kolkata"` for IST execution:
 @Scheduled(cron = "0 5 15 * * MON-FRI", zone = "Asia/Kolkata")   // 3:05 PM — newly-hit only (dedup persisted in target_hit_events)
 ```
 
-**The full 28-row schedule lives in SPEC §15** (restored 2026-09-05 alongside §13, §14 and §16's heading — they were cited everywhere and absent from the file, B-076). The block above is a summary; §15 is authoritative.
+**The full 29-row schedule lives in SPEC §15** (restored 2026-09-05 alongside §13, §14 and §16's heading — they were cited everywhere and absent from the file, B-076). The block above is a summary; §15 is authoritative.
 
 **Scheduler placement rule (SPEC.md §3.4)**: Every new `@Scheduled` job must fire within `09:15–15:30 IST MON-FRI` with `zone = "Asia/Kolkata"`. Pre-market, post-market, and weekend crons are rejected in review — the app is not running outside those hours. **One sanctioned exception (2026-08-25)**: the two weekly multibagger jobs fire Saturday 08:00/09:00 inside a dedicated Saturday 07:50–10:35 app window and guard with `MarketHoursService.isSaturdayScreeningWindow()` (07:45–10:30 SAT) instead of `isMarketOpen()`. No other scheduler may use that guard without a SPEC §3.4 exemption (read-only consumers such as `UniverseController` are not schedulers and are exempt from the restriction).
 
@@ -739,7 +748,7 @@ public void scheduledThing() {
 }
 ```
 
-Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `@Scheduled` method in the codebase. **28** remain — counted from the annotations themselves rather than from this list, which had drifted by one in each direction (SPEC §15 said 28 when the true figure was 27, this file said 29). The passes since: the three removals, the 2026-09-06 addition of the 11:30 fundamentals backfill, the 2026-09-09 addition of the 12:15 IPO capture, the 2026-09-12 deletion of the 15:20 market-impact summary and the 2026-09-12 addition of the 13:20 analyst target pass (SPEC §15 tabulates them all). Macro event extraction (SPEC §48) adds **none**: it runs only when the investor presses the button, and `macro.ingest.scheduled` is bound, logged at boot and false. The one method without the guard is `TokenManagementService.dailyTokenRefresh` at **09:45 MON-FRI** — in-window, and guarding it would stop the only thing it exists to do (recover a failed startup login). `KiteInstrumentsService` 08:30 was the codebase's last true pre-market job and was deleted on 2026-09-03. Defense in depth: the server itself only runs during market hours, so this guard catches (a) the shutdown ramp (15:30-15:45 when schedulers can still fire), (b) startup before 09:15, and (c) anyone who later changes a cron by mistake. When adding a new scheduler, follow the same pattern. Never inline the time check — always delegate to `MarketHoursService` so the rule lives in one place.
+Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `@Scheduled` method in the codebase. **29** remain — counted from the annotations themselves rather than from this list, which had drifted by one in each direction (SPEC §15 said 28 when the true figure was 27, this file said 29). The passes since: the three removals, the 2026-09-06 addition of the 11:30 fundamentals backfill, the 2026-09-09 addition of the 12:15 IPO capture, the 2026-09-12 deletion of the 15:20 market-impact summary and the 2026-09-12 addition of the 13:20 analyst target pass and the 2026-09-20 addition of the 12:30 AMFI NAV pull (SPEC §15 tabulates them all). Macro event extraction (SPEC §48) adds **none**: it runs only when the investor presses the button, and `macro.ingest.scheduled` is bound, logged at boot and false. The one method without the guard is `TokenManagementService.dailyTokenRefresh` at **09:45 MON-FRI** — in-window, and guarding it would stop the only thing it exists to do (recover a failed startup login). `KiteInstrumentsService` 08:30 was the codebase's last true pre-market job and was deleted on 2026-09-03. Defense in depth: the server itself only runs during market hours, so this guard catches (a) the shutdown ramp (15:30-15:45 when schedulers can still fire), (b) startup before 09:15, and (c) anyone who later changes a cron by mistake. When adding a new scheduler, follow the same pattern. Never inline the time check — always delegate to `MarketHoursService` so the rule lives in one place.
 
 **Scheduler thread pool (B-014, 2026-05-23)**: `@Scheduled` jobs run on a multi-threaded `TaskScheduler` (pool size 4, `sched-` prefix) defined in [SchedulingConfig.java](src/main/java/com/example/trading/config/SchedulingConfig.java) — **not** Spring's single-threaded default. Why: the 15:00–15:30 window is densely packed and a long multibagger/holdings scan on one thread used to serialise the lightweight 15:22 recommendation-outcome / 15:25 accuracy-email / 15:28 tax-capture jobs behind it, pushing them past 15:30 where the `isMarketOpen()` guard silently aborts them (on Fri 2026-05-22 all three were starved). The pool is kept **small (4)** on purpose: enough to keep time-critical jobs from starving, small enough that several Kite-heavy scans never run in parallel and trip the broker 429 limit. Note: this does NOT enable `@Async` (there is no `@EnableAsync` — `SignalTrackingIntegrator`'s two `@Async` methods run synchronously by design; don't add `@EnableAsync` without auditing them). Concurrent scheduled execution means new shared mutable state must be thread-safe.
 
@@ -904,7 +913,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 
 85. **One question, one rule table, three surfaces.** "Is it still a good time to buy?" is answered by `BuyTimingVerdict` for the watchlist (SPEC §37.3), for holdings (§6.5, "should I add more?") and, by deferral, on the screener (§12.11). A tracked stock's watchlist verdict wins on every surface. If you add a fourth surface it defers too — and if you need a new input, add it to the shared rule table rather than writing a parallel one, because the failure mode is not a wrong answer but **two different answers in the same six words** (B-062). **The fourth surface already existed and nobody noticed: the portfolio's own "Signal" column** (B-069). `HoldingsAnalysisService.determineRecommendation` is a momentum rule — score, trend, RSI, P&L, and *no sight of fundamentals, forensic flags or financial quality* — so it printed BUY next to AVOID on BEL, and disagreed on **9 of 32 holdings**. It is reconciled at display time by `SignalReconciliation`: a quality problem vetoes a buy (AVOID+buy → HOLD), it may only ever **lower** a signal, and it never yields SELL because "do not add" is not "get out". `holdings.recommendation` stays untouched (Gotcha 69's contract). When auditing for this class of bug, the tell is a column whose distribution is impossible: that signal read **zero SELL across 32 holdings**. **The fix is centralisation, not another patch** — patching surfaces one at a time is what produced this three times, and the B-069 patch itself immediately created a fourth inconsistency (the stock page still rendered `recommendation` raw, so BEL read BUY there while the portfolio said HOLD). `HoldingsViewDecorator` now attaches the canonical answers — `displaySignal`, `signalNote`, `buyTimingVerdict`, the shared entry ladder — as `@Transient` fields on **every holdings read path**, so a screen can only render what it is given and a new screen inherits them for free. `CrossSurfaceConsistencyTest` pins the property rather than any screen's output (idempotent reconciliation, one ladder per input, no buy beside AVOID). **The last duplicate is gone**: the Market page's sector-reversal entry used `EarlyUpsideScanner`'s own rule, and the breakout panel printed a third — both removed with their engines on 2026-09-03 (SPEC §39). Every surviving surface now goes through the shared table, which is why that removal is part of this rule and not a separate story. Note the vocabulary detail: the table understands the watchlist's `AVOID` *and* a holding's `SELL`/`STRONG_SELL`, deliberately, so no caller has to translate — a mapping step is where a SELL quietly becomes a HOLD.
 
-86. **A bonus issue is not dilution, and the share count alone cannot tell you which you are looking at** (B-066). Corporate actions are divided out of `share_count` before any growth rate is taken, because a bonus or split multiplies the count by an **exact simple ratio** (BEL 3.0000x, MAZDOCK 2.0000x) while money raised lands on an arbitrary one. Two traps here. First, the equity discriminator (`isBonusOrSplit` — did new money arrive?) needs four unbroken years and `series()` returns empty if *any* year is null, so its `false` meant both "not a bonus" and "could not check" — the second reading fired `DILUTION:HIGH` on BEL's 1:2 bonus and, after B-065, forced AVOID on every screen. Second, the ratio tolerance is load-bearing: at 0.5% the grid of simple ratios swallows real raises (BANKINDIA's infusion+QIP sit 0.18% from 5/4 and 0.15% from 10/9), so it is **0.05%**. Any new check that substitutes a heuristic for missing evidence should state what its tolerance absorbs. **And severity must follow the strength of the evidence, not the size of the number (B-092):** that tight tolerance means a real bonus or split with ESOPs issued in the same year lands *just* off an exact ratio and survives the adjustment — HDFCBANK's 1:2 split, HDFC Ltd merger and 1:1 bonus all did — so where equity cannot vouch that new money arrived, `DILUTION` is a `MEDIUM` caution and not the `HIGH` that disqualifies a stock and caps it at 54. B-066 applied the "cannot tell is not the same as not a bonus" rule to the branch where the adjustment clears the bar and missed the branch where growth survives it.
+86. **A bonus issue is not dilution, and the share count alone cannot tell you which you are looking at** (B-066). Corporate actions are divided out of `share_count` before any growth rate is taken, because a bonus or split multiplies the count by an **exact simple ratio** (BEL 3.0000x, MAZDOCK 2.0000x) while money raised lands on an arbitrary one. Two traps here. First, the equity discriminator (`isBonusOrSplit` — did new money arrive?) needs four unbroken years and `series()` returns empty if *any* year is null, so its `false` meant both "not a bonus" and "could not check" — the second reading fired `DILUTION:HIGH` on BEL's 1:2 bonus and, after B-065, forced AVOID on every screen. Second, the ratio tolerance is load-bearing: at 0.5% the grid of simple ratios swallows real raises (BANKINDIA's infusion+QIP sit 0.18% from 5/4 and 0.15% from 10/9), so it is **0.05%**. Any new check that substitutes a heuristic for missing evidence should state what its tolerance absorbs. **And severity must follow the strength of the evidence, not the size of the number (B-092):** that tight tolerance means a real bonus or split with ESOPs issued in the same year lands *just* off an exact ratio and survives the adjustment — HDFCBANK's 1:2 split, HDFC Ltd merger and 1:1 bonus all did — so where equity cannot vouch that new money arrived, `DILUTION` is a `MEDIUM` caution and not the `HIGH` that disqualifies a stock (and deducts 5 points; it does not cap - B-146). B-066 applied the "cannot tell is not the same as not a bonus" rule to the branch where the adjustment clears the bar and missed the branch where growth survives it.
 
 87. **Column resize/reorder lives in `table()` alone, and the two traps are sorting and fixed layout** (SPEC §27.9). All eighteen dashboard tables share one renderer, so `static/js/table-layout.js` wires the behaviour once. (a) A click fires after the pointerup that ends a drag — `recentlyDragged()` suppresses it, or every reorder also re-sorts the table. (b) `table-layout: fixed` is entered on the *first drag*, after measuring and pinning every current column width: switching to it redistributes all columns, so doing it at render time would reshuffle columns nobody touched. Under fixed layout the table must be `width: max-content` or the browser silently overrides the dragged width. (c) The `localStorage` key is derived from the sorted column keys, so changing a table's columns invalidates old layouts automatically — never hand-assign a table id, and never key a column by its displayed index. It also carries a **schema token** (`LAYOUT_SCHEMA`): **bump it whenever the cell-sizing CSS changes**, because a saved width is only meaningful under the rules it was measured in. Widths saved before SPEC §27.10 were taken while cells were `nowrap`, and a restored layout re-enters `table-layout: fixed` with explicit `<col width>` — which **overrides the wrapping entirely**, so the table scrolls sideways forever and no CSS fix can reach it (measured on the watchlist: 1950px needed vs 1527 available). Note the trap for diagnosis: this reproduces only for a reader who has a saved layout, so a clean profile — and every measurement taken in one — says the table fits.
 
@@ -935,7 +944,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 
 101. **NSE was never paced at all, and one javadoc had been claiming otherwise for months** (SPEC §32.6). The only `Thread.sleep` in `src/main/java` was in `DailyCandleCache`, for Kite. Both the per-year archive loop and the per-symbol holdings loop were tight, while `/backfill-holdings` documented itself as "paced" — ~360 unthrottled requests per run at the host that has already **permanently** walled `/api/quote-equity` (B-018). `NseDataService.pace()` is now a **static** process-wide gate for the bulk archive paths, for the same reason the Kite gate is (Gotcha 23): two independently-paced loops on two of the four scheduler threads each respect their own budget and together break the real one. Three details. A **cached** filing skips the delay, or re-running a symbol already fetched this session costs full wall clock for zero requests. Single interactive calls are **not** gated — they are not the volume problem and delaying them slows a page someone is waiting on. And the guard is bounded at **both** ends: `requireOutsideNseCrunch` only ever checked the *start* time, so a run begun at 09:35 went straight through the 09:45 FII/DII fetch and the 10:00 report — the exact interference it existed to prevent. Loops now check the deadline **between symbols** and return what they have. Gotcha 97's rule, restated: the reason for a guard is contention, so the guard must cover the contention, not the moment of asking.
 
-102. **A backfill queue converges only if "complete" means "everything the archive holds", not "enough years"** (SPEC §32.6). Without per-symbol status nothing can tell **"never attempted"** from **"attempted, and this company has only ever filed three annual results"** — both look like a symbol with three years. A picker ordering by fewest-years-held then returns to the shallowest names every day and never reaches the untouched ones, which is the natural failure of the obvious implementation. So completion is `yearsWritten + yearsSkippedBasis >= yearsInArchive`. Two sub-rules carry weight: **years skipped to hold one reporting basis count as seen** (they were deliberately left out per Gotcha 73 and re-fetching would leave them out again), and **`UNAVAILABLE` is a finding, not a failure** — the archive genuinely lists nothing (delisted predecessor, non-March year end, insurer behind the wall), and the CSV import is the fallback for exactly those names. A listing that *errored* is `FAILED`, never `UNAVAILABLE`: recording a fetch failure as a fact about the business is the B-054 lesson. **Also: deepening history moves composites, and that is correct.** `forensic-actionable` is `true` and a HIGH flag caps at 54, so the rollout adds true flags *and* removes false `DILUTION:HIGH` ones as the B-066 discriminator finally gets its four years. Do not disarm it meanwhile (Gotcha 42's asymmetry, wrong direction), and do **not** bump `scoring_version` — the engine did not change, only its input depth, which changes every run anyway; a bump would falsely split a shadow-reconstruction sample that already pools two versions.
+102. **A backfill queue converges only if "complete" means "everything the archive holds", not "enough years"** (SPEC §32.6). Without per-symbol status nothing can tell **"never attempted"** from **"attempted, and this company has only ever filed three annual results"** — both look like a symbol with three years. A picker ordering by fewest-years-held then returns to the shallowest names every day and never reaches the untouched ones, which is the natural failure of the obvious implementation. So completion is `yearsWritten + yearsSkippedBasis >= yearsInArchive`. Two sub-rules carry weight: **years skipped to hold one reporting basis count as seen** (they were deliberately left out per Gotcha 73 and re-fetching would leave them out again), and **`UNAVAILABLE` is a finding, not a failure** — the archive genuinely lists nothing (delisted predecessor, non-March year end, insurer behind the wall), and the CSV import is the fallback for exactly those names. A listing that *errored* is `FAILED`, never `UNAVAILABLE`: recording a fetch failure as a fact about the business is the B-054 lesson. **Also: deepening history moves composites, and that is correct.** `forensic-actionable` is `true` and a HIGH flag deducts 5 and disqualifies on the timing surfaces (it does NOT cap - only an auditor flag does; B-146), so the rollout adds true flags *and* removes false `DILUTION:HIGH` ones as the B-066 discriminator finally gets its four years. Do not disarm it meanwhile (Gotcha 42's asymmetry, wrong direction), and do **not** bump `scoring_version` — the engine did not change, only its input depth, which changes every run anyway; a bump would falsely split a shadow-reconstruction sample that already pools two versions.
 
 103. **Count years, never average them** (SPEC §43.2). A commodity business's return on capital oscillates roughly 5% → 35% → 5%; an **average** clears an 18% bar that no single bad year clears, so averaging lets one boom year carry a decade — the exact failure a persistence test exists to catch, and the first thing a well-meaning simplification reintroduces. Every §43 gate is a count of qualifying years over measured years, at a 70% required share: not 100% (a business that never once dipped has not met a recession, and requiring that selects for short histories over durable ones) and not a bare majority (a cyclical spends more than half a cycle in its good half). That 0.7 is the one threshold in §42/§43 set on **judgement rather than a measured percentile**, because the cross-section does not exist until the backfill converges — §43.4 flags it for recalibration, the §12.11 discipline deferred rather than skipped. **And a Tier B gate needs ≥4 measured years or it says nothing** (`MIN_TIER_B_YEARS`) — found by running it, not in review: BEL has 8 years of accounts but a balance sheet in only the last two or three, so return on capital passed 3/3 and helped earn a `PROVEN_COMPOUNDER` badge. A gate that passes on thin evidence while sounding authoritative is Gotcha 68 in its most flattering form. Related: `getScreeningUniverse()` returns only the **~89-name legacy list**, not the ~370 union, despite Gotcha 57 describing it as the union — use **`resolvedScreeningUniverse()`** to size a universe-wide job. (`UniverseExpansionService.knownSymbols()` is fine: it separately unions the full tier list, so B-053 is genuinely fixed there.)
 
@@ -1408,10 +1417,418 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
     the column, not to build an engine. **Measure the existing coverage before designing the
     feature that would supply it.**
 
+139. **A third party's category labels are a vocabulary, not a key — and AMFI spells every equity
+    category twice** (SPEC §52.4, 2026-09-20). B-096 in a new feed, found before it could ship: Flexi
+    Cap 130+60, Large Cap 112+52, Small Cap 98+45, Mid Cap 83+52, ELSS 112+84 (the second as
+    `ELSS- Tax Saver Fund`), Sectoral/Thematic split three ways. Match the literal label and a fund's
+    peer group is either 98 schemes or 45 depending on which spelling its AMC happened to use, and
+    **every percentile inside it is wrong while looking perfectly fine**. `SebiCategory.resolve` is
+    the single entry point, the raw header is stored beside the resolved value so a mapping bug is
+    diagnosable, and an unknown header is `UNCLASSIFIED` **reported by name** rather than folded into
+    the nearest match. Runtime is lenient and **the test is strict** against a captured header set —
+    AMFI inventing a fourth spelling must fail the build, not a scheduled job.
+
+    Four more traps in the same feed, each measured rather than anticipated. **(a) An AMC name can
+    contain brackets.** `IL&FS Mutual Fund (IDF)` is an AMC, and a header test that looked only for a
+    parenthesis read it as a category — **2,535 rows, 18% of the file, silently inheriting a category
+    that does not exist**. Nothing threw and the row count stayed correct; only counting rows per
+    category on the real file exposed it, which is B-113's rule (*run a new verdict over real rows and
+    look at the spread before shipping it*) catching its own author. **(b) Growth vs IDCW is a units
+    error**: an IDCW NAV is reduced by every distribution, so its CAGR understates the fund and
+    comparing it to a Growth series compares two scales (B-047's family). Growth only; IDCW is
+    `NOT_MEASURED`, never a low reading — and a label naming *both* a distribution and growth is IDCW,
+    Gotcha 53 in the positive direction. **(c) ISIN is not unique** — five collisions — while the
+    scheme code is; since the broker returns the ISIN as its `tradingsymbol`, that lookup is Gotcha
+    107's first-hit-wins hazard and records which row answered. **(d) A month-end date must snap to a
+    business day**: a Saturday returns 482 rows against 10,061, and a naive backfill would produce a
+    history reading as *"these funds have no record"* (B-054). I walked into that one twice while
+    measuring.
+
+    **And the real universe is 571 schemes, not the 14,375 rows in the file** — 4,711 are dead
+    close-ended fixed-maturity plans and most of the rest are IDCW and Regular-plan clones.
+    Persisting all of them would make every category listing three copies of one fund. Measured after
+    the merge: Contra has **4** schemes and is permanently below any sane peer floor, which is the
+    kind of thing worth knowing *before* writing the service that would publish a quartile over it.
+
+140. **Two dates, two keys, or the freshness strip lies in one direction or the other** (SPEC §52.6,
+    B-119's rule generalised). A mutual fund has exactly one price a day, struck after the cut-off and
+    published around 23:00, so the 12:30 pull necessarily carries the **previous** business day's NAV.
+    That is not stale data — it is the only data that exists at that hour, and no slot inside the §3.4
+    window could ever see today's. But it means `nav_date` (the date of the **value**) and
+    `last_pulled_at` (when the **job** ran) diverge by design. Stamp the strip with `nav_date` and a
+    Monday pull reads *"3 days ago"* and the reader concludes a healthy job is broken; stamp the
+    figures with `last_pulled_at` and Friday's NAV is labelled as today's. A market holiday moves one
+    and not the other, which is the third reason they cannot be merged. So: `fundNav` reads
+    `last_pulled_at`, every rendered NAV separately carries "NAV as of …", and **an unchanged
+    `nav_date` between two pulls is never reported as an error** — there is no NSE holiday calendar in
+    this JVM (Gotcha 106a). Same family as Gotcha 130: a value stored as a date must be reported as a
+    date.
+
+141. **A field count is not a format, and the tell was a number being too small** (B-130,
+    SPEC §52.7). AMFI serves the daily file and the historical report with the **same eight
+    semicolon-separated fields in different orders** - the first and last two agree, and the scheme
+    name, both ISINs, the plan and the option all move. A parser reading fixed positions therefore
+    keeps producing rows with a correct scheme code, a correct NAV and a correct date, and a
+    scrambled everything-else. The first month-end backfill reported **6 months fetched, 0 failed,
+    ~1,900 equity schemes counted per month** and wrote **four NAV points per month** where 275 were
+    due, because `isScreenable()` was reading ISINs as plan names. Nothing threw; no status code was
+    wrong. Field positions are now read from the file's own header line **by column name**, a file
+    with no header **reports its layout as assumed** rather than presenting it as a fact, and
+    `REINVEST` is tested before `GROWTH` because `"ISIN Div Payout/ISIN Growth"` contains both
+    words. Fourth instance of one shape (B-047 a quarter filed as a year, B-060 an RSI whose window
+    could not reach its period, B-120 a per-share delta summed as money): **a figure that is
+    structurally wrong while every mechanism reports success.** Had the wrong number been plausible
+    rather than absurd it would have shipped - which is the argument for B-113's rule, look at the
+    figure before believing the status code.
+
+142. **Two traps in a month-end backfill, and the second is the opposite of the first** (SPEC
+    §52.7). **A weekend month end returns an almost empty file** - `30-Jun-2018` is a Saturday
+    and returns 481 rows, **8 of them equity**, against ~9,500 and ~1,700 on the neighbouring
+    weekday; parsed as a real observation it states that the entire equity universe has no NAV that
+    month (B-054). So `MonthEndCalendar` never asks about a weekend at all. **But a weekday month
+    end can be short and still be good**: `30-Apr-2018` is a Monday returning 3,271 rows against
+    9,553, which reads as the same failure - and its **equity** rows are 1,687 against 1,707, the
+    missing ~6,000 being debt schemes. The first acceptance rule tested total rows and would have
+    discarded a good month, shortening every fund's record by one observation invisibly.
+    `NavFileAcceptance` tests **equity rows only**, at a threshold sitting in a measured gap two
+    orders of magnitude wide (good days 1,687-2,377, the bad day 8) rather than on an assumption
+    about market size. And `mf_history_fetch` exists so **four facts stay distinct**: fetched, not
+    published (asked and silent - a finding), failed (the only real gap), and absent from the table
+    entirely (never attempted). All four look identical in `mf_nav_history` as an absence of rows,
+    and an absence of rows is exactly what the survivorship ledger reads (Gotcha 102's rule, with
+    teeth).
+
+143. **Count windows, never average them - and the window count is not the sample size** (SPEC
+    §52.8). Gotcha 103 (*count years, never average them*) moved from years to rolling windows,
+    plus a trap it does not have. An **average** excess return lets one spectacular window carry a
+    decade, which is how every fund factsheet in the country is built; `RollingWindowRecord` counts
+    the windows a fund was ahead in, at `REQUIRED_SHARE = 0.70`. But §43 counts *years*, which
+    are independent, and **monthly rolling windows are not**: ~100 months of history gives ~60
+    three-year windows and **two independent ones**. So `windowsMeasured` and `independentWindows`
+    are always reported together, **no significance language is produced anywhere**, and the word
+    *consistently* is withheld below two independent windows - which means the five-year rolling
+    record **cannot exist yet**. Reading the window count as a sample size is Gotcha 92 in a new
+    asset class, and B-122 is what it looks like when it reaches a landing page. Two more rules
+    travel with it. **The peer median is asked window by window, never built into an index series**:
+    an index needs a base month, which silently drops every peer that did not exist then and tilts
+    the comparison toward long-lived survivors. And **the TRI haircut is a win condition, not a
+    subtraction** - a price index understates the benchmark by the dividend yield, so excess return
+    against one is overstated *in the fund's favour*; the raw excess is published and the haircut is
+    the bar a window must clear. A peer median gets **no haircut**, because both sides are NAVs net
+    of their own costs and applying one would invent a penalty.
+
+144. **When the obvious cost signal is walled, the cheaper share class is the measurement** (SPEC
+    §52.8). AMFI publishes no machine-readable expense ratio - the page is a React shell with
+    per-AMC downloads and no endpoint. But the Direct and Regular plans of one scheme are **two
+    published NAV series over a single identical portfolio**, differing only by the commission paid
+    out of one of them, so the gap between their compound rates **is** the distributor commission,
+    per fund, per year, from a free file. That is the B-018 move (NSE walled `/api/quote-equity`, so
+    price-to-earnings was computed from filings instead). Three things keep it honest. The two plans
+    share **no scheme code and no ISIN, only a name**, so `SchemeTwinKey` pairs them and is
+    deliberately strict - a **missed** pair costs one unmeasured commission reported honestly, a
+    **wrong** pair publishes the gap between two different portfolios as a commission. A Regular
+    plan with no twin on file reads `REGULAR_PLAN_NO_TWIN`, **never zero drag**. And it is **not a
+    second cost penalty**: a NAV is already net of expenses, so an excess return measured from NAVs
+    has paid for the commission once already. It stops at the fact - naming the drag without naming
+    that moving plans is a redemption plus a purchase, taxable and possibly exit-loaded, reads as
+    advice, so the caveat is mandatory and the arithmetic is refused.
+
+145. **A rule that holds by construction over the set you built may not hold over the set you were
+    given** (B-131, SPEC §52.8). The screenable fund universe is Direct-**Growth** by
+    construction, so every invented test case was a Growth series and every one passed. What the
+    investor actually owns is not constrained that way — and the first live run measured an
+    **IDCW Payout** ELSS holding against Growth peers, reporting it `BEHIND_BENCHMARK` at **-2.34
+    points** across 47 of 66 windows. Under the Income Distribution option the fund pays money out
+    and **its NAV drops by the amount paid**, so an IDCW series records the return *after* every
+    distribution while its peers record it before: two different quantities that look identical on
+    screen. The bias has a direction — IDCW always reads **worse** — so the failure is a
+    fund the investor holds being called a laggard when it is not. `SeriesComparability` now checks
+    before anything is measured, and an **unresolved** option is refused too, because
+    probably-Growth is exactly the assumption that yields a confident wrong number (Gotcha 68).
+    Fifth instance of one shape, after B-047, B-060, B-113 and B-120. Two rules travel with it.
+    **The archive fills a blank plan or option and never overwrites a resolved one** — the daily
+    file leaves both columns empty for a held fund whose name carries no plan words, while the
+    historical feed names it in full, and a share class is immutable so filling a blank is safe
+    where overwriting a category would not be. And **a coverage line must count as many states as
+    its rows draw**: `holdingsMeasured` tested only for `NOT_MEASURED` and so reported three of six
+    holdings measured when one carried a verdict, sweeping two `NOT_COMPARABLE` rows in with the
+    real one (B-117 again). The general rule, and the third time it paid in one session: **run it
+    over the real book, not the universe you constructed.**
+
+146. **A payload that grows a new kind of row needs a renderer case in the same change, or the
+    feature is complete by every test and invisible to the only person it was built for** (B-132,
+    SPEC §52.12). `computeDrift()` appended four `ASSET_CLASS` buckets - **equity funds 61.9%,
+    direct shares 25.6%, hybrid 10.7%, cash 1.8%** - and `page-holdings.js` ended its renderer with
+    `group('SECTOR'), group('MARKET_CAP')`. So the app *held* the finding that it had been
+    presenting a quarter of this portfolio as the whole of it, put it on the wire, and drew none of
+    it. **Second instance of B-099**, and the un-drawn half was the headline finding of an entire
+    module. Two smaller faults sat underneath: `group()` picked its heading with a **two-way
+    ternary**, so a third bucket type would have been labelled "By company size" (B-098 again), and
+    `DriftResponse` carried the percentages without `combinedTotalValue`, `cashMeasured` or
+    `unclassifiedFundWeightPercent` - so an unclassifiable fund would have **left the buckets with
+    nothing to explain the shortfall**, the percentages quietly failing to sum to 100 and reading as
+    a smaller portfolio (B-054, B-096).
+
+    **Two denominators on one screen are safe only when each is named.** Everything else on My
+    Portfolio - the sector mix, HHI, the single-stock cap, the drift rows - is denominated in the
+    **equity book**, deliberately and permanently (§52.5: a 16% position is a 16% bet on one
+    business whatever share of combined wealth it is, and rescaling it deletes a risk control by
+    arithmetic). Without the asset-class block on screen the reader cannot know that, and every one
+    of those figures reads as a share of everything they own - B-047's family across a whole screen
+    rather than in one cell. So the new section leads, *above* the sector mix and the concentration
+    score, names both totals in rupees, and the two headings beneath it were reworded from *money*
+    to *shares*.
+
+    **Found in the same pass, and worse than it sounds** (B-133): the drift heading filtered on
+    `b.status === 'OVER_TOLERANCE'` and the field is `alertLevel`, so it had printed a green
+    **"On target"** since it shipped on a portfolio where all nine buckets were breaching. There is
+    no build step for `static/js/**`, so an undefined property is not an error. Since §27.15 folded
+    every section by default the heading is the **only thing the reader sees**, which means a
+    summary that cannot disagree with itself does not merely fail to warn - it reassures.
+
+    **And on a refusal, the reason is the content.** The first render put "Nothing to compare
+    against" in a badge with its explanation in a `title` tooltip. A refusal the reader cannot
+    evaluate is worse than a gap, and the reader most likely to act on a fund page is the one least
+    likely to hunt for the caveat (§51's on-screen-not-in-a-tooltip rule). `NOT_COMPARABLE` and
+    `NOT_MEASURED` now draw their sentence at full weight - and are suppressed when both readings on
+    one panel would print the identical paragraph twice, which is what teaches a reader to skip both.
+
+    Process note: **four defects on that page were found by rendering it, not by reading it** - the
+    sample-size note printing the code identifiers `windowsMeasured` and `independentWindows` at a
+    reader who is explicitly not a market professional (§21 rule 1); the survivorship figure shown
+    where no peer comparison had been made, so *"0% of the category gone"* over three index funds
+    read as a finding; the same caveat printed twice on one panel; and the tooltip above. Gotcha
+    89's rule, again: a layout change needs a look, not just a number.
+
+147. **A band boundary must be coarser than the resolution of the data behind it, and the investor
+    asking for a ranked list is how this got measured at all** (SPEC §52.13, §52.14, 2026-09-20).
+    Asked for "the good funds to buy", SPEC §52.11 refuses to produce one — and quoting a non-goal
+    at someone is not an argument. So the claim was measured on this investor's own market instead:
+    split the month-end archive in two, rank every fund inside its SEBI category over 2018-04→2022-06,
+    and see where it landed over 2022-06→2026-08. **8 of the 40 funds in the best quarter of their
+    category were still there in the second window — 20% against 25% by chance, rank correlation
+    0.085.** The refusal now rests on Indian data, and `GET /api/mf/persistence` is deliberately the
+    thing that would reopen it if a later run read the other way. **When a written non-goal blocks
+    what someone asked for, measure the non-goal before defending it.**
+
+    **The design defect the live run caught is the general lesson.** The first run returned
+    `REVERSAL` — a directional claim about whether fund managers have skill — from a gap of **two
+    funds**, because a fixed 5-point band is two funds wide when the top quarter holds forty. The
+    band floor is now the larger of the fixed threshold and **three funds' worth of the actual
+    sample**, and both the resolution (2.5 points per fund) and the floor (7.5) are published beside
+    the verdict. This is Gotcha 88's fourth rule — *a collapse threshold belongs to a scale* — applied
+    to a percentage whose scale is set by how many funds are in the top quarter. Same shape one level
+    down: per-category top quarters hold **3 to 7 funds**, so one fund moving swings a share by 14 to
+    33 points, and the table publishes **counts only** ("1 of 7"), never a percentage. On this archive
+    no category clears the floor, which is itself the finding — only the pooled figure is supportable.
+    Third instance in the same pass: a tracker comparison over **8 active funds** read "8 of 8 = 100%"
+    until `MIN_ACTIVE_FOR_SHARE` withheld it.
+
+    **Survivorship is counted, never caveated** (§52.9 with teeth). A fund that was top quartile and
+    then merged cannot appear in the second table at all, and the funds that vanish are
+    overwhelmingly the ones that stopped working — so every figure here is published as a **range**,
+    the naive one over survivors and a lower bound treating the vanished as failures. In the tracker
+    comparison that is the difference between *79% of large-cap funds beat the Nifty 50* and **66%**
+    once the five that wound up are counted. The second number is the honest one and the UI draws it
+    underneath the first, not in a tooltip.
+
+    **No p-value, t-statistic or significance language is produced anywhere**, and the reason is
+    Gotcha 92 in a new asset class: forty funds in one category hold heavily overlapping stocks, so
+    they are nothing like forty independent draws, and one split is *one* observation. A binomial
+    test over correlated funds returns a confident number that means nothing. **And the caveat
+    naming the bands must name the bands actually in force** — the first version quoted the fixed
+    constants (40% / 30%) while the resolution guard had widened the weak band to 32.5%, which is
+    B-117's shape in prose and Gotcha 126(l)'s lesson exactly: a caveat describing a different system
+    from the one running is worse than none.
+
+    **Index funds are the yardstick and were invisible** (§52.14). `isActivelyManagedEquity()`
+    excluded them — correctly for *measurement*, since a tracker is judged on tracking difference
+    rather than excess return over peers, and disastrously for *comparison*: no scheme row, no NAV
+    history, nothing on screen, while the investor held three of them out of six holdings. The fix is
+    a second, wider predicate: `AmfiSchemeRow.isTrackable()` persists them and gives them history
+    while `screenable` stays **false**, so no peer median, percentile or coverage count moves — peer
+    sets filter on `screenable` *and* category, and `INDEX_EQUITY` is its own category. Verified
+    live: 643 → **682** schemes persisted, `screenableSchemes` unchanged at **637**. Same safety
+    property as leaving `computeActualWeights()` alone in §52.5. ETFs are deliberately still out: an
+    ETF's NAV is not what you would pay for it.
+
+    Three rules keep the name-based index mapping safe, and they are §51.10's rules: **phrases, not
+    words** (`NIFTY 50`, never `NIFTY`, which would map a smallcap tracker to Large Cap);
+    **an exclusion list checked first**, because `NIFTY 50 EQUAL WEIGHT` and `NIFTY 50 VALUE 20`
+    both contain `NIFTY 50` and are different indices (Gotcha 53, positive direction); and **every
+    matched fund name is published** so a bad match can be rejected at a glance. Categories with no
+    honest tracker — Focused, Value, Contra, Dividend Yield, ELSS, Sectoral/Thematic — are refused
+    **by name with a written reason**, because an empty column reads as "nothing to report".
+
+    **And the window is per category, and stated.** Measuring the tracker comparison over the whole
+    archive could answer for exactly **one** category, since trackers outside large caps are mostly
+    post-2021 launches. The fix is not to relax the comparison but to shorten the *window* and print
+    it — both sides then measured over identical dates, with only the depth of history changing.
+    That took it from one category to six. Stretching an eight-year active record against a
+    three-year tracker record instead would have been B-047's family again.
+
+148. **Adding a value to a persisted enum is a schema change, and Postgres will enforce last
+    month's version of it** (B-135, 2026-09-20). When Hibernate creates a table for an
+    `@Enumerated(STRING)` column it also writes a `CHECK` constraint listing the enum members
+    **that existed that day**, and `ddl-auto=update` never rewrites it - the fourth face of
+    Gotcha 74, after "does not reliably add a declared column", "never relaxes a NOT NULL" (B-026)
+    and "never alters an existing column's type" (B-116). `SebiCategory` gained eighteen debt and
+    seven hybrid members for §52.15, and the next NAV pull died on
+    `mf_scheme_category_check` with **1,509 scheme writes rolled back** and even the
+    failure row unwritable (`current transaction is aborted`). Nothing in the application was
+    wrong: the parser resolved every header, the predicate kept the right rows, the entity carried
+    the right values. The table simply remembered an older version of the enum.
+
+    Worse than B-116 in one respect. That failure began the day a particular third-party string
+    outgrew a column, so it was at least tied to an external event. This one begins the moment an
+    enum gains a member - a routine code change nobody would connect to a database error days
+    later - and the scheduled job catches its exception and carries on, so it presents as a
+    freshness stamp that has stopped moving while every job reports success.
+
+    `SchemaMigrationRunner.dropStaleEnumCheckConstraints()` drops them. Three things are
+    load-bearing. **Dropped, not rewritten** - regenerating the value list on every enum change is
+    a second thing to keep in step, and a stale hand-written constraint fails in exactly the same
+    silent way, while the enum is already enforced in Java on the way in (Gotcha 85). **The
+    constraint name is read from `pg_constraint`, never guessed** - Hibernate's naming has changed
+    across versions and a guessed name that does not match fails *silently*, leaving the real
+    constraint in place and the symptom unchanged, which is the worst outcome a fix can have. And
+    **the batch save is why it was total**: `persist()` ends in one `saveAll`, so one rejected row
+    discarded everything, which is B-128's lesson learned on the IPO capture and not carried here.
+
+149. **The one decision this app is willing to make is the one that needs no forecast** (SPEC §53,
+    §52.16, 2026-09-20). Asked where to put money needed in six months, and asked for goal-based
+    planning, the tempting answer is a fund recommendation - and every refusal in this codebase
+    says no, because §52.13 measured on this market that a fund's past ranking carries no
+    information about its next one, §39.5 deleted a whole feature rather than forecast direction,
+    and §25 deleted three engines that scored themselves. **But the split between equity and debt
+    for money with a date on it is different in kind.** It needs no view on the market at all: it
+    follows from one fact the investor supplies, which is when they need the money, and one fact
+    the app can measure, which is what the worst stretch of that length actually did. So `goals.html`
+    will say *"this money should not be in shares"* and mean it, while still naming no fund and no
+    stock. **When a refusal is blocking something useful, check whether the useful part needs the
+    thing being refused** - §52.13 was reached the same way, by measuring a non-goal instead of
+    quoting it.
+
+    Four rules hold the line between that and advice. **A stated rule is printed, not buried**:
+    the equity ramp is a judgement with no cross-section to calibrate against (§43.4), so it is
+    shown in full on its own screen and beside it sits the thing that *is* measured - the worst
+    window of exactly that length in the fund archive, and what it would have done to the split
+    proposed. **The headline monthly figure assumes the money earns nothing.** Every goal
+    calculator in the industry takes an expected rate and quotes a figure to the rupee; change 12%
+    to 9% and the answer moves by a third, so the precision is borrowed from an assumption nobody
+    can check. The zero-return figure is arithmetic on two numbers the investor supplied, cannot be
+    wrong, and is a genuine upper bound - anything earned is then a reason the goal lands *early*.
+    It rounds **up**, because rounding down produces a figure that does not reach the goal.
+    **A positive debt window may not offset a negative equity one**: the worst equity window and
+    the best debt window did not happen at the same time, so the debt leg is floored at zero and
+    only a real debt fall counts. And **there is no seeder** - B-121 put ten permanent drift
+    warnings on the landing page against targets nobody chose, and here the equivalent of
+    `targets_stated` would be the constant `true`, so the rule is enforced by the absence of a
+    writer rather than by a column.
+
+    On the fund side the same split runs through §52.16: `HorizonFit` is SEBI's own mandated
+    duration bands, which is regulation and does not decay the way a ranking does, and
+    `CategoryDownside` is what actually happened, which is the only evidence that could contradict
+    it - and did, twice, on funds sold as safe. Three details worth keeping. **The two ways of
+    being wrong are not the same mistake**: a liquid fund held for a ten-year goal gives up return
+    for safety nobody is using, a gilt fund held for six-month money can lose the money, and only
+    the second is amber. **A downside figure is a floor on how bad it got, not a ceiling on how
+    bad it can get** - a fund that failed outright was merged away and left the record - so that
+    direction rides on the cell rather than sitting in a footnote. And **the return is over the
+    whole window and never annualised**, because multiplying a three-month fall by four states a
+    loss nobody had (B-047's family, fourth guard).
+
+    **Two defects the live run caught, both invisible in review.** First, the goal planner's
+    "worst stretch on record" was assembled from the equity leg's worst window and the debt leg's
+    worst window mixed by weight - two numbers describing **different months**, so it described a
+    portfolio nobody held. It failed in both directions at once: an all-debt goal read exactly
+    **0.0%** at every horizon, a constant on screen where a measurement should be (B-060's
+    signature), because the debt leg had to be floored at zero to stop a good bond year flattering
+    a bad equity one, so the floor was doing the work rather than the data.
+    `CategoryDownside.measureBlend` now walks each window once and prices **both legs over the same
+    months**. Second, the fixed figure is usually a **gain** - a 30/70 split over three and a half
+    years reads +32.3% - because this archive starts in April 2018 and holds one crash that
+    recovered inside a year. A column headed *worst stretch on record* showing a gain, unlabelled,
+    is the most flattering failure the page could produce, so the positive case is named in the
+    cell, in a paragraph under the table and in the sentence itself. **Run a new verdict over real
+    rows and look at the spread** (B-113) - third time it has paid in this module.
+
+    **And the archive outgrew the page-load budget, which was fixed before it crossed the line.**
+    `mf_nav_history` went from ~13,500 rows to **50,333**, and `GET /api/mf/horizon` measured
+    **4.2 s** against `api.js`'s 8 s timeout while still three-quarters back-filled - B-115's shape
+    exactly, a cost that grows every week with nothing failing to mark the moment. Two things worth
+    keeping in `MonthEndSeriesCache`: it is **one** cache read by both the horizon screen and the
+    goal planner, because it is one body of data (Gotcha 97, moved from the broker to the
+    database); and its version token is the row count, which cannot see a row **corrected** in
+    place, so the backfill - the one path that does that (B-130) - invalidates it explicitly.
+    Measured after: 0.95 s cold, 0.10 s warm.
+
+    The honest short-horizon answer also turns out not to be about funds at all, which is why
+    `HorizonFit.realities()` prints above the table: debt and hybrid gains bought after 1 April
+    2023 are taxed at slab rate whatever the holding period, most equity funds charge about 1% to
+    leave inside a year, ELSS locks **each instalment** for three years (so the honest floor is
+    five, not three), and **under three months the comparison is between a fund and a bank sweep
+    account** - a few hundred rupees on a lakh. The module is built to be able to say that.
+
+150. **"Strong for its sector" explains a verdict; it never rescues one** (SPEC §54, 2026-10-11).
+    Asked whether the app is sector-aware, the honest answer was *in how it measures, not in how
+    it judges*: sector picks the P/E median, the lender treatment and the not-applicable gates,
+    but every quality bar compares against the whole market. **The gap was measured before
+    anything was designed, and it was not where expected.** The 18% ROCE bar is fair across
+    sectors - only 2 stocks are top-quartile in their sector yet fail it. The divergence is in
+    **steadiness and margin trend** (capital goods fails steadiness on 33 of 40, sector median 22.5
+    against IT's 50) and in the **lender ROA bar** (banks fail it 16 of 20). A sector-relative ROCE
+    lens, the obvious build, would have changed almost nothing. **Measure where the unfairness is
+    before deciding what to rank.** Four rules travel with it. **(a) It sits beside §41 and never
+    moves it** - being best in a low-return sector does not beat the cost of capital, so the lens
+    names the disagreement (Gotcha 105) and a test asserts the compounding result cannot change a
+    quartile. **(b) Gross margin is not ranked**: it reads exactly 100.0 for 54 stocks that report
+    no cost of goods, so a rank on it ranks a missing line item - check what a field reads across
+    the cross-section before ranking on it (B-113's rule). **(c) FINANCIALS is refused, not
+    ranked**: NSE files AMCs, registrars and wealth managers under "Financial Services", the
+    lender detector's `financ` pattern catches them, and CAMS (ROA 26%) would be ranked against an
+    NBFC at 2% - B-136, logged rather than fixed because separating them moves composites.
+    **(d) A refusal is not "not measured"**: `NOT_RANKED` (looked, no peer group could rank it)
+    draws a neutral badge, while a missing reading draws the striped marker (Gotcha 121). Found in
+    passing (B-137): `.positive` / `.negative` are used by four renderers and defined nowhere
+    except under `.summary-card`, so the compounding checklist's pass/fail ticks have drawn in body
+    colour - Gotcha 104's shape again. The text classes that exist are `.pos` / `.neg`.
+    **An independent review the same day found three defects in the lens itself, and the lesson is
+    about the test, not the code.** The tie rule did the opposite of its own Javadoc (B-138), and the
+    test named for it passed because its one case gave the same answer under both rules. **A test
+    for a rule must include a case where the rule and its plausible alternative disagree** - the
+    replacement uses the live IT debt distribution, where seven companies tie at zero. The other
+    two: ENERGY ranked power utilities against oil and gas (B-139, now split inside the lens only,
+    because allocation drift reads `SectorMapping`), and the cache keyed on a row count a
+    delete-then-save never moves (B-141).
+
+
+151. **"Fix it in the lens" leaves the same bug alive in every other place that asks the question**
+    (2026-10-11 whole-app review, SPEC §55). B-092 gave the compounding lens a lender exemption and
+    stopped there, so the forensic screen, the capital-efficiency bonus and interest coverage went
+    on scoring a growing loan book as "profit that never became cash" and an NBFC's interest bill
+    as distress - 18 lenders sat at AVOID and three at the 54 cap for being lenders (B-144). The
+    lender test itself existed in **five copies** of one regex, and the one that mattered (fee
+    financials, B-136) could not be fixed in any of them alone. Same shape three more times in one
+    review: the holdings emails were the one read path `SignalReconciliation` never reached (B-151);
+    the DCF benchmark B-113 had already fixed on the plausibility panel was still a single quarter
+    on 272 of 272 screening rows (B-145); and "first spelling that has any row" (Gotcha 107) was
+    fixed for the compounding lens and not for buy-timing or core tiering, where a six-month-old
+    BSE row decided four verdicts (B-150). **When a fix answers "who is a lender" or "which row
+    is current", grep for every other place that answers it and route them through one function.**
+    Three smaller rules from the same pass. **A measured cut beats a named list**: fee businesses
+    were separated from lenders by equity / assets, with a gap from 0.34 to 0.67 across the whole
+    cross-section, not by company name. **"Last read" is not "last written"**: a news run that
+    finds no event writes no event row, so freshness must be stamped on what was *read*
+    (`macro_extracted_at`), or a working reader looks dead. And **compute-to-decide needs an
+    endpoint**: `POST /api/multibagger/evaluate` is how every scoring change here was verified on
+    real stocks on a Sunday without writing a single score row.
+
 ## REST API Endpoints
 
 **Dashboard UI** (SPEC §27 — all read-only, fast, DB-only; safe to call on page load):
 - `GET /api/dashboard/compounding?symbol={sym}` - **"Can this business compound?"** (SPEC §41): the five-gate verdict, every gate with its figure, and how many years of accounts back it. DB-only. 404 when the stock has never been screened - the caller renders "never screened", never a zero. Since 2026-09-07 this and the screener column both read through **`CompoundingLensService`**, which also decorates every holdings row (`compounding*` `@Transient` fields) and fills the same five components on `WatchlistItemView` (2026-09-09) — one lookup, **four** surfaces, one renderer (`compoundingCell`), nothing to drift (SPEC §41.5). The field names are a wire contract with no compiler behind it, so `CompoundingSurfaceContractTest` asserts them
+- `GET /api/dashboard/sector-standing?symbol={sym}` - **"How does it compare with its own sector?"** (SPEC §54): each of six figures (ROCE, ROA, ROE, cash conversion, debt-to-equity, steadiness) with the sector median, peer count and quartile, every refusal with its reason, and the sentences naming where it disagrees with the compounding lens. DB-only, page-load safe. **404 = not in the latest screening run; 200 carrying `NOT_RANKED` = screened, but no peer group could rank it.** The same five `sectorStanding*` fields ride on screener/discovery rows, holdings and the watchlist through one reader (`SectorStandingService`) and one renderer (`sector-standing.js`). Zero points to any score.
 - `GET /api/dashboard/data-health` - **every automated check the app runs on itself** (SPEC §44): is each table as new as its own cron says, was each scoring signal actually measured and does its answer vary, **is the insider feed still delivering** (B-089), and is the annual-accounts backfill still moving. Returns every check including the ones that passed, plus the three things it cannot check. DB-only but heavier than its neighbours (resolves the whole screening universe) - one deliberate screen, `health.html`, never a strip.
 - `GET /api/dashboard/health` - server time, market-open flag, per-table data freshness (drives the freshness strip on every screen, and the **refresh control** sitting in it — SPEC 27.12, Gotcha 116: it re-reads, never re-runs, and reports whether any stamp actually moved)
 - `GET /api/dashboard/summary` - landing-page aggregate: portfolio KPIs, risk headline, accuracy headline, merged attention list
@@ -1419,7 +1836,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `GET /api/dashboard/series/holding?symbol={sym}&days=180` - per-stock time series from `holdings_history`
 - `GET /api/dashboard/series/portfolio?days=180` - portfolio equity curve (invested / value / P&L per date)
 - `GET /api/dashboard/series/matrix?days=90` - every symbol in one query, for table sparklines
-- `GET /api/reports/{name}/preview` - returns the **actual report HTML** (`text/html`) for on-screen display instead of emailing it; 15-minute server-side cache. Names: `holdings-actions`, `holdings-analysis`, `holdings-weekly`, `morning-briefing`
+- `GET /api/reports/{name}/preview` - returns the **actual report HTML** (`text/html`) for on-screen display instead of emailing it; 15-minute server-side cache. **Not DB-only** (B-155): a holdings build makes ~74 live NSE calls and takes minutes, so it is click-only, and concurrent requests for one report now share a single build. Names: `holdings-actions`, `holdings-analysis`, `holdings-weekly`, `morning-briefing`
 - Note: `symbol` is a **query parameter** throughout, never a path variable — symbols contain a colon (`NSE:RELIANCE`), which is a legal-but-hazardous path character across Tomcat/Spring/`fetch()`
 
 **Trading**:
@@ -1461,6 +1878,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `POST /api/multibagger/screen` - Run full screening now (manual trigger)
 - `GET /api/multibagger/screen/{symbol}` - Screen a single stock (e.g., `/api/multibagger/screen/NSE:RELIANCE`)
 - `POST /api/multibagger/report` - Send multibagger report email now
+- `POST /api/multibagger/evaluate?symbol=NSE:X` - **Compute one stock's full score without publishing it** (SPEC §55.7): no screening row, no recommendation (Gotcha 50). The way to check a scoring change against real stocks before the next 14:00 run rewrites the table. ~2 paced Kite calls + NSE fetches. Refused 14:00-15:30 and without a broker session (409 with the reason; right after a restart the login may not have finished yet).
 - `POST /api/multibagger/screen-unscored?limit=60&maxMinutes=12` - **Score every universe symbol with no row on the latest screening date** (SPEC §12.13). Closes the gap between "added to the universe" and "has a score" without waiting for 14:00. Writes, so POST; ~2 paced Kite calls per symbol. **Refused 14:00-15:30 on a trading day and without a valid token, 409 with the reason in the body.** Reports **four** outcomes and never collapses them: `scored`, `tierRejected` (measured, then excluded by the small/micro-cap gate - a decision, not a gap), `failed` (the only real gap), `notReached`.
 - `GET /api/multibagger/trend/{symbol}?days=30` - Score trend history for a stock
 - `GET /api/multibagger/history?date=2026-03-15` - Historical screening results for a date
@@ -1503,6 +1921,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `DELETE /api/fundamentals/history?symbol=NSE:X` - Wipe a symbol's imported history for re-import. **Now the only way to correct a wrong imported figure**: the CSV re-import merges non-null only, so it can add but never overwrite (the B-046 fix applied to the import path).
 - `GET /api/fundamentals/long-horizon?symbol=NSE:X` - **The capital-allocation record (SPEC §42) and the compounding track record (SPEC §43)** in one response, with `yearsOfAccounts`, the resolved symbol and a coverage note. DB-only, dashboard-safe. Returns `NOT_MEASURED` rather than 404 when there is no history — "not backfilled yet" and "poor record" must never render alike. **Contributes zero points to any score.**
 - `GET /api/fundamentals/coverage` - **How deep the universe's annual history is** (SPEC §32.6): depth histogram at ≥3/4/5/8 years, status counts, symbols still pending, and the `UNAVAILABLE` list that needs the CSV fallback. DB-only. This is the instrument for the rollout — composites move while it runs.
+- `POST /api/fundamentals/backfill-gaps?limit=` - Fill the integrated feed's older year-end filings (in practice FY2025) that neither the archive nor the screening reaches (B-166, SPEC §55.4). The 11:30 job runs it after its batch. Live NSE calls, same refusal and deadline; a tried symbol is stamped and never re-queued.
 - `POST /api/fundamentals/backfill-universe?limit=` - Run one backfill batch now instead of waiting for 11:30. Live NSE calls, same 09:40-10:15 refusal, and it stops at its own `stop-after` deadline regardless of `limit`.
 
 **Concall & Management Quality** (SPEC §34):
@@ -1618,6 +2037,79 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `GET /api/themes/candidates?months=36` — **the other half of the gap list** (SPEC §51.10): businesses the *market* has that the map has never named. Proposes, never writes — each row carries the word that matched the company name so it can be rejected at a glance, and the response carries its **own measured hit rate** so a short list is not read as "nothing new listed". Themes with no diagnostic name (Pharma APIs) are named rather than silently empty. The map also carries a parsed `# REVIEWED:` date, checked on the data-health screen and **never escalated past WATCH** — nothing schedules a classpath file (SPEC §51.9, Gotcha 125).
 - Dashboard: `themes.html` ("Themes" in the nav, loads the two GETs only); a `Theme` column on portfolio / watchlist / discovery and behind a width toggle on the screener, all through `static/js/theme-cells.js`; freshness key `multibaggerScores` (the map itself is a classpath file with no freshness at all).
 
+**Mutual Fund Record** (SPEC §52) — the namespace is **`/api/mf`, not `/api/funds`**: both were free, but `/api/funds` sits three characters from the existing `/api/fundamentals` (annual accounts, forensics, turnarounds), and two unrelated features whose paths differ by a suffix is Gotcha 118's hazard pointed at whoever maintains this next. Nothing here contributes a point to any score, and there is no field to flip:
+- `GET /api/mf/holdings` — the funds held on Coin: scheme, category, units, average NAV, latest NAV **with its date**, invested, current, P&L, and which lookup resolved the scheme. DB-only, page-load safe. Positions whose broker cost basis is `0.0` report invested value and gain as **not measured**, never as a total gain — units transferred in are *cost unknown*, not free.
+- `GET /api/mf/scheme?code=` — one scheme and its stored NAV series, with `measurable` and the count of points behind it. 404 when never persisted. DB-only.
+- `GET /api/mf/coverage` — the five denominators that keep the rest honest: schemes in the file, persisted, with enough history, owned funds resolved, and **unclassified AMFI headers by name**. DB-only.
+- `POST /api/mf/nav/refresh` — run the 12:30 pull now. Not a broker call, but a multi-second parse plus thousands of upserts on the 4-thread pool that has starved the afternoon twice, so **refused from 14:00 with a 409 carrying its reason**.
+- `POST /api/mf/holdings/sync` — read the broker's `/mf/holdings` now. One paced call, so **refused from 14:55**.
+- `GET /api/mf/portfolio` — **every fund the investor holds, measured** (SPEC §52.8): the
+  record over rolling windows against its own SEBI category counted-not-averaged, where it sat
+  inside that category, what the plan costs, and the survivorship the peer median is flattered by.
+  DB-only, page-load safe. Carries the mandatory coverage line — a holding reading "not measured"
+  is this app's gap, never a judgement on the fund.
+- `GET /api/mf/lens?code=` — the same for one scheme. **404 = never persisted here**, which is a
+  gap in this app's record rather than a statement about the scheme.
+- `GET /api/mf/history` — how deep the month-end archive goes, with **four outcomes never
+  collapsed**: fetched, not published (asked and silent — a finding), failed (the only real gap),
+  and absent entirely (never attempted). DB-only.
+- `POST /api/mf/history/backfill?limit=&force=` — one bounded, paced, resumable pass of the
+  month-end backfill from 2018-04. **Refused from 14:00 with a 409 carrying its reason.** `force`
+  re-attempts settled months and exists for one situation that has already happened once: the
+  parser that read them was wrong (B-130). Re-fetching is safe — a NAV point is keyed on
+  (scheme, date).
+- `GET /api/mf/persistence` — **does picking a fund on its past record work?** (SPEC §52.13). Splits
+  the month-end archive in two, ranks every fund inside its SEBI category over the first window and
+  reports where it landed in the second, plus §52.14's tracker comparison: how many actively managed
+  funds in each category beat the index fund covering the same part of the market, over the longest
+  window both sides share. DB-only and page-load safe, though heavier than its neighbours (every
+  stored NAV point in one bulk query, ranked twice); **no network call of any kind**. Produces no
+  verdict on any fund and names no scheme as worth owning — its subject is the method. First live
+  run: **8 of 40 top-quartile funds held their place, 20% against 25% by chance**, verdict
+  `NO_BETTER_THAN_CHANCE`.
+- `GET /api/mf/horizon?months=&category=` — **where do I put money I need in N months?** (SPEC §52.16).
+  Two different things come back and they must not be read as one. The **fit** is SEBI's own category
+  mandate — what a category is *built* for, which is regulation rather than a forecast and does not
+  decay the way a ranking does. The **downside** is what each category actually did over windows of
+  that length in this app's archive, which is the only evidence that could contradict the mandate,
+  and did twice on funds sold as safe. Four states, never two: `FITS` / `TOO_VOLATILE_FOR_THIS_HORIZON`
+  / `LONGER_THAN_NEEDED` / `NOT_MEASURED`, and the two ways of being wrong are drawn differently.
+  **Ranks nothing and names no scheme as worth owning**; `category` expands one category into its
+  schemes **sorted by name**, carrying each scheme's own *worst* window — a risk reading, not a
+  performance one. DB-only and page-load safe, no network call of any kind.
+- Freshness key `fundNav`, stamped with **when the job ran**, never with the NAV date (see Gotcha 139).
+- Dashboard: **`funds.html`** ("Funds" in the nav, SPEC §52.12) loads the four GETs above and nothing
+  else. Four sections ordered by strength of evidence, not by what a fund site would lead with:
+  what is held with each NAV's own date *in the same cell*; then per fund **what the plan costs →
+  the rolling-window record counted → category standing → whether an index exists → peer
+  attrition**; then the month-end archive's four outcomes; then the category peer counts with an
+  explicit *"can a quartile be published?"* column. `static/js/fund-cells.js` holds every renderer,
+  extracted **before** a second screen existed because that lesson has cost a defect every time it
+  was learned late (B-099): `NOT_MEASURED` draws the striped marker while `NOT_COMPARABLE` draws a
+  neutral badge (Gotcha 121), a fund behind its category is **amber and never red** because red
+  reads as *sell* and two independent windows do not support that, and every badge carries the
+  sentence its verdict was reached on. **No score, no ranking, and no default sort that could be
+  mistaken for one.** `holdings.html` gained **"What your money is actually in"** from the same
+  work (Gotcha 146, B-132).
+
+**Goals — money with a date on it** (SPEC §53) — the one surface in this app that recommends
+anything, and it can because the decision needs no forecast (Gotcha 149). Zero points to any score:
+- `GET /api/portfolio/goals` — every active goal with its implied equity/debt split, the measured
+  worst stretch of that length beside it, the blend across all goals against what is actually held,
+  and the mandatory caveats. DB-only, page-load safe. **An unstated earmark is blank, never zero** —
+  treating "not stated" as zero reports a shortfall equal to the whole goal (Gotcha 21 with a rupee
+  sign on it), so the shortfall and the monthly figure are simply absent.
+- `GET /api/portfolio/goals/rules` — the rule table itself, so the judgement can be read rather than
+  trusted. **No I/O at all**, the same pattern as `GET /api/macro/map` and `/api/learning/variants`.
+- `POST /api/portfolio/goals` — create or update. The investor's own write (§46.7 click-only), and
+  **there is no other writer and no seeder** (§53.3, B-121's lesson taken to its conclusion).
+  **422 with the reason in the body** when the name or the date is missing — the date is required
+  because it is the only thing that makes the question answerable without a forecast.
+- `DELETE /api/portfolio/goals/{id}` — soft delete; the record is kept.
+- Dashboard: **`goals.html`** ("Goals" in the nav, between Funds and IPOs), loading the two GETs and
+  nothing else. Freshness key `fundNav`: nothing schedules a write to a goal, so the only stamp worth
+  reading is the one belonging to the evidence beside it.
+
 **Insider Pulse** (SPEC §28):
 - `GET /api/insider/{symbol}` - Disclosure history + rolling 90-day pulse verdict. DB-only, dashboard-safe.
 - `GET /api/insider/recent?days=30` - All-market disclosures captured recently. DB-only.
@@ -1641,6 +2133,7 @@ Codebase-wide audit on 2026-05-10 and 2026-05-11 added this guard to **every** `
 - `GET /api/accuracy/summary` - Calibration metrics across all engines and horizons (hit rate, mean return, excess vs Nifty, Information Coefficient)
 - `GET /api/accuracy/by-source/{source}` - One engine: MULTIBAGGER / QUANT_DISCOVERY / SECTOR_REVERSAL
 - `GET /api/accuracy/by-symbol/{symbol}` - Recommendation history for a stock (e.g., `/api/accuracy/by-symbol/NSE:RELIANCE`)
+- `GET /api/accuracy/macro` - Macro-exposure readings scored as readings: hit rate = "the reading was right", mean return and excess signed by verdict. They are **not** in `/api/accuracy/summary`, which is picks only (B-162).
 - `GET /api/accuracy/coverage` - **Per-signal coverage vector** for the latest screening run that has rows (SPEC §38.2): measured / not-applicable / not-measured, coverage %, cross-sectional mean & spread, collapsed flag. Answers what an IC table cannot — was the signal weak, or never measured? DB-only, dashboard-safe; rendered on `accuracy.html` below the dimension-IC panel. `?date=` for a specific run.
 - `GET /api/accuracy/coverage/trend?signal=Valuation&days=90` - One signal's coverage over time. DB-only.
 - `POST /api/accuracy/refresh-outcomes` - On-demand recompute of all due outcomes
@@ -2294,6 +2787,69 @@ com.example.trading/
 │                                      # lenses, both pure and both worth zero points: CapitalAllocationRecord
 │                                      # (§42) and CompoundingPersistence (§43), joined to the DB by
 │                                      # LongHorizonRecordService — the only one of the three touching a repo.
+├── funds/              (15 files)     # Mutual Fund Record (SPEC §52): the funds held on Zerodha Coin,
+│                                    # measured honestly. Four pure classes carry the rules —
+│                                    # SebiCategory (the AMFI category alias table, B-096 in a new
+│                                    # feed: every equity category is spelled two ways and
+│                                    # Sectoral/Thematic three), SchemePlanKey (the Growth-vs-IDCW
+│                                    # and Direct-vs-Regular units guards), AssetClass and
+│                                    # SchemeStructure. Sub-package funds/amfi/ holds AmfiNavParser
+│                                    # (also pure, returns an unparsed-line count so a layout change
+│                                    # is loud) and AmfiNavClient (16 MB buffer — the 256 KB default
+│                                    # would make the feature born broken, B-054). Four entities +
+│                                    # repositories, a sync service, a holdings service, the DB-only
+│                                    # view service, the 12:30 scheduler and the controller.
+│                                    # MutualFundAllocationSource implements the portfolio-side port.
+│                                    # Stage 2 (SPEC §52.7-§52.9) adds the measurement half, all pure:
+│                                    # MonthEndCalendar (never asks about a weekend — a Saturday
+│                                    # month end returns 8 equity rows), NavFileAcceptance (the
+│                                    # equity-rows-only test, whose threshold sits in a measured gap
+│                                    # two orders of magnitude wide), RollingWindowRecord (counted
+│                                    # not averaged, and windowsMeasured is NOT a sample size),
+│                                    # CategoryCrossSection (MIN_PEERS=10 — Contra has four schemes),
+│                                    # PlanCostRead + SchemeTwinKey (the Direct-minus-Regular
+│                                    # commission, the one figure here that does not decay),
+│                                    # SurvivorshipLedger, FundVocabulary. Plus AmfiColumnLayout
+│                                    # (B-130: the two feeds serve the same eight fields in
+│                                    # different orders), AmfiHistoryBackfillService, the
+│                                    # mf_history_fetch table and FundLensService — the single
+│                                    # DB-backed reader, so two screens cannot disagree (§41.5).
+│                                    # Adds NO score, NO pillar and NO timing verdict, and there is
+│                                    # no field to flip — FundSurfaceContractTest fails if one appears.
+│                                    # Stage 3 (SPEC §52.13-§52.14) adds the question the investor
+│                                    # actually asked - "which are the good funds?" - answered by
+│                                    # measuring whether that question has an answer. FundPersistence
+│                                    # (pure) ranks every fund in its category over two
+│                                    # non-overlapping windows and counts how many held their place;
+│                                    # IndexYardstick (pure) maps a category to the index funds that
+│                                    # are its fair comparison, by PHRASE with an exclusion list
+│                                    # because "Nifty 50 Equal Weight" contains "Nifty 50";
+│                                    # FundPersistenceService joins them to the archive. Index funds
+│                                    # are persisted via AmfiSchemeRow.isTrackable() - wider than
+│                                    # isScreenable() - so they get history while `screenable` stays
+│                                    # false and no peer median moves.
+│                                    # Stage 4 (SPEC 52.15-52.16) answers the short-horizon half
+│                                    # of the investor's question, which had no universe rather
+│                                    # than a bad answer: isTrackable() now keeps debt and hybrid
+│                                    # too, while isScreenable() is untouched and every new
+│                                    # category answers false to isActivelyManagedEquity() -
+│                                    # asserted by test, which is what guarantees no equity figure
+│                                    # moved (persisted 1,031 -> 1,616, screenable unchanged at
+│                                    # 637). SebiCategory gained 18 debt and 7 hybrid members and
+│                                    # BOTH AMFI taxonomies for each, because SEBI recategorised
+│                                    # debt in 2018 and AMFI never retired the old headers - on
+│                                    # Banking & PSU the legacy header carries 150 rows to the
+│                                    # modern one's 25. HorizonFit (pure) is SEBI's own mandated
+│                                    # duration bands; CategoryDownside (pure) is what actually
+│                                    # happened, counted window by window, never annualised, and
+│                                    # published as a FLOOR on the badness because a fund that
+│                                    # failed left the record - and measureBlend() walks a real
+│                                    # path, pricing BOTH legs over the same months, because the
+│                                    # first version mixed two legs' separate worst months and read
+│                                    # a constant 0.0% for any all-debt split. HorizonService joins
+│                                    # them; FundHorizonEvidence implements the goal planner's port;
+│                                    # MonthEndSeriesCache is the ONE read of the archive both of
+│                                    # them share (50,333 rows - 4.2s became 0.95s cold).
 ├── holdings/           (6 files)      # Portfolio analysis, valuation, exit timing alerts, HoldingsDecayService (thesis-drift detection)
 ├── insider/            (6 files)      # SEBI PIT / bulk / block disclosure capture + rolling pulse verdict (SPEC §28)
 ├── integrity/          (1 file)       # DataHealth (SPEC §44) - the pure rule table behind the data-health
@@ -2302,7 +2858,7 @@ com.example.trading/
 │                                    # Changes NO score and alerts nothing - it reports.
 ├── intelligence/       (13 files)     # Market intelligence, news analysis, direction prediction; intelligence/recommendation/ subpackage for RecommendationTracker, RecommendationOutcomeScheduler, RecommendationAccuracyService, RecommendationAccuracyReportService  (PreTradeAnalysisAgent removed 2026-05-24)
 ├── marketdata/         (2 files)      # Real-time quotes, historical candles
-├── multibagger/        (11 files)     # Multibagger screening, scoring, reports, scheduler, UnderDiscoveryService (SPEC §12.10), ScreenerTimingVerdict (§12.11), SuggestedEntry (§12.12), CompoundingQuality (§41 — pure, never enters the composite), UnscoredBackfillResult (§12.13 — the four-outcome record behind `screen-unscored`)
+├── multibagger/        (13 files)     # Multibagger screening, scoring, reports, scheduler, UnderDiscoveryService (SPEC §12.10), ScreenerTimingVerdict (§12.11), SuggestedEntry (§12.12), CompoundingQuality (§41 — pure, never enters the composite), UnscoredBackfillResult (§12.13 — the four-outcome record behind `screen-unscored`), SectorStanding (§54 — pure, quartiles within the stock's own sector, never enters the composite) + SectorStandingService (its single DB reader, cached per screening run)
 ├── universe/           (6 files)      # Dynamic universe expansion funnel + IPO tracker (SPEC §30)
 │   universe/theme/     (6 files)      # Policy-backed theme coverage (SPEC §51): which emerging
 │                                      # sectors the government funds, who is in them, and how many
@@ -2326,6 +2882,16 @@ com.example.trading/
 ├── notification/       (3 files)      # Email service, morning briefing
 │   portfolio/core/     (8 files)      # Core Holding Classifier (SPEC §35): gates, durability,
 │                                      # asymmetric hysteresis, behavioural overlay, snapshot table
+│   portfolio/goal/     (6 files)      # Goals (SPEC 53): money with a date on it. Two pure classes
+│                                      # carry it - GoalMix (the equity/debt ramp, a STATED rule
+│                                      # printed on screen, whose floor is the SAME constant
+│                                      # HorizonFit uses rather than a second copy) and GoalMath
+│                                      # (the contribution at ZERO return, which is the only
+│                                      # figure here that is not a forecast). Plus the entity +
+│                                      # repository, HorizonEvidenceSource (the port the funds
+│                                      # package implements, so the dependency points one way),
+│                                      # GoalPlanService and GoalController. There is NO seeder,
+│                                      # deliberately: every row was typed by the investor.
 │   portfolio/performance/ (9 files)   # Portfolio truth (SPEC §46): PerformanceMath (pure TWR /
 │                                      # drawdown), PortfolioPerformanceService (composes; DB-only),
 │                                      # PortfolioSnapshotService (benchmark closes + cash at the
@@ -2353,7 +2919,9 @@ com.example.trading/
 │                                    # MacroIngestService, MacroExposureService, MacroMeasurementService,
 │                                    # MacroViewService, MacroReportRenderer, MacroController.
 │                                    # The reader NEVER names a company; the map decides who is exposed.
-│                                    # Contributes zero points to any score and schedules nothing.
+│                                    # Contributes zero points to any score. MacroIngestScheduler (12:40
+│                                    # MON-FRI, since 2026-10-12) reads the news; it was button-only and
+│                                    # the window went unread for a month (B-154).
 ├── learning/           (10 files)     # Learning substrate (SPEC §38). ScoringVersion + registry (provenance stamp),
 │                                    # ScreeningCoverage + service (per-signal coverage vector), WeightVariant +
 │                                    # WeightVariantRegistry (six pre-registered weightings), ShadowCompositeService,
@@ -2406,4 +2974,4 @@ com.example.trading/
 `WatchlistItemView` too, plus a case asserting `Coverage` still exposes every component the wire
 contract is built from - the two renames crossing that boundary, `impliedUpsidePct ->
 analystUpsidePct` and `symbolAnswered -> analystTargetsFrom`, are exactly where a careless edit
-would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). `UniverseThemesTest` / `ThemeCoverageTest` / `ThemeSurfaceContractTest` (SPEC §51 — the shipped map loads and is never quietly empty; an untagged business returns an EMPTY list and never null, because empty is a finding and null is a gap; an exchange prefix never changes the answer; a business in two themes keeps both; the `verified` flag is asserted against `universe-sectors.csv` symbol by symbol, since it is the only thing keeping an unconfirmed ticker out of a coverage numerator; **an UNVERIFIED member moves the percentage in neither direction** and a theme of only unconfirmable names has a null percentage rather than 0%; the three states always sum to the tagged count over the real file; and no label, caution or status name carries an instruction to transact — that last case caught a real defect in its own first draft, where a bare `" sell"` substring failed on *"whoever **sells** the servers"*, Gotcha 53 exactly). `ThemeCandidatesTest` / `ThemeMapVintageTest` (SPEC §51.9/§51.10 — a business already in the map is never proposed again but is still **counted in the denominator**, or the hit rate silently improves every time the map grows; a bare `wind` must not file Windlas Biotech under wind energy; a theme with no diagnostic name is **named rather than silently empty**; "nothing scanned" and "nothing found" are different sentences (B-054); the recall figure is computed from the run; the vintage check **can never reach PROBLEM** at any age including ten years, and an unreadable review date reports unknown rather than fresh). `UnscoredBackfillResultTest` (SPEC §12.13 — the four outcomes never share a symbol; the caveat says a tier rejection is *a decision, not a gap* and that only the failed list is one; the wording carries no instruction to transact; an empty pass still reports its denominators; and a bounded pass reports what it did not reach, so a run that stopped early cannot look like one that found nothing left to do). Run with `mvn test` (911 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.
+would silently blank two columns on three screens). `QuarterlyResultReadTest` (SPEC §50.3 - a consolidated quarter is never compared with a standalone one, an unstated basis is assumed comparable and says so, one quarter on file cannot be judged, a gap in the captured quarters is not fitted as a trend, swinging to a loss is CONCERNING even when sales grew 50%, a narrowing loss is WEAK, a recovery from a loss quotes **no** growth rate, one enormous revenue jump does not carry a quarter whose profit collapsed, quarter-on-quarter never decides a verdict, and no verdict name or sentence anywhere contains an instruction to transact), `EarningsCalendarTest` (SPEC §50.4 - the answer is a window and says why, a habit is a median so one auditor dispute cannot move it, an *estimated* publication date is never counted as evidence of a habit, **a company that reports early gets an early window rather than the population default** - the defect the first live run caught - the March year-end gets 60 days and not 45, and PAST_DUE states in words that it cannot tell a late company from an uncaptured result), `EarningsSurfaceContractTest` (the thirteen field names `earnings-cells.js` dereferences, as nullable wrappers and all `@Transient`; and that `EarningsConfig` carries **no** actionable/bonus/weight field, so "contributes zero points" is checkable rather than asserted in a comment). `UniverseThemesTest` / `ThemeCoverageTest` / `ThemeSurfaceContractTest` (SPEC §51 — the shipped map loads and is never quietly empty; an untagged business returns an EMPTY list and never null, because empty is a finding and null is a gap; an exchange prefix never changes the answer; a business in two themes keeps both; the `verified` flag is asserted against `universe-sectors.csv` symbol by symbol, since it is the only thing keeping an unconfirmed ticker out of a coverage numerator; **an UNVERIFIED member moves the percentage in neither direction** and a theme of only unconfirmable names has a null percentage rather than 0%; the three states always sum to the tagged count over the real file; and no label, caution or status name carries an instruction to transact — that last case caught a real defect in its own first draft, where a bare `" sell"` substring failed on *"whoever **sells** the servers"*, Gotcha 53 exactly). `ThemeCandidatesTest` / `ThemeMapVintageTest` (SPEC §51.9/§51.10 — a business already in the map is never proposed again but is still **counted in the denominator**, or the hit rate silently improves every time the map grows; a bare `wind` must not file Windlas Biotech under wind energy; a theme with no diagnostic name is **named rather than silently empty**; "nothing scanned" and "nothing found" are different sentences (B-054); the recall figure is computed from the run; the vintage check **can never reach PROBLEM** at any age including ten years, and an unreadable review date reports unknown rather than fresh). `UnscoredBackfillResultTest` (SPEC §12.13 — the four outcomes never share a symbol; the caveat says a tier rejection is *a decision, not a gap* and that only the failed list is one; the wording carries no instruction to transact; an empty pass still reports its denominators; and a bounded pass reports what it did not reach, so a run that stopped early cannot look like one that found nothing left to do). `SebiCategoryTest` / `AmfiNavParserTest` / `SchemePlanKeyTest` / `FundSurfaceContractTest` (SPEC §52 — **B-096 pre-empted in a new feed**: the two spellings of every equity category resolve to one category and at least ten categories are reached by more than one spelling, asserted against a **captured set of all 103 live AMFI headers** so a new spelling fails the build rather than silently halving a peer group; an unknown header is unclassified *carrying its raw text* and never the nearest match; the pre-2018 bare `Growth` bucket is **named** rather than unclassified, because "no rule" and "obsolete category" are different facts. Since §52.15 the same fixture is asserted over the **2018–2026 archive headers** as well as today's file, and the debt cases are the sharper half: SEBI recategorised debt in 2018 and AMFI never retired the old headers, so **both taxonomies must resolve to one category** — on Banking & PSU the legacy header carries 150 rows to the modern one's 25, so matching one would leave 14% of that peer group. A separate case asserts the pre-2018 debt headers reach **twelve or more distinct categories**, because every one of them contains the string `DEBT` and a bare keyword placed early in the fallback chain would swallow all fourteen into one bucket while nothing threw and the row count stayed right. The straddling `Ultra Short to Short Term` bucket is asserted **not** to equal either neighbour. And `wideningDoesNotTouchTheScreenableSet` makes §52.15's safety property checkable rather than asserted in a comment: every debt and hybrid category answers false to `isActivelyManagedEquity()`, so no equity peer median can move. In the parser, **an AMC name containing brackets is not a category header** — the real defect this shipped with, where `IL&FS Mutual Fund (IDF)` made 2,535 rows inherit a category that does not exist while nothing threw and the row count stayed right; plus an absent NAV is null not zero, a **future-dated** row is kept because 706 liquid funds strike a next-day NAV, an unreadable date is null not today, and a malformed line is **counted** so a layout change is loud. In the plan key, every distributing spelling resolves to IDCW and a label naming *both* a distribution and growth is IDCW (Gotcha 53, positive direction), an unresolvable plan is never guessed into Regular, and only a Direct-Growth series is canonical. And the contract test makes "contributes zero points" **checkable**: no class in the package may carry an actionable/bonus/points/composite field, no enum name or label may contain a transaction verb **matched on word boundaries**, and every money field is a nullable wrapper so "did not look" cannot collapse into "found zero"). `MonthEndCalendarTest` / `NavFileAcceptanceTest` / `RollingWindowRecordTest` / `CategoryCrossSectionTest` / `PlanCostReadTest` / `SchemeTwinKeyTest` / `SurvivorshipLedgerTest` (SPEC §52.7-§52.9, Stage 2 — and the first case in `RollingWindowRecordTest` is the whole design: **a fund whose *average* excess return is positive because of one spectacular window still fails the count**, which is Gotcha 103 moved from years to windows. Beside it: ~97 months holds **two** independent windows and not sixty, so the word "consistently" is withheld; a price index costs the fund the 1.25-point dividend haircut while a peer median costs it nothing, because both sides are NAVs net of their own costs; the **raw** excess is still published, so the haircut is a bar and not a hidden subtraction; a gap in the series never stretches a 36-month window to 45 months (B-047's family); a benchmark that cannot answer **drops the window rather than scoring the fund against a flat line**; and no benchmark at all is `NOT_COMPARABLE`, never `NOT_MEASURED`, because the fund's own record is intact. The calendar tests are dates from the live archive: a Saturday month end is **never asked about**, a weekday month end that is 6,000 debt rows short is **accepted** because its equity cross-section is complete, and the acceptance threshold is asserted to sit inside the measured gap rather than on a guess. `CategoryCrossSectionTest` pins that **Contra's four schemes get no quartile, ever** — and that this is `TOO_FEW_PEERS`, a refusal, while a genuinely bad record is `LOWER_QUARTILE`. `SchemeTwinKeyTest` pins the asymmetry: a **missed** pair costs one unmeasured commission, a **wrong** pair publishes the gap between two different portfolios as a commission, so the AMC name is part of the key and `GROWTH OPTION` is stripped as a phrase before a bare `OPTION` could strand the word `GROWTH`. And `NavFileAcceptanceTest.rejectionNeverClaimsFundsAreWorthless` **caught a real defect in its own subject**: the rejection text read "...rather than a day on which funds had no value", true and readable as its own opposite the moment it is truncated in a cell — Gotcha 53 in the direction of prose). `SeriesComparabilityTest` / `FundDivergenceNoteTest` (SPEC §52.8 - **the defect the live run found**: an IDCW series is refused rather than measured against Growth peers, an *unresolved* option is refused too because probably-Growth is still an assumption, and the refusal text is asserted never to read as a judgement on the fund. The divergence note exists as a test because after that guard landed it **no longer fires on the live book at all** - so without one it would be code nobody has ever seen run, which is B-074's shape; it pins that agreement stays silent, that an unmeasured reading cannot disagree with anything, and that the note explains the gap rather than resolving it into one answer). `FundPersistenceTest` / `IndexYardstickTest` (SPEC §52.13-§52.14 — and the case that matters is **verbatim from the first live run**: 8 of 40 top-quartile funds holding their place is a gap of TWO FUNDS from chance, and the first build called that `REVERSAL`, a directional claim about manager skill. The band floor is now three funds' worth of the actual sample, so a twenty-fund category cannot claim a direction however cleanly it flips — which is why the perfect-reversal case needs sixty funds to register. Beside it: a top-quartile fund that stops reporting is counted and drags the lower bound, a fund absent from the FIRST window is a launch rather than a death, a per-category percentage is withheld where one fund would swing it by a third, sectoral funds are measured and shown but never reach the headline, and no prose anywhere contains a p-value, a significance claim or an instruction to transact — matched on word boundaries, because the trap here is *"the fund **holds**"*. In the yardstick, an equal-weight or Value-20 tracker is refused though its name contains the index, a smallcap tracker can never become the large-cap yardstick, and a category with no honest tracker is refused BY NAME rather than left silently empty). `HorizonFitTest` / `CategoryDownsideTest` (SPEC §52.16 — **no equity category is offered for six-month money and that is the finding**; a liquid fund reads FITS at three months and *longer money than this* at five years, which are two different states and must not draw alike; a gilt fund is refused at six months though it carries no credit risk at all, because no-credit-risk is not no-risk; the straddling pre-2018 debt bucket is `NOT_MEASURED` at every horizon rather than squeezed into a neighbouring band; ELSS gets a **five**-year floor because the lock-in binds per instalment; and the short-horizon facts name the bank sweep account and carry no instruction to transact — which **failed on its own first run**, because "exit load" is SEBI's name for the charge and contains the word *exit* on a word boundary, Gotcha 53 in the direction of prose for the third time. In the downside class: one blown-up fund cannot become the category's worst stretch because the median is asked window by window, a shock most of the category shares **is** found and is dated so the reader can go and look, the return is over the whole window and never annualised, a two-fund category is refused outright rather than reporting a reassuring zero, `independentWindows` is asserted to be smaller than the window count, and the caveat says **floor on how bad it got** and never "worst case" — the one direction a downside reading must not be inverted). `GoalMixTest` / `GoalMathTest` (SPEC §53 — money needed inside three years gets **zero** equity at every horizon tested; the ramp is monotonic and capped and the two shares always sum to 100; the floor is asserted to be the *same constant* `HorizonFit` uses rather than a second copy of the number, since the drift would put a goal's money in equity at a horizon the fund screen refuses it at, on two screens the reader sees together; **a positive debt window may not offset a negative equity one**, because the worst equity window and the best debt window did not happen at the same time; an unmeasured equity leg yields a null worst case and never a zero. In the arithmetic: an unstated earmark leaves the shortfall unmeasured rather than equal to the whole goal, an over-funded goal never produces a negative contribution, the zero-return figure rounds **up** so it cannot fall short, a goal due this month gets no monthly answer at all rather than a division by zero wearing a plan's clothes, the measured-rate line **refuses without a measured rate** and is never defaulted to a conventional 12%, and the two agree exactly at a rate of nothing so the headline and the line beneath it cannot be computed by two different rules). The blend cases in `CategoryDownsideTest` came out of the live run rather than review: **an all-debt split must not read a constant zero**, each window is priced on both legs over the same months so a blend is milder than either leg's own worst when the two shocks never overlapped, a worst window that is still a **gain** is published rather than suppressed, and a leg carrying no weight is never allowed to refuse the reading. `SectorStandingTest` / `SectorStandingSurfaceContractTest` (SPEC §54 — under ten measured peers is refused rather than cut into quarters; a missing figure is not measured and never bottom of the sector; a lender is never ranked on ROCE, leverage or cash conversion, and lenders never share a denominator with non-lenders inside one sector; FINANCIALS is refused as a mixed group until B-136; **the summary counts checks rather than averaging figures**, so a 500% ROCE cannot carry four bottom-half readings; the compounding lens never moves a quartile; and no string carries an instruction to transact. The contract test pins the five wire fields as `@Transient` nullable wrappers and fails if a scoring-shaped field appears). Run with `mvn test` (1,112 tests). **Change a scoring rule → a test should fail.** If it doesn't, the behaviour wasn't pinned; add the case. Several tests deliberately document *known defects* and say so — a failure there may be the intended fix, so read the comment before "repairing" it. The rest of the codebase is still untested.

@@ -51,6 +51,20 @@ class PerformanceMathTest {
         assertThat(without.flowsUncorrected()).isEqualTo(1);
     }
 
+    @Test @DisplayName("the cost sold on a day with no recorded gain is carried, so the caveat can size the unknown (B-164)")
+    void uncorrectedCostIsSized() {
+        // Day 1 -> 2: cost basis falls from 100 to 60 (Rs 40 of cost sold) with no lot-matched gain.
+        var r = PerformanceMath.timeWeighted(List.of(day(0, 100, 100), day(1, 60, 62)), Map.of());
+        assertThat(r.flowsUncorrected()).isEqualTo(1);
+        assertThat(r.uncorrectedCostSold()).isCloseTo(40.0, within(1e-9));
+        assertThat(r.averageValue()).isGreaterThan(0.0);
+        // The same day WITH a recorded gain is corrected, and carries no uncertainty.
+        var fixed = PerformanceMath.timeWeighted(List.of(day(0, 100, 100), day(1, 60, 62)),
+                Map.of(D0.plusDays(1), -3.0));
+        assertThat(fixed.flowsUncorrected()).isZero();
+        assertThat(fixed.uncorrectedCostSold()).isZero();
+    }
+
     @Test @DisplayName("fewer than two snapshots is no return, and a short span is not annualised")
     void refusals() {
         assertThat(PerformanceMath.timeWeighted(List.of(day(0, 100, 100)), Map.of()).twrPercent()).isNull();

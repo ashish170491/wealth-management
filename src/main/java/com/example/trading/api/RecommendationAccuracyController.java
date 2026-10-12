@@ -39,6 +39,15 @@ public class RecommendationAccuracyController {
         return accuracyService.summarize();
     }
 
+    /**
+     * Macro-exposure readings scored as readings (SPEC 48.7): hit rate is "the reading was right",
+     * mean return and excess are signed by verdict. Never part of the picks summary (B-162).
+     */
+    @GetMapping("/macro")
+    public List<RecommendationAccuracyService.SourceHorizonStats> macro() {
+        return accuracyService.macroReadings();
+    }
+
     @GetMapping("/by-source/{source}")
     public List<SourceHorizonStats> bySource(@PathVariable String source) {
         RecommendationEntity.Source src = RecommendationEntity.Source.valueOf(source.toUpperCase());

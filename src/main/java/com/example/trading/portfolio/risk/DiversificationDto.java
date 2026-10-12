@@ -15,7 +15,9 @@ public final class DiversificationDto {
             ConcentrationCheck sectorConcentration,
             ConcentrationCheck stockConcentration,
             Map<String, Double> marketCapMix,
-            List<Alert> alerts
+            List<Alert> alerts,
+            /** SPEC 7.2: holdings whose daily returns move together; null when it could not be computed. */
+            CorrelationClusters.Result correlation
     ) {}
 
     /** Herfindahl-Hirschman Index (sum of squared percentage weights). */

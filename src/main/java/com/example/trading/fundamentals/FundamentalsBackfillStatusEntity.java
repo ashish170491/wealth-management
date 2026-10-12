@@ -82,6 +82,13 @@ public class FundamentalsBackfillStatusEntity {
     /** True = consolidated series, false = standalone, null = never determined. */
     private Boolean consolidatedBasis;
 
+    /**
+     * The day the integrated feed's older year-end filings were last tried for this symbol (B-166).
+     * Null means never; a set date means "tried, whatever was found", so a company that simply has
+     * no FY2025 filing is not re-queued for ever (Gotcha 102).
+     */
+    private java.time.LocalDate integratedGapCheckedOn;
+
     /** Named rather than swallowed — an empty result must always be able to say why. */
     @Column(length = 500)
     private String lastError;

@@ -210,12 +210,13 @@ public class ExitTimingAlertService {
                             symbol,
                             ALERT_BROKE_SUPPORT,
                             URGENCY_URGENT,
-                            "Broke Below Support - Exit Recommended",
+                            "Broke Below Support - Review the Position",
                             String.format("Price %.2f has broken below support at %.2f. "
                                     + "Recommendation: %s. Next support at %.2f.",
                                     currentPrice, h.getSupport1(), rec,
                                     h.getSupport2() != null ? h.getSupport2() : 0.0),
-                            "Exit position immediately; do not average down on broken support",
+                            "Review this position: check the latest results and your thesis before deciding. "
+                                    + "Adding more while it sits below support is the move to avoid",
                             h
                     ));
                 }
@@ -230,11 +231,13 @@ public class ExitTimingAlertService {
                         symbol,
                         ALERT_DEEP_LOSS,
                         URGENCY_URGENT,
-                        "Deep Loss Accelerating - Stop the Bleeding",
+                        "Deep loss with a falling trend - re-read your thesis",
                         String.format("Holding is down %.1f%% with a BEARISH trend. "
                                 + "Loss amount: Rs.%.2f. Trend shows no reversal signs.",
                                 pnlPercent, h.getPnl()),
-                        "Exit to preserve capital; reassess only after trend reversal confirmation",
+                        "Re-read why you bought it and check the latest quarterly results and red flags. "
+                                + "This alert sees only the price and its trend, not the business, so a fall on its own "
+                                + "is a reason to look, never a reason to sell",
                         h
                 ));
             }

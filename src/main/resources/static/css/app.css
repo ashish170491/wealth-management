@@ -238,6 +238,11 @@ main { max-width: var(--page-max); margin: 0 auto; padding: var(--section-gap) 2
 
 .pos { color: var(--profit); font-weight: 600; }
 .neg { color: var(--loss); font-weight: 600; }
+/* B-137: four renderers (compounding, long-horizon, earnings, analyst) mark pass/fail and upside with
+   .positive / .negative, which were defined only under .summary-card, so every tick drew in body
+   colour. Scoped to inline elements so the summary-card rules above are untouched. */
+span.positive { color: var(--profit); font-weight: 600; }
+span.negative { color: var(--loss); font-weight: 600; }
 .muted { color: var(--ink-muted); }
 .faint { color: var(--ink-faint); }
 .num { font-variant-numeric: tabular-nums; }

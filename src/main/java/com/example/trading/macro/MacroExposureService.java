@@ -49,6 +49,7 @@ public class MacroExposureService {
     private final MultibaggerScoreRepository scoreRepository;
     private final AnnualFundamentalsRepository annualRepository;
     private final MacroConfig config;
+    private final com.example.trading.intelligence.MarketImpactNewsRepository newsRepository;
 
     /**
      * One stock's reading, with the identity that answered it.
@@ -189,7 +190,7 @@ public class MacroExposureService {
 
         MacroExposureRead.Result result = MacroExposureRead.read(new MacroExposureRead.Input(
                 symbol, sector, isLender(row, sector), debtToEquity, exposures, events,
-                LocalDate.now(), config.getWindowDays()));
+                LocalDate.now(), config.getWindowDays(), newsReadOn()));
 
         return new Reading(result, answered == null ? symbol : answered, sector, everScreened,
                 LocalDate.now(), config.getWindowDays());
@@ -199,7 +200,7 @@ public class MacroExposureService {
         String sector = SectorMapping.resolve(symbol, null);
         MacroExposureRead.Result result = MacroExposureRead.read(new MacroExposureRead.Input(
                 symbol, sector, false, null, MacroExposureMap.forStock(symbol, sector, null),
-                activeEvents(), LocalDate.now(), config.getWindowDays()));
+                activeEvents(), LocalDate.now(), config.getWindowDays(), newsReadOn()));
         return new Reading(result, symbol, sector, false, LocalDate.now(), config.getWindowDays());
     }
 
@@ -223,10 +224,43 @@ public class MacroExposureService {
     private static boolean isLender(MultibaggerScoreEntity row, String sector) {
         if ("BANKING".equals(sector) || "FINANCIALS".equals(sector)) return true;
         if (row == null) return false;
-        if ("NA_FINANCIAL".equalsIgnoreCase(row.getCapexVerdict())) return true;
-        String industry = row.getIndustry();
-        return industry != null && industry.toLowerCase(Locale.ROOT)
-                .matches(".*(bank|financ|nbfc|insur|capital market|holding).*");
+        // The shared lender test, with the fee-business exception read from the row's returns (B-136).
+        return ("NA_FINANCIAL".equalsIgnoreCase(row.getCapexVerdict())
+                || com.example.trading.ai.NseDataService.isLenderIndustry(row.getIndustry()))
+                && !com.example.trading.ai.NseDataService.isFeeFinancialByReturns(
+                        row.getRoaPercent(), row.getRoePercent());
+    }
+
+    private volatile LocalDate newsReadOnCached;
+    private volatile long newsReadOnAt;
+
+    /**
+     * The day the ledger was last written from the news, or null if it never has been. One query
+     * shared across a bulk read (~300 symbols on the screener), refreshed every 30 seconds.
+     */
+    public LocalDate newsReadOn() {
+        long now = System.currentTimeMillis();
+        if (now - newsReadOnAt < 30_000 && newsReadOnAt != 0) return newsReadOnCached;
+        try {
+            // Headlines read is the right signal: a run that finds no event still marks what it
+            // read, while the newest EVENT row only moves when something happened.
+            java.time.LocalDateTime at = null;
+            try {
+                at = newsRepository.findLatestMacroReadAt();
+            } catch (Exception ignored) {
+                // fall back to the event ledger below
+            }
+            var ev = eventRepository.findLatestExtractedAt();
+            if (at == null || (ev != null && ev.isAfter(at))) at = ev;
+            newsReadOnCached = at == null ? null : at.toLocalDate();
+            newsReadOnAt = now;
+        } catch (Exception e) {
+            log.warn("Macro exposure: cannot tell when the news was last read ({}), so every empty "
+                    + "window will read 'not measured' rather than 'nothing applies'.", e.getMessage());
+            newsReadOnCached = null;
+            newsReadOnAt = now;
+        }
+        return newsReadOnCached;
     }
 
     private List<MacroExposureRead.Event> activeEvents() {

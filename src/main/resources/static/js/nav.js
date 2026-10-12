@@ -29,6 +29,8 @@ const PAGES = [
   { href: 'accuracy.html', label: 'Track Record' },
   { href: 'market.html', label: 'Market' },
   { href: 'watchlist.html', label: 'Watchlist' },
+  { href: 'funds.html', label: 'Funds' },
+  { href: 'goals.html', label: 'Goals' },
   { href: 'ipo.html', label: 'IPOs' },
   { href: 'macro.html', label: 'Events' },
   { href: 'themes.html', label: 'Themes' },
@@ -46,6 +48,14 @@ const RELEVANT = {
   'accuracy.html': ['recommendationOutcomes', 'analystTargets'],
   'market.html': ['holdingsSynced'],
   'watchlist.html': ['watchlistAnalyzed', 'watchlistSnapshot', 'multibaggerScores'],
+  // fundNav is stamped when the 12:30 AMFI pull last RAN, not with the date of the NAVs it
+  // carries - two different facts. A Monday pull legitimately holds Friday's NAV, so stamping
+  // the strip with the NAV date would read "3 days ago" on a job that worked perfectly (B-119,
+  // Gotcha 140). Every rendered NAV on the page separately carries its own "as of" date.
+  'funds.html': ['fundNav'],
+  // Goals are typed by the investor and nothing schedules a write to them, so the only stamp
+  // worth reading here belongs to the evidence beside each goal - the fund archive's own pull.
+  'goals.html': ['fundNav'],
   'ipo.html': ['ipoIssues'],
   'macro.html': ['macroEvents', 'marketImpactNews'],
   'themes.html': ['multibaggerScores'],
@@ -70,6 +80,10 @@ const FRESHNESS_LABELS = {
   marketImpactNews: 'Headlines',
   analystTargets: 'Analyst targets',
   quarterlyResults: 'Results',
+  // SPEC 52.6 - when the AMFI pull last RAN, not the date of the NAVs it carries. Those are two
+  // different facts: a Monday pull legitimately holds Friday's NAV, and stamping this with that
+  // date would read "3 days ago" on a job that worked (B-119).
+  fundNav: 'Fund NAVs',
 };
 
 /** Past this many days a timestamp is called out in amber. */

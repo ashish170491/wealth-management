@@ -105,6 +105,24 @@ export const TERMS = {
   'safeguard duty': 'A temporary import tax protecting domestic producers from a surge of cheap imports.',
   'universe shift': 'How much the typical screened stock moved between two runs. A stock\'s own change is read against this, so a market-wide move is not mistaken for news about the company.',
   'expectation gap': 'The growth rate today\'s price already assumes, minus the growth the company has actually delivered. A large positive gap means the price is banking on an acceleration.',
+
+  // SPEC 52 - the mutual-fund vocabulary. Several of these are the app's own words rather than
+  // market usage (rolling window, not comparable, survivorship), and a badge is the worst place
+  // to meet a term for the first time.
+  NAV: 'Net Asset Value. What one unit of a mutual fund is worth. It is worked out once a day after the market closes, so the newest NAV is always at least a day old.',
+  'net asset value': 'What one unit of a mutual fund is worth. It is worked out once a day after the market closes, so the newest one is always at least a day old.',
+  'Direct plan': 'The version of a fund you buy straight from the fund house. It pays no commission to a distributor, so it compounds faster than the Regular plan of the very same portfolio.',
+  'Regular plan': 'The version of a fund sold through a distributor, who is paid a commission out of the fund every year. Same portfolio as the Direct plan, lower return.',
+  IDCW: 'Income Distribution cum Capital Withdrawal. The option where the fund pays money out to you and its NAV drops by the amount paid, so its published return is measured after those payouts and cannot be compared with a Growth fund.',
+  'rolling window': 'Every three-year stretch in the record, not just the last one. Asking "how often was it ahead" across all of them is far harder to flatter than quoting one lucky period.',
+  'independent windows': 'How many genuinely separate stretches the history holds. Overlapping three-year windows share most of their months, so sixty of them can hold only two independent readings, which is why nothing here claims statistical significance.',
+  'not comparable': 'The fund was measured perfectly well and there is nothing like-for-like to grade it against. Different from "not measured", which means this app could not see enough to measure it at all.',
+  survivorship: 'Funds that shut down or merged drop out of the published tables, taking their records with them. What is left reads better than the choice you actually faced, so the app counts how many went.',
+  quartile: 'Which quarter of its category the fund sat in. Upper quartile means it was in the best 25% over the period measured, which says nothing about the next period.',
+  'expense ratio': 'The annual charge a fund takes out of your money, already deducted before the NAV you see. It is charged whether the fund does well or badly.',
+  AMFI: 'The Association of Mutual Funds in India. It publishes the NAV of every fund daily, which is where all the fund figures here come from.',
+  SEBI: 'The market regulator. It defines the fund categories used here, so a "mid cap fund" has to mean roughly the same thing at every fund house.',
+  ELSS: 'Equity Linked Savings Scheme. An equity fund with a tax deduction attached and a three-year lock-in on every instalment.',
 };
 
 /** Longest-first, so "Information Coefficient" wins over a bare "IC" inside it. */

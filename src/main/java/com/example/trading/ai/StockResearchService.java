@@ -691,7 +691,16 @@ public class StockResearchService {
         data.append("--- FINANCIAL QUALITY (BALANCE-SHEET / CASH-FLOW) ---\n");
         try {
             String tradingSymbol = symbol.contains(":") ? symbol.substring(symbol.indexOf(":") + 1) : symbol;
-            NseDataService.FinancialQualityData fq = nseDataService.analyzeFinancialQuality(tradingSymbol);
+            // The valuation was fetched earlier in this same research run, so its industry is
+            // cached; it decides the lender exemption (B-144).
+            String industry = null;
+            try {
+                ValuationData v = valuationService.getValuationData(tradingSymbol);
+                industry = v != null ? v.getIndustry() : null;
+            } catch (Exception ignored) {
+                // no industry - assessed as a non-lender, exactly as before
+            }
+            NseDataService.FinancialQualityData fq = nseDataService.analyzeFinancialQuality(tradingSymbol, industry);
             if (fq == null || fq.getQualityScore() == null) {
                 data.append("Financial quality analysis unavailable\n\n");
                 return;

@@ -88,10 +88,21 @@ public class PortfolioPerformanceService {
                     twr.daysSpanned(), PerformanceMath.MIN_DAYS_TO_ANNUALISE));
         }
         if (twr.flowsUncorrected() > 0) {
+            // Quote the size of the unknown, not a direction nobody measured (B-164). The old text
+            // said the return "reads slightly low" - but on the days that WERE corrected the sales
+            // were net losses, which moved the figure from -5.84% to -8.07%, so the uncorrected
+            // days can as easily push it the other way.
+            String sizing = "";
+            if (twr.uncorrectedCostSold() > 0 && twr.averageValue() > 0) {
+                double pp = 0.10 * twr.uncorrectedCostSold() / twr.averageValue() * 100.0;
+                sizing = String.format(" About Rs %,.0f of cost was sold on those days; if those sales were 10%% above or "
+                        + "below cost, the return would be off by about %.1f percentage points in either direction.",
+                        twr.uncorrectedCostSold(), pp);
+            }
             caveats.add(String.format("On %d day%s the cost basis fell with no lot-matched sale on record, so the "
-                    + "gain realised on those sales is not in the time-weighted return (it reads slightly low). "
-                    + "Importing the Zerodha tradebook fixes this.",
-                    twr.flowsUncorrected(), twr.flowsUncorrected() == 1 ? "" : "s"));
+                    + "gain or loss realised on those sales is not in the time-weighted return, and its direction is "
+                    + "not known.%s Importing the Zerodha tradebook fixes this.",
+                    twr.flowsUncorrected(), twr.flowsUncorrected() == 1 ? "" : "s", sizing));
         }
 
         // 2. Benchmarks over the same span.

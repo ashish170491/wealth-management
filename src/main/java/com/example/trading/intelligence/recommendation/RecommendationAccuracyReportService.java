@@ -37,6 +37,7 @@ public class RecommendationAccuracyReportService {
     private final EmailNotificationService emailNotificationService;
     private final EmailTemplateService templateService;
     private final MarketHoursService marketHoursService;
+    private final com.example.trading.learning.validation.WeightReviewService weightReviewService;
 
     @Scheduled(cron = "0 25 15 * * FRI", zone = "Asia/Kolkata")
     public void sendWeeklyReport() {
@@ -84,7 +85,8 @@ public class RecommendationAccuracyReportService {
                   This is a report card on the stock picks the app has issued. For each "source"
                   (a scoring engine, e.g., <em>Multibagger</em>) and each <em>horizon</em> (how long ago the pick was
                   issued — 30 / 90 / 180 / 365 days), we show what those picks have actually done in the market.
-                  Use it to see which engines you should trust more.
+                  Read every figure against how little independent history stands behind it: picks issued on the same
+                  dates behave alike, so the Sample column counts rows, not separate tests.
                 </div>
                 """);
 
@@ -149,8 +151,9 @@ public class RecommendationAccuracyReportService {
         sb.append("""
                 <div style="background:#f8f9fa;border-left:4px solid #6c757d;padding:12px 14px;margin-top:18px;border-radius:4px;font-size:13px;color:#555;">
                   <strong>How to read this</strong>: Prefer engines with (a) a hit rate well above 50%, (b) positive excess
-                  return, and (c) IC of +0.10 or higher on <em>large samples</em>. Anything with fewer than ~20 picks
-                  is too early to draw conclusions from. Numbers shown for the first time will grow more reliable over the coming months.
+                  return, and (c) IC of +0.10 or higher - but none of these is evidence until it has held across many independent
+                  periods, and a high figure from one cluster of dates (a single rally, a single 90-day window) is exactly what
+                  that looks like by chance. Treat every cell here as an early read, not a verdict on an engine.
                 </div>
                 """);
 
@@ -185,7 +188,12 @@ public class RecommendationAccuracyReportService {
                 </div>
                 """);
 
-        for (RecommendationEntity.Source source : RecommendationEntity.Source.values()) {
+        // Live engines with sub-scores only. The loop used to run every Source, which meant the
+        // deleted SECTOR_REVERSAL and the verdict-signed MACRO_EVENT readings each cost two
+        // Kite-backed passes at 15:25 - one pass was measured at 8m41s against the 15:45 shutdown,
+        // so the email could fail to finish (B-161). MACRO_EVENT has no sub-scores to correlate.
+        for (RecommendationEntity.Source source : List.of(
+                RecommendationEntity.Source.MULTIBAGGER, RecommendationEntity.Source.QUANT_DISCOVERY)) {
             sb.append(buildDimensionIcTable(
                     humanizeSource(source.name()),
                     safeDimensionIC(source, 30),
@@ -193,14 +201,29 @@ public class RecommendationAccuracyReportService {
         }
 
         sb.append("""
-                <div style="background:#f8f9fa;border-left:4px solid #6c757d;padding:10px 14px;margin-top:10px;border-radius:4px;font-size:12.5px;color:#555;">
-                  <strong>What to do with this:</strong> dimensions with high IC (≥ +0.10) and solid sample size are candidates for
-                  <em>higher</em> weight next revision. Dimensions with IC near zero or negative are candidates for lower weight or removal —
-                  but only after the sample has built to at least ~60 outcomes, so we don't over-fit to noise. Quantitative Discovery's
-                  dimension rows stay empty until picks captured from 2026-05-24 onward reach their 30/90-day horizon.
+                <div style="background:#fff0f0;border-left:4px solid #c0392b;padding:10px 14px;margin-top:10px;border-radius:4px;font-size:12.5px;color:#555;">
+                  <strong>Do not change any weight on this table.</strong> The sample counts above are rows, not independent
+                  observations: picks screened on the same dates move together and their return windows overlap, so thousands of
+                  rows are only a handful of genuinely separate test periods.
+                """ + periodsSentence() + """
+                  Whether any weighting beats the current one is decided only by the walk-forward gate, which needs at least 12
+                  independent periods and the same challenger ahead in two consecutive reviews (SPEC §38.10). This table is
+                  for noticing a signal that was never measured, not for choosing weights.
                 </div>
                 """);
         return sb.toString();
+    }
+
+    /** The recorded independent-period counts, quoted so the reader can see how thin the evidence is. */
+    private String periodsSentence() {
+        var p30 = weightReviewService.latestIndependentPeriods(30);
+        var p90 = weightReviewService.latestIndependentPeriods(90);
+        if (p30.isEmpty() && p90.isEmpty()) {
+            return "No walk-forward review has been recorded yet, so the number of independent periods is unknown.";
+        }
+        return "The latest recorded review counts <strong>"
+                + p30.map(String::valueOf).orElse("unknown") + "</strong> independent period(s) at 30 days and <strong>"
+                + p90.map(String::valueOf).orElse("unknown") + "</strong> at 90 days.";
     }
 
     /**

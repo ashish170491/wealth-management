@@ -303,6 +303,45 @@ class ForensicScreenTest {
     }
 
     @Test
+    @DisplayName("A lender's negative operating cash flow is its loan book growing, not profit that never became cash (B-144)")
+    void lenderCashConversionIsNotApplicable() {
+        // The live shape of an NBFC: profit every year, operating cash flow negative every year
+        // because disbursements are an operating outflow. It fired on all 17 NBFCs with the history.
+        List<AnnualFundamentalsEntity> h = new ArrayList<>(cleanHistory());
+        h.get(1).setOperatingCashFlow(-900.0);
+        h.get(2).setOperatingCashFlow(-1100.0);
+        h.get(3).setOperatingCashFlow(-1300.0);
+
+        var nonLender = ForensicScreenService.evaluate("NSE:ACME", h, List.of(), false);
+        var lender = ForensicScreenService.evaluate("NSE:ACME", h, List.of(), true);
+
+        assertThat(nonLender.getFlags()).anySatisfy(f -> assertThat(f.getCode()).isEqualTo("CASH_CONVERSION"));
+        assertThat(lender.getFlags()).noneSatisfy(f -> assertThat(f.getCode()).isEqualTo("CASH_CONVERSION"));
+        // Not applicable is a finding, and must not be reported as "not yet checked" (Gotcha 68).
+        assertThat(lender.getNotApplicable()).anySatisfy(m -> assertThat(m).contains("lender"));
+        assertThat(lender.getNotMeasured()).noneSatisfy(m -> assertThat(m).contains("cash conversion"));
+    }
+
+    @Test
+    @DisplayName("The lender exemption leaves every other check running")
+    void lenderStillGetsDilutionAndReceivables() {
+        List<AnnualFundamentalsEntity> h = new ArrayList<>(cleanHistory());
+        h.get(3).setShareCount(63.7); // 27.4% more shares in a year, on no simple bonus ratio
+        var r = ForensicScreenService.evaluate("NSE:ACME", h, List.of(), true);
+        assertThat(r.getFlags()).anySatisfy(f -> assertThat(f.getCode()).isEqualTo("DILUTION"));
+    }
+
+    @Test
+    @DisplayName("One lender test for every exemption: NBFCs and banks by industry, nothing else")
+    void lenderIndustryTest() {
+        assertThat(com.example.trading.ai.NseDataService.isLenderIndustry("Financial Services")).isTrue();
+        assertThat(com.example.trading.ai.NseDataService.isLenderIndustry("Banks")).isTrue();
+        assertThat(com.example.trading.ai.NseDataService.isLenderIndustry("Housing Finance Company")).isTrue();
+        assertThat(com.example.trading.ai.NseDataService.isLenderIndustry("Capital Goods")).isFalse();
+        assertThat(com.example.trading.ai.NseDataService.isLenderIndustry(null)).isFalse();
+    }
+
+    @Test
     @DisplayName("Cumulative losses make cash conversion unmeasurable, not a flag")
     void lossMakingCashConversionIsUnmeasured() {
         List<AnnualFundamentalsEntity> h = new ArrayList<>(cleanHistory());

@@ -150,6 +150,24 @@ public class HoldingsEntity {
     @Transient
     private String compoundingFrom;
 
+    // SPEC 54 - how the business compares with its own sector. Same five-name shape as the
+    // compounding lens; null throughout means "not in the latest screening run", never a weak
+    // reading (Gotcha 21). Contributes nothing to any score.
+    @Transient
+    private String sectorStanding;
+
+    @Transient
+    private String sectorStandingReason;
+
+    @Transient
+    private Integer sectorStandingAbove;
+
+    @Transient
+    private Integer sectorStandingRanked;
+
+    @Transient
+    private Integer sectorStandingPeers;
+
     // SPEC 46.5 - holding period from the tax ledger. Null days = nothing on file, never 0.
     @Transient
     private Integer daysHeld;

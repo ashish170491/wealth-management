@@ -50,10 +50,14 @@ public final class PerformanceMath {
      * @param flowsCorrected   how many days carried a lot-matched realised gain in their flow
      * @param flowsUncorrected days where the cost basis fell with no sale on record (the gain
      *                         on those days is not in the return)
+     * @param uncorrectedCostSold   rupees of cost basis that left on those uncorrected days: the
+     *                         base the unknown gain or loss sits on, so the caveat can size the
+     *                         uncertainty instead of asserting a direction nobody measured (B-164)
+     * @param averageValue     mean portfolio value over the span, the denominator for that sizing
      */
     public record TwrResult(Double twrPercent, Double annualisedPercent, int snapshots,
                             long daysSpanned, int flowsCorrected, int flowsUncorrected,
-                            List<IndexPoint> indexed) {
+                            List<IndexPoint> indexed, double uncorrectedCostSold, double averageValue) {
     }
 
     /** The chain-linked series rebased to 100 at the first snapshot, for the chart. */
@@ -67,11 +71,13 @@ public final class PerformanceMath {
      */
     public static TwrResult timeWeighted(List<Day> days, Map<LocalDate, Double> realisedGainByDate) {
         if (days == null || days.size() < 2) {
-            return new TwrResult(null, null, days == null ? 0 : days.size(), 0, 0, 0, List.of());
+            return new TwrResult(null, null, days == null ? 0 : days.size(), 0, 0, 0, List.of(), 0.0, 0.0);
         }
         double growth = 1.0;
         int corrected = 0;
         int uncorrected = 0;
+        double uncorrectedCost = 0.0;
+        double valueSum = 0.0;
         List<IndexPoint> indexed = new ArrayList<>();
         Day prev = days.get(0);
         indexed.add(new IndexPoint(prev.date(), 100.0));
@@ -91,21 +97,24 @@ public final class PerformanceMath {
                     corrected++;
                 } else {
                     uncorrected++;
+                    uncorrectedCost += -flow;
                 }
             }
             double r = (d.value() - prev.value() - flow) / prev.value();
             growth *= (1.0 + r);
             usable++;
+            valueSum += d.value();
             indexed.add(new IndexPoint(d.date(), round2(growth * 100.0)));
             prev = d;
         }
         if (usable < 2) {
-            return new TwrResult(null, null, days.size(), 0, corrected, uncorrected, indexed);
+            return new TwrResult(null, null, days.size(), 0, corrected, uncorrected, indexed, uncorrectedCost, 0.0);
         }
         long span = ChronoUnit.DAYS.between(days.get(0).date(), days.get(days.size() - 1).date());
         double twr = (growth - 1.0) * 100.0;
         Double annualised = annualise(twr, span);
-        return new TwrResult(round2(twr), annualised, days.size(), span, corrected, uncorrected, indexed);
+        return new TwrResult(round2(twr), annualised, days.size(), span, corrected, uncorrected, indexed,
+                uncorrectedCost, usable > 1 ? valueSum / (usable - 1) : 0.0);
     }
 
     /** Compound annual rate for a cumulative percentage over {@code days}; null when too short. */
