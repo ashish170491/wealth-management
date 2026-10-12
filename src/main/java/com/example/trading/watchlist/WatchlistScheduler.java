@@ -1,5 +1,6 @@
 package com.example.trading.watchlist;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,11 +38,13 @@ public class WatchlistScheduler {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
         if (!isEnabled()) {
             log.debug("Watchlist scheduler is disabled");
+            JobRunContext.skip("Switched off in config (watchlist.enabled is false)");
             return;
         }
 
         if (!isWeekday()) {
             log.debug("Watchlist analysis skipped - weekend");
+            JobRunContext.skip("A weekend");
             return;
         }
 

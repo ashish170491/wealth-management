@@ -1,5 +1,6 @@
 package com.example.trading.portfolio.report;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,7 +41,10 @@ public class PortfolioReportScheduler {
     @Scheduled(cron = "0 30 9 * * MON-FRI", zone = "Asia/Kolkata")
     public void dailySnapshot() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
-        if (!dailyEnabled) return;
+        if (!dailyEnabled) {
+            JobRunContext.skip("Switched off in config (portfolio.reports.daily-enabled is false)");
+            return;
+        }
         run("daily");
     }
 
@@ -51,7 +55,10 @@ public class PortfolioReportScheduler {
     @Scheduled(cron = "0 25 15 1-7 * FRI", zone = "Asia/Kolkata")
     public void monthlyReview() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
-        if (!monthlyEnabled) return;
+        if (!monthlyEnabled) {
+            JobRunContext.skip("Switched off in config (portfolio.reports.monthly-enabled is false)");
+            return;
+        }
         run("monthly");
     }
 
@@ -59,7 +66,10 @@ public class PortfolioReportScheduler {
     @Scheduled(cron = "0 26 15 1-7 1,4,7,10 FRI", zone = "Asia/Kolkata")
     public void quarterlyRebalance() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
-        if (!quarterlyEnabled) return;
+        if (!quarterlyEnabled) {
+            JobRunContext.skip("Switched off in config (portfolio.reports.quarterly-enabled is false)");
+            return;
+        }
         run("quarterly");
     }
 

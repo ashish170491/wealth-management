@@ -1,5 +1,6 @@
 package com.example.trading.holdings;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,7 +30,11 @@ public class HoldingsScheduler {
      */
     @Scheduled(cron = "${holdings.scheduler.sync-cron:0 20 9 * * MON-FRI}", zone = "Asia/Kolkata")
     public void syncHoldingsFromBroker() {
-        if (!schedulerEnabled || !marketHoursService.isMarketOpen()) {
+        if (!schedulerEnabled) {
+            JobRunContext.skip("Switched off in config (holdings.scheduler.enabled is false)");
+            return;
+        }
+        if (!marketHoursService.isMarketOpen()) {
             return; // SPEC §3.4: market-hours only.
         }
 
@@ -49,7 +54,11 @@ public class HoldingsScheduler {
      */
     @Scheduled(cron = "${holdings.scheduler.analysis-cron:0 30 10 * * MON-FRI}", zone = "Asia/Kolkata")
     public void analyzeHoldings() {
-        if (!schedulerEnabled || !marketHoursService.isMarketOpen()) {
+        if (!schedulerEnabled) {
+            JobRunContext.skip("Switched off in config (holdings.scheduler.enabled is false)");
+            return;
+        }
+        if (!marketHoursService.isMarketOpen()) {
             return; // SPEC §3.4: market-hours only.
         }
 
@@ -86,7 +95,11 @@ public class HoldingsScheduler {
      */
     @Scheduled(cron = "${holdings.scheduler.report-cron:0 0 11,13,15 * * MON-FRI}", zone = "Asia/Kolkata")
     public void sendHoldingsReport() {
-        if (!schedulerEnabled || !marketHoursService.isMarketOpen()) {
+        if (!schedulerEnabled) {
+            JobRunContext.skip("Switched off in config (holdings.scheduler.enabled is false)");
+            return;
+        }
+        if (!marketHoursService.isMarketOpen()) {
             return; // SPEC §3.4: market-hours only.
         }
 
@@ -121,7 +134,11 @@ public class HoldingsScheduler {
      */
     @Scheduled(cron = "${holdings.scheduler.hourly-refresh-cron:0 0 10,11,12,13,14 * * MON-FRI}", zone = "Asia/Kolkata")
     public void refreshHoldingsPrices() {
-        if (!schedulerEnabled || !marketHoursService.isMarketOpen()) {
+        if (!schedulerEnabled) {
+            JobRunContext.skip("Switched off in config (holdings.scheduler.enabled is false)");
+            return;
+        }
+        if (!marketHoursService.isMarketOpen()) {
             return; // SPEC §3.4: market-hours only.
         }
 

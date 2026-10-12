@@ -1,5 +1,6 @@
 package com.example.trading.macro;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,8 @@ public class MacroIngestScheduler {
         }
         if (!config.getIngest().isScheduled()) {
             log.debug("Macro ingest: scheduled read is off in config");
+            // B-154: this exact branch left the news unread for a month while looking healthy.
+            JobRunContext.skip("Switched off in config (macro.ingest.scheduled is false) - the news stays unread");
             return;
         }
         try {

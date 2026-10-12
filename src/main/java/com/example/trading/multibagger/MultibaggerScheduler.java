@@ -1,5 +1,6 @@
 package com.example.trading.multibagger;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.broker.kite.TokenManagementService;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class MultibaggerScheduler {
         if (!marketHoursService.isSaturdayScreeningWindow()) return; // SPEC §3.4 Saturday carve-out.
         if (!config.isEnabled()) {
             log.debug("Multibagger Scheduler: Screening disabled in config");
+            JobRunContext.skip("Switched off in config (trading.multibagger.enabled is false)");
             return;
         }
         // Saturday has no token safety net: TokenManagementService's recovery cron is
@@ -101,6 +103,7 @@ public class MultibaggerScheduler {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
         if (!config.isEnabled()) {
             log.debug("Multibagger Scheduler: Screening disabled in config");
+            JobRunContext.skip("Switched off in config (trading.multibagger.enabled is false)");
             return;
         }
 
@@ -133,6 +136,7 @@ public class MultibaggerScheduler {
         if (!marketHoursService.isSaturdayScreeningWindow()) return; // SPEC §3.4 Saturday carve-out.
         if (!config.isEnabled() || !config.isEmailEnabled()) {
             log.debug("Multibagger Scheduler: Report disabled in config");
+            JobRunContext.skip("Switched off in config (trading.multibagger.enabled or email-enabled is false)");
             return;
         }
 

@@ -1,5 +1,6 @@
 package com.example.trading.scheduler;
 
+import com.example.trading.jobs.JobRunContext;
 import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
@@ -25,16 +26,25 @@ public class MarketHoursService {
     private static final LocalTime SATURDAY_WINDOW_CLOSE = LocalTime.of(10, 30);
 
     public boolean isMarketOpen() {
-        ZonedDateTime nowIST = ZonedDateTime.now(IST);
+        boolean open = isMarketOpenAt(ZonedDateTime.now(IST));
+        // The job-run ledger (SPEC §56) reads the FIRST window check of a scheduled run as that
+        // run's guard verdict. A no-op on any thread that is not running a scheduled job.
+        JobRunContext.noteWindowCheck(open);
+        return open;
+    }
 
-        // Check for weekends
-        int dayOfWeek = nowIST.getDayOfWeek().getValue();
+    /**
+     * The market-hours rule for an arbitrary instant - pure, so the jobs page can count which of
+     * a cron's fires land outside the window without a second copy of the rule (Gotcha 85).
+     */
+    public static boolean isMarketOpenAt(ZonedDateTime at) {
+        ZonedDateTime ist = at.withZoneSameInstant(IST);
+        int dayOfWeek = ist.getDayOfWeek().getValue();
         if (dayOfWeek >= 6) { // 6 = Saturday, 7 = Sunday
             return false;
         }
-
-        LocalTime nowTime = nowIST.toLocalTime();
-        return !nowTime.isBefore(MARKET_OPEN) && !nowTime.isAfter(MARKET_CLOSE);
+        LocalTime t = ist.toLocalTime();
+        return !t.isBefore(MARKET_OPEN) && !t.isAfter(MARKET_CLOSE);
     }
 
     /**
@@ -54,12 +64,19 @@ public class MarketHoursService {
      * that kind is fine; adding a third scheduled job is not.
      */
     public boolean isSaturdayScreeningWindow() {
-        ZonedDateTime nowIST = ZonedDateTime.now(IST);
-        if (nowIST.getDayOfWeek() != DayOfWeek.SATURDAY) {
+        boolean open = isSaturdayScreeningWindowAt(ZonedDateTime.now(IST));
+        JobRunContext.noteWindowCheck(open);
+        return open;
+    }
+
+    /** The Saturday carve-out for an arbitrary instant. Pure; see {@link #isMarketOpenAt}. */
+    public static boolean isSaturdayScreeningWindowAt(ZonedDateTime at) {
+        ZonedDateTime ist = at.withZoneSameInstant(IST);
+        if (ist.getDayOfWeek() != DayOfWeek.SATURDAY) {
             return false;
         }
-        LocalTime nowTime = nowIST.toLocalTime();
-        return !nowTime.isBefore(SATURDAY_WINDOW_OPEN) && !nowTime.isAfter(SATURDAY_WINDOW_CLOSE);
+        LocalTime t = ist.toLocalTime();
+        return !t.isBefore(SATURDAY_WINDOW_OPEN) && !t.isAfter(SATURDAY_WINDOW_CLOSE);
     }
 
     /**

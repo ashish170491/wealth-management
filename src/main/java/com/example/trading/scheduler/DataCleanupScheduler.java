@@ -40,6 +40,8 @@ public class DataCleanupScheduler {
     private final com.example.trading.watchlist.WatchlistConfig watchlistConfig;
     private final com.example.trading.intelligence.MarketImpactNewsRepository marketImpactNewsRepository;
     private final com.example.trading.macro.MacroEventRepository macroEventRepository;
+    private final com.example.trading.jobs.JobRunRepository jobRunRepository;
+    private final com.example.trading.jobs.AppBootRepository appBootRepository;
     private final MarketHoursService marketHoursService;
 
     /**
@@ -79,6 +81,9 @@ public class DataCleanupScheduler {
             deletionStats.put("News Headlines", cleanupMarketImpactNews());
             deletionStats.put("Macro Events", cleanupMacroEvents());
 
+            // Scheduled-job run ledger (SPEC §56.2)
+            deletionStats.put("Job Runs", cleanupJobRuns());
+
             long duration = System.currentTimeMillis() - startTime;
             int totalDeleted = deletionStats.values().stream().mapToInt(Integer::intValue).sum();
 
@@ -95,6 +100,19 @@ public class DataCleanupScheduler {
         } catch (Exception e) {
             log.error("Error during data cleanup", e);
         }
+    }
+
+    /**
+     * SPEC §56.2. Boots go with their runs: a boot older than the oldest kept run explains no fire
+     * the jobs page can still show, and the page reads its history-start date from the oldest boot,
+     * so keeping one would claim history the page no longer has.
+     */
+    private int cleanupJobRuns() {
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(config.getJobRunRetentionDays());
+        int deleted = jobRunRepository.deleteByStartedAtBefore(cutoff);
+        appBootRepository.deleteByLastSeenAtBefore(cutoff);
+        log.debug("Deleted {} job runs older than {} days", deleted, config.getJobRunRetentionDays());
+        return deleted;
     }
 
     private int cleanupWatchlistSnapshots() {

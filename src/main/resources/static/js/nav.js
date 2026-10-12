@@ -36,6 +36,7 @@ const PAGES = [
   { href: 'themes.html', label: 'Themes' },
   { href: 'reports.html', label: 'Reports' },
   { href: 'health.html', label: 'Data Health' },
+  { href: 'jobs.html', label: 'Jobs' },
   { href: 'guide.html', label: 'Guide' },
 ];
 
@@ -64,6 +65,10 @@ const RELEVANT = {
   // each job's own cron. A shorter answer to the same question directly above it is
   // exactly the two-surfaces-one-question failure (Gotcha 85).
   'health.html': [],
+  // Also empty, for the same reason: every row on the jobs page carries its own run times, and
+  // they are run times rather than data stamps - a different fact from every key on this strip
+  // (SPEC 56.7). Data Health answers "is the data fresh"; Jobs answers "did the job run".
+  'jobs.html': [],
 };
 
 const FRESHNESS_LABELS = {

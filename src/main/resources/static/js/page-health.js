@@ -55,7 +55,7 @@ function summaryRow(s) {
       label: 'Need attention',
       value: String(s.problems),
       sub: s.problems === 0 ? 'nothing is failing a check' : 'listed first below',
-      tone: s.problems > 0 ? 'bad' : 'good',
+      tone: s.problems > 0 ? 'negative' : 'positive',   // 'bad'/'good' have no CSS class - the card never coloured (B-167)
     }),
     kpi({
       label: 'Worth a look',
