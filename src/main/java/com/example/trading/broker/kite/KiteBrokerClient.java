@@ -91,17 +91,56 @@ public class KiteBrokerClient implements BrokerClient {
                 .block();
     }
 
+    /**
+     * Which Kite tradingsymbol answered for a requested symbol this session (B-169). Kite names a
+     * stock by its CURRENT NSE series, so a stock moved into trade-to-trade surveillance is
+     * {@code HFCL-BE} on Kite while every list in this app says {@code HFCL}. Cached per process
+     * (the app restarts daily), so a series change is picked up the next morning.
+     */
+    private final Map<String, String> resolvedQuoteSymbol = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Symbols no series form resolved this session - asked once, not on every screening loop. */
+    private final java.util.Set<String> unresolvableQuoteSymbols = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Override
     public Map<String, Object> getQuote(String symbol) {
-        // Kite tradingsymbols never carry the NSE trading-"series" suffix (-BE/-BZ/-BL/-IL =
-        // trade-to-trade / illiquid). A holding stored as NSE:KWIL-BE must be quoted as NSE:KWIL,
-        // otherwise Kite returns an empty data map and token/price resolution fails. Strip it before
-        // the call and alias the response back to the original key so callers reading
-        // data.get(originalSymbol) keep working unchanged. (B-013)
-        final String querySymbol = normalizeKiteSymbol(symbol);
+        // Ask for the symbol exactly as given; if Kite returns an empty data map for an NSE equity,
+        // try the same ticker on its other series boards. This replaces B-013's one-way strip,
+        // which assumed "Kite tradingsymbols never carry the series suffix". They do: on
+        // 2026-10-12 Kite listed 230 -BE and 39 -BZ equity symbols, and HFCL, STLTECH, MTARTECH,
+        // RBZJEWEL, ARIES and UGARSUGAR were unpriceable under their plain names (B-169). It is
+        // the same company on a different board - never a guess at a different company, which is
+        // what Gotcha 14 forbids. Whichever form answers is aliased back to the requested key, so
+        // callers reading data.get(symbol) keep working unchanged.
+        String cached = resolvedQuoteSymbol.get(symbol);
+        java.util.List<String> candidates = cached != null ? java.util.List.of(cached)
+                : unresolvableQuoteSymbols.contains(symbol) ? java.util.List.of(symbol)
+                : seriesCandidates(symbol);
+
+        Map<String, Object> first = null;
+        for (String querySymbol : candidates) {
+            Map<String, Object> result = fetchQuote(symbol, querySymbol);
+            if (first == null) first = result;
+            if (hasQuoteFor(result, querySymbol)) {
+                if (!querySymbol.equals(symbol)) {
+                    aliasQuote(result, querySymbol, symbol);
+                    if (resolvedQuoteSymbol.putIfAbsent(symbol, querySymbol) == null) {
+                        log.info("Kite quotes {} as {} - the stock is on a different NSE series board "
+                                + "(-BE/-BZ = trade-to-trade surveillance, -SM/-ST = SME). B-169.", symbol, querySymbol);
+                    }
+                }
+                return result;
+            }
+        }
+        if (candidates.size() > 1) {
+            unresolvableQuoteSymbols.add(symbol);
+        }
+        return first;
+    }
+
+    private Map<String, Object> fetchQuote(String symbol, String querySymbol) {
         log.info("Request: Fetching quote for symbol: {}{}", symbol,
                 querySymbol.equals(symbol) ? "" : " (querying Kite as " + querySymbol + ")");
-
         return executeWithRetry(
                 webClient.get()
                         .uri(uriBuilder -> uriBuilder.path("/quote").queryParam("i", querySymbol).build())
@@ -119,29 +158,42 @@ public class KiteBrokerClient implements BrokerClient {
                         .map(response -> {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> result = (Map<String, Object>) response;
-                            // When we normalized the symbol, Kite keys the data by querySymbol.
-                            // Alias it back to the original requested symbol so downstream lookups match.
-                            if (!querySymbol.equals(symbol) && result.get("data") instanceof Map<?, ?> dataMap
-                                    && dataMap.containsKey(querySymbol) && !dataMap.containsKey(symbol)) {
-                                @SuppressWarnings("unchecked")
-                                Map<String, Object> mutableData = (Map<String, Object>) dataMap;
-                                mutableData.put(symbol, mutableData.get(querySymbol));
-                            }
-                            log.info("Response: Quote received for {}: {}", symbol, result);
+                            log.info("Response: Quote received for {}: {}", querySymbol, result);
                             return result;
                         }))
                 .block();
     }
 
+    private static boolean hasQuoteFor(Map<String, Object> result, String key) {
+        return result != null && result.get("data") instanceof Map<?, ?> data && data.get(key) != null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void aliasQuote(Map<String, Object> result, String from, String to) {
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        if (!data.containsKey(to)) data.put(to, data.get(from));
+    }
+
+    /** NSE series suffixes a Kite equity tradingsymbol can carry. */
+    private static final java.util.regex.Pattern SERIES_SUFFIX =
+            java.util.regex.Pattern.compile("-(BE|BZ|BL|IL|SM|ST)$");
+
     /**
-     * Strips the NSE trading-series suffix (-BE/-BZ/-BL/-IL) that Kite tradingsymbols never carry.
-     * Index symbols ("NSE:NIFTY 50") and NFO derivatives (...CE/PE/FUT) are left untouched. (B-013)
+     * The forms to ask Kite for, in order: as given, then the plain ticker, then the plain ticker
+     * on each series board. Only NSE equities get the series forms: an index ("NSE:NIFTY 50") is
+     * returned untouched, and a BSE symbol only gets the B-013 strip. Pure.
      */
-    private String normalizeKiteSymbol(String symbol) {
-        if (symbol == null) {
-            return null;
+    static java.util.List<String> seriesCandidates(String symbol) {
+        if (symbol == null) return java.util.Collections.singletonList(null);
+        if (symbol.contains(" ") || !symbol.contains(":")) return java.util.List.of(symbol);
+        String base = SERIES_SUFFIX.matcher(symbol).replaceAll("");
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        out.add(symbol);
+        out.add(base);
+        if (symbol.startsWith("NSE:")) {
+            for (String series : java.util.List.of("BE", "BZ", "SM", "ST")) out.add(base + "-" + series);
         }
-        return symbol.replaceAll("-(BE|BZ|BL|IL)$", "");
+        return java.util.List.copyOf(out);
     }
 
     private final Map<String, String> instrumentTokenCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -225,12 +277,14 @@ public class KiteBrokerClient implements BrokerClient {
                         return String.valueOf(token);
                     }
                 }
-                if (data != null) {
-                    log.error("Token resolution failed. Available keys in response: {}", data.keySet());
-                }
-                throw new RuntimeException("Could not find instrument_token for " + s + " in quote response");
+                throw new RuntimeException("Kite returned no quote for " + s + " under any series form "
+                        + seriesCandidates(s) + " (keys in response: "
+                        + (data == null ? "none" : data.keySet()) + ")");
             } catch (Exception e) {
-                log.error("Failed to resolve instrument token for {}: {}", s, e.getMessage());
+                // ONE line per failure, naming the symbol (B-169): this used to log two ERRORs, the
+                // first with no ticker in it, so the jobs page quoted "Token resolution failed.
+                // Available keys in response: []" and counted every dead symbol twice.
+                log.error("Instrument token resolution failed for {}: {}", s, e.getMessage());
                 throw new RuntimeException("Instrument token resolution failed for " + s, e);
             }
         });

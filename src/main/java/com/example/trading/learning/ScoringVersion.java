@@ -40,7 +40,7 @@ public final class ScoringVersion {
      * Configuration changes (weights, actionable flags, bonus sizes) are picked up
      * automatically and must NOT require a bump.
      */
-    public static final int MULTIBAGGER_CODE_REVISION = 3;   // rev 2: Sector Tailwind removed (2026-09-03); rev 3: lender exemptions, real cash conversion, multi-year DCF/PEG benchmark (2026-10-11)
+    public static final int MULTIBAGGER_CODE_REVISION = 4;   // rev 2: Sector Tailwind removed (2026-09-03); rev 3: lender exemptions, real cash conversion, multi-year DCF/PEG benchmark (2026-10-11); rev 4: Institutional Interest null when unmeasured + both XBRL generations read (B-168, 2026-10-12)
 
     /** Quantitative discovery has no configuration bean; its version tracks code only. */
     public static final int QUANT_DISCOVERY_CODE_REVISION = 1;
