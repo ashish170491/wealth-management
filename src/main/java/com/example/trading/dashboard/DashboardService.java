@@ -120,6 +120,7 @@ public class DashboardService {
      */
     private final org.springframework.core.env.Environment environment;
     private final CompoundingLensService compoundingLensService;
+    private final com.example.trading.multibagger.SectorStandingService sectorStandingService;
     private final com.example.trading.macro.MacroExposureService macroExposureService;
     private final com.example.trading.macro.MacroEventRepository macroEventRepository;
     private final com.example.trading.intelligence.MarketImpactNewsRepository marketImpactNewsRepository;
@@ -389,8 +390,66 @@ public class DashboardService {
                 portfolioKpis(active),
                 riskHeadline(risk),
                 accuracyHeadline(),
-                attention(active, decay, drift, risk),
+                attention(active, decay, drift, risk, businessAttention(active)),
                 freshness(active));
+    }
+
+    /**
+     * Business-side reasons to re-read a thesis, from each holding's newest screening row (B-124).
+     *
+     * <p>The attention list drew from four sources - the momentum signal, thesis decay, allocation
+     * drift and concentration - and none of them is the business. A holding carrying a HIGH
+     * forensic flag or a HIGH_RISK balance sheet appeared nowhere on the landing page, although
+     * forensic is the one signal that ships armed (Gotcha 42) because a risk control being wrong
+     * costs capital. Each item says what was found and that it is a reason to look, never to sell.
+     * One bulk query for the whole book; the newest row across exchange spellings wins (B-150).
+     */
+    List<DashboardDto.AttentionItem> businessAttention(List<HoldingsEntity> active) {
+        List<DashboardDto.AttentionItem> out = new ArrayList<>();
+        if (active == null || active.isEmpty()) return out;
+        java.util.Set<String> spellings = new java.util.LinkedHashSet<>();
+        for (HoldingsEntity h : active) spellings.addAll(com.example.trading.holdings.SymbolVariants.candidates(h.getSymbol()));
+        Map<String, MultibaggerScoreEntity> bySymbol = new java.util.HashMap<>();
+        List<MultibaggerScoreEntity> latest = quietly("businessAttention",
+                () -> List.<MultibaggerScoreEntity>of(),
+                () -> multibaggerScoreRepository.findLatestForSymbolsSince(spellings, LocalDate.now().minusDays(120)));
+        for (MultibaggerScoreEntity r : latest) {
+            bySymbol.put(r.getSymbol(), r);
+        }
+        for (HoldingsEntity h : active) {
+            MultibaggerScoreEntity row = com.example.trading.holdings.SymbolVariants.newestAcrossSpellings(h.getSymbol(),
+                    sym -> bySymbol.containsKey(sym) ? List.of(bySymbol.get(sym)) : List.of(),
+                    MultibaggerScoreEntity::getScreeningDate);
+            if (row == null) continue;
+            String asOf = " (screening of " + row.getScreeningDate() + ")";
+            for (String flag : highForensicFlags(row.getForensicFlags())) {
+                out.add(new DashboardDto.AttentionItem("FORENSIC_FLAG", "WARNING", h.getSymbol(),
+                        "Accounting red flag: " + flag.toLowerCase(java.util.Locale.ROOT).replace('_', ' '),
+                        "The forensic screen raised a serious flag on the accounts" + asOf
+                                + ". Re-read your thesis and the latest annual report; this is a reason to look, "
+                                + "not an instruction to sell.",
+                        h.getPnlPercent()));
+            }
+            if ("HIGH_RISK".equals(row.getFinancialQualityVerdict())) {
+                out.add(new DashboardDto.AttentionItem("QUALITY_RISK", "WARNING", h.getSymbol(),
+                        "Balance sheet rated HIGH_RISK",
+                        "Financial quality reads HIGH_RISK" + asOf + ", which caps its score at 54. "
+                                + "Check what drove it on the stock page before adding more.",
+                        h.getPnlPercent()));
+            }
+        }
+        return out;
+    }
+
+    /** The codes of HIGH-severity forensic flags only; MEDIUM and INFO never reach the triage list. */
+    static List<String> highForensicFlags(String stored) {
+        List<String> out = new ArrayList<>();
+        if (stored == null || stored.isBlank()) return out;
+        for (String part : stored.split(";")) {
+            String[] kv = part.trim().split(":");
+            if (kv.length == 2 && "HIGH".equalsIgnoreCase(kv[1].trim())) out.add(kv[0].trim());
+        }
+        return out;
     }
 
     private DashboardDto.PortfolioKpis portfolioKpis(List<HoldingsEntity> active) {
@@ -447,7 +506,10 @@ public class DashboardService {
         List<RecommendationAccuracyService.SourceHorizonStats> all =
                 quietly("accuracy", List::of, accuracyService::summarize);
 
+        // Live pick engines only: SECTOR_REVERSAL was deleted on 2026-09-03 (IC -0.167 at 90d) and
+        // would headline the landing page the moment its row count topped the live engines (B-122).
         return all.stream()
+                .filter(s -> !"SECTOR_REVERSAL".equals(s.getSource()))
                 .filter(s -> s.getHorizonDays() == HEADLINE_HORIZON_DAYS)
                 .max(Comparator.comparingInt(RecommendationAccuracyService.SourceHorizonStats::getSampleSize))
                 .map(s -> new DashboardDto.AccuracyHeadline(
@@ -473,8 +535,18 @@ public class DashboardService {
             List<HoldingsDecayService.DecayAlert> decay,
             AllocationDto.DriftResponse drift,
             DiversificationDto.RiskResponse risk) {
+        return attention(active, decay, drift, risk, List.of());
+    }
+
+    static List<DashboardDto.AttentionItem> attention(
+            List<HoldingsEntity> active,
+            List<HoldingsDecayService.DecayAlert> decay,
+            AllocationDto.DriftResponse drift,
+            DiversificationDto.RiskResponse risk,
+            List<DashboardDto.AttentionItem> business) {
 
         List<DashboardDto.AttentionItem> items = new ArrayList<>();
+        if (business != null) items.addAll(business);
 
         for (HoldingsEntity h : active) {
             String rec = h.getRecommendation();
@@ -485,7 +557,9 @@ public class DashboardService {
                     "EXIT_SIGNAL",
                     "STRONG_SELL".equals(rec) ? "URGENT" : "WARNING",
                     h.getSymbol(),
-                    "Exit signal: " + rec,
+                    // A momentum rule, not a judgement on the business (B-056, B-153): named as
+                    // what it is, so the landing page does not tell the investor to exit off a chart.
+                    "Price-trend rule reads " + rec + " - check the business before acting",
                     h.getAnalysisNotes(),
                     h.getPnlPercent()));
         }
@@ -616,10 +690,15 @@ public class DashboardService {
                 Map<String, com.example.trading.analyst.AnalystTargetViewService.Coverage> analyst =
                         quietly("screening:analyst", Map::of, () -> analystTargetViewService.forSymbols(
                                 rows.stream().map(MultibaggerScoreEntity::getSymbol).toList()));
+                // The sector cross-section from the rows already in hand (SPEC 54): no extra query,
+                // and it refreshes the cache the portfolio, watchlist and stock page read from.
+                com.example.trading.multibagger.SectorStandingService.Snapshot standing =
+                        quietly("screening:sectorStanding", () -> null,
+                                () -> sectorStandingService.fromRun(date, rows));
                 return new DashboardDto.ScreenerResponse(date, rows.size(),
                         rows.stream()
                                 .map(r -> (Object) withBuyTiming(r, tracked.get(r.getSymbol()), years, change,
-                                        macro.get(r.getSymbol()), analyst.get(r.getSymbol())))
+                                        macro.get(r.getSymbol()), analyst.get(r.getSymbol()), standing))
                                 .toList());
             }
         }
@@ -768,6 +847,70 @@ public class DashboardService {
     }
 
     /**
+     * "How does this business compare with its own sector?" for one stock (SPEC 54), for the stock
+     * page: every figure with its sector median, quartile and peer count, plus the sentences naming
+     * where this reading and the market-wide compounding lens disagree.
+     *
+     * <p>Resolves the symbol the way the compounding panel beside it does - through
+     * {@code CompoundingLensService}, the B-088 "first spelling that can answer" rule - so the two
+     * panels on one page always describe the same row. Falls back to the first spelling present in
+     * the latest run only when the compounding lookup found nothing.
+     *
+     * <p>DB-only. Contributes nothing to any score.
+     *
+     * @return null when the stock is not in the latest screening run - the caller renders "never
+     *         screened", which is a different fact from "screened, but cannot be ranked"
+     */
+    public Map<String, Object> sectorStanding(String symbol) {
+        if (symbol == null || symbol.isBlank()) return null;
+        com.example.trading.multibagger.SectorStandingService.Snapshot snap =
+                quietly("sectorStanding", () -> null, sectorStandingService::latest);
+        if (snap == null) return null;
+
+        CompoundingLensService.Reading reading =
+                quietly("compounding:" + symbol, () -> null, () -> compoundingLensService.forSymbol(symbol));
+        com.example.trading.multibagger.SectorStanding.Result r = snap.readResolved(symbol, reading);
+        if (r == null) return null;
+        String answered = r.symbol();
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        putSectorStanding(m, r);
+        m.put("sectorStandingSector", r.sector());
+        m.put("sectorStandingDivergences", r.divergences());
+        m.put("sectorStandingMetrics", r.metrics().stream().map(x -> {
+            Map<String, Object> mm = new LinkedHashMap<>();
+            mm.put("key", x.metric().name());
+            mm.put("label", x.metric().label());
+            mm.put("higherIsBetter", x.metric().higherIsBetter());
+            mm.put("status", x.status().name());
+            mm.put("value", x.value());
+            mm.put("sectorMedian", x.sectorMedian());
+            mm.put("peers", x.peers());
+            mm.put("quartile", x.quartile() == null ? null : x.quartile().name());
+            mm.put("detail", x.detail());
+            return (Object) mm;
+        }).toList());
+        m.put("symbol", answered);
+        m.put("resolvedFrom", answered.equals(symbol) ? null : symbol);
+        m.put("screeningDate", snap.screeningDate());
+        return m;
+    }
+
+    /**
+     * The sector-relative lens in the five field names every table surface uses (SPEC 54). A null
+     * result writes nothing, so the cell renders "not measured" rather than a weak reading.
+     */
+    private static void putSectorStanding(Map<String, Object> m,
+                                          com.example.trading.multibagger.SectorStanding.Result r) {
+        if (r == null) return;
+        m.put("sectorStanding", r.verdict().name());
+        m.put("sectorStandingReason", r.reason());
+        m.put("sectorStandingAbove", r.above());
+        m.put("sectorStandingRanked", r.ranked());
+        m.put("sectorStandingPeers", r.peers());
+    }
+
+    /**
      * Attaches the compounding-quality lens (SPEC 41) to a screening row.
      *
      * <p>Computed on read rather than stored, for the same reason as the buy-timing verdict: it is
@@ -889,20 +1032,21 @@ public class DashboardService {
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts) {
-        return withBuyTiming(e, tracked, yearsOfAccounts, ScoreChangeContext.none(), null, null);
+        return withBuyTiming(e, tracked, yearsOfAccounts, ScoreChangeContext.none(), null, null, null);
     }
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts,
                                               ScoreChangeContext change) {
-        return withBuyTiming(e, tracked, yearsOfAccounts, change, null, null);
+        return withBuyTiming(e, tracked, yearsOfAccounts, change, null, null, null);
     }
 
     private Map<String, Object> withBuyTiming(MultibaggerScoreEntity e, WatchlistItemView tracked,
                                               Map<String, Integer> yearsOfAccounts,
                                               ScoreChangeContext change,
                                               com.example.trading.macro.MacroExposureService.Reading macro,
-                                              com.example.trading.analyst.AnalystTargetViewService.Coverage analyst) {
+                                              com.example.trading.analyst.AnalystTargetViewService.Coverage analyst,
+                                              com.example.trading.multibagger.SectorStandingService.Snapshot standing) {
         ScreenerTimingVerdict.Result r = ScreenerTimingVerdict.evaluate(new ScreenerTimingVerdict.Input(
                 e.getCompositeScore(),
                 e.getWeeklyRsi(),
@@ -917,7 +1061,9 @@ public class DashboardService {
         Map<String, Object> m = objectMapper.convertValue(e, new TypeReference<Map<String, Object>>() {
         });
 
-        putCompounding(m, compoundingLensService.evaluate(e, yearsOfAccounts));
+        CompoundingQuality.Result compounding = compoundingLensService.evaluate(e, yearsOfAccounts);
+        putCompounding(m, compounding);
+        if (standing != null) putSectorStanding(m, standing.read(e.getSymbol(), compounding));
         putMacro(m, macro);
         putAnalyst(m, analyst);
         putTheme(m, e.getSymbol());

@@ -342,7 +342,8 @@ public class QuantitativeDiscoveryService {
         // Standalone signal; used to cap the composite for fragile balance sheets.
         NseDataService.FinancialQualityData fq = null;
         try {
-            fq = nseDataService.analyzeFinancialQuality(tradingSymbol);
+            fq = nseDataService.analyzeFinancialQuality(tradingSymbol,
+                    valuation != null ? valuation.getIndustry() : null); // lender exemption, B-144
             if (fq != null && fq.getQualityScore() != null) {
                 if (fq.getStrengths() != null) triggers.addAll(fq.getStrengths());
                 if (fq.getRedFlags() != null) risks.addAll(fq.getRedFlags());

@@ -80,6 +80,22 @@ public class WeightReviewService {
         return reviewRepository.findRecent(horizonDays);
     }
 
+    /**
+     * The independent-period count from the most recent recorded review at a horizon, or empty if
+     * none was ever recorded. This - not a row count - is the sample size every accuracy screen
+     * must be read against (Gotcha 92); screens quote it so it does not live in one panel's footnote.
+     */
+    public java.util.Optional<Integer> latestIndependentPeriods(int horizonDays) {
+        try {
+            return reviewRepository.findRecent(horizonDays).stream()
+                    .map(WeightReviewEntity::getIndependentPeriods)
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst();
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
+    }
+
     /** Every recorded review, most recent first. DB-only. */
     public List<WeightReviewEntity> history() {
         return reviewRepository.findAllRecent();
@@ -88,8 +104,20 @@ public class WeightReviewService {
     private List<PromotionGate.PriorReview> loadPriors(int horizonDays) {
         List<WeightReviewEntity> rows = reviewRepository.findRecent(horizonDays);
         List<PromotionGate.PriorReview> out = new ArrayList<>();
+        // Spacing (B-165): "two consecutive reviews" only means two readings of different evidence
+        // if a horizon block separates them. Reviews #2 and #3 were recorded 12 minutes apart, so
+        // running the review twice satisfied the condition on one body of data - the exact case
+        // Gotcha 93 warns about. A prior counts only if at least one horizon (in days) lies between
+        // it and the review that follows it; a closer one is a re-run of the same evidence and is
+        // skipped, not counted and not treated as a break.
+        java.time.LocalDate newer = java.time.LocalDate.now();
         for (WeightReviewEntity r : rows) {
             if (out.size() >= PRIOR_REVIEW_LOOKBACK) break;
+            if (r.getReviewDate() != null
+                    && java.time.temporal.ChronoUnit.DAYS.between(r.getReviewDate(), newer) < horizonDays) {
+                continue;
+            }
+            if (r.getReviewDate() != null) newer = r.getReviewDate();
             // A review recorded under a different candidate-set revision is not comparable: the
             // same variant name may have meant a different vector. Treated as a break in the run
             // rather than skipped, because skipping would silently join two runs across the

@@ -155,6 +155,59 @@ public class FundamentalsBackfillService {
                 stopped, remaining, done);
     }
 
+    /** What one gap-fill pass did. */
+    public record GapResult(int symbolsTried, int yearsWritten, int skippedForBasis, boolean stoppedOnDeadline,
+                            int remaining) {
+    }
+
+    /**
+     * Fill the integrated feed's older year-end filings - in practice FY2025 - for symbols the
+     * archive pass has already visited (B-166).
+     *
+     * <p>Neither existing source reaches that year: the legacy archive stops at FY2024 and the
+     * screening maintains only the newest. So after the archive backfill converged, no stock had
+     * FY2025, balance sheets existed for 2023, 2024 and 2026 only, and the persistence gates (SPEC
+     * 43) could not reach their four-year floor. Holdings first, then the rest; stops at the same
+     * deadline as the main batch, and a tried symbol is stamped whatever was found.
+     */
+    public GapResult fillIntegratedGaps(int limit) {
+        Set<String> held = heldSymbols();
+        List<FundamentalsBackfillStatusEntity> todo = new ArrayList<>();
+        for (FundamentalsBackfillStatusEntity s : statusRepository.findAll()) {
+            if (s.getIntegratedGapCheckedOn() == null
+                    && s.getStatus() != null
+                    && !FundamentalsBackfillStatusEntity.PENDING.equals(s.getStatus())) {
+                todo.add(s);
+            }
+        }
+        todo.sort(Comparator.comparing((FundamentalsBackfillStatusEntity s) -> held.contains(s.getSymbol()) ? 0 : 1)
+                .thenComparing(FundamentalsBackfillStatusEntity::getSymbol));
+        int tried = 0, written = 0, skipped = 0;
+        boolean stopped = false;
+        for (FundamentalsBackfillStatusEntity s : todo) {
+            if (tried >= limit) break;
+            if (pastDeadline()) {
+                stopped = true;
+                break;
+            }
+            try {
+                int[] r = historyService.fillIntegratedYears(s.getSymbol());
+                written += r[0];
+                skipped += r[1];
+                s.setIntegratedGapCheckedOn(LocalDate.now(IST));
+                statusRepository.save(s);
+                tried++;
+            } catch (Exception e) {
+                // Left unstamped so the next run retries it; one bad symbol must not stop the pass.
+                log.warn("Integrated-year gap fill failed for {}: {}", s.getSymbol(), e.getMessage());
+            }
+        }
+        int remaining = Math.max(0, todo.size() - tried);
+        log.info("Integrated-year gap fill: {} symbols, {} years written, {} skipped for a different "
+                + "reporting basis; {} still to try", tried, written, skipped, remaining);
+        return new GapResult(tried, written, skipped, stopped, remaining);
+    }
+
     /**
      * A symbol whose attempts are used up stops being retried.
      *

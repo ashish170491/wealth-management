@@ -50,6 +50,33 @@ public final class SymbolVariants {
         return List.copyOf(out);
     }
 
+    /**
+     * The newest row across every spelling of {@code symbol}; an exact-spelling row wins a tie.
+     *
+     * <p>"First spelling that has any history" (Gotcha 84/107) is right for <i>finding</i> a row and
+     * wrong for <i>picking</i> one when spellings can hold rows of different ages: a one-off
+     * 2026-04-18 BSE row outranked the daily NSE row for seven holdings and ABCAPITAL read
+     * ACCUMULATE from a six-month-old 53 (B-150). The company is the same on either line, so the
+     * newest reading of it is the one to use - never a blend.
+     *
+     * @param historyNewestFirst loads one spelling's history, newest first
+     */
+    public static <T> T newestAcrossSpellings(String symbol,
+            java.util.function.Function<String, List<T>> historyNewestFirst,
+            java.util.function.Function<T, java.time.LocalDate> dateOf) {
+        T best = null;
+        for (String candidate : candidates(symbol)) {
+            List<T> history = historyNewestFirst.apply(candidate);
+            if (history == null || history.isEmpty()) continue;
+            T head = history.get(0);
+            java.time.LocalDate d = dateOf.apply(head);
+            if (best == null || (d != null && dateOf.apply(best) != null && d.isAfter(dateOf.apply(best)))) {
+                best = head;
+            }
+        }
+        return best;
+    }
+
     /** The symbol without its exchange prefix: {@code BSE:INFY} → {@code INFY}. */
     public static String base(String symbol) {
         if (symbol == null) return null;

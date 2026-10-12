@@ -55,6 +55,13 @@ public interface MarketImpactNewsRepository extends JpaRepository<MarketImpactNe
             + "AND n.publishedAt >= :since ORDER BY n.publishedAt DESC")
     List<MarketImpactNewsEntity> findUnreadSince(@Param("since") LocalDateTime since);
 
+    /**
+     * When the macro reader last read any headline. A run that finds no event still marks what it
+     * read, so this - not the newest event row - is "when the news was last read" (B-154).
+     */
+    @Query("SELECT MAX(n.macroExtractedAt) FROM MarketImpactNewsEntity n")
+    LocalDateTime findLatestMacroReadAt();
+
     // ------------------------------------------------------------- analyst target ledger (SPEC 49.5)
 
     /**

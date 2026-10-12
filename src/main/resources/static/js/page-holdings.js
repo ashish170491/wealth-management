@@ -41,6 +41,7 @@ import {
 import { donut, gauge, barChart, sparkline, lineChart, legend, scatter, COLORS } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank, COMPOUNDING } from './compounding.js';
+import { sectorStandingCol } from './sector-standing.js';
 import { macroExposureCol, macroFilterGroup, macroCoverageLine } from './macro-cells.js';
 import { themeCol, themeFilterGroup, themeCoverageLine } from './theme-cells.js';
 import {
@@ -290,7 +291,11 @@ function buyTimingCell(h) {
   }
   if (t.reason) wrap.append(el('div.muted', { style: 'font-size:12px;margin-top:3px' }, t.reason));
   if (t.qualityFrom && t.qualityFrom !== h.symbol) {
-    wrap.append(el('div.muted', { style: 'font-size:11px;margin-top:2px' }, `Scored from ${displaySymbol(t.qualityFrom)}`));
+    wrap.append(el('div.muted', { style: 'font-size:11px;margin-top:2px' }, `Scored from ${displaySymbol(t.qualityFrom)}${t.qualityDate ? `, screened ${t.qualityDate}` : ''}`));
+  } else if (t.qualityDate) {
+    // Same line, but say so when the reading is old - B-150 showed a six-month-old score with nothing to say so.
+    const age = (Date.now() - new Date(`${t.qualityDate}T00:00:00`).getTime()) / 86400000;
+    if (age > 7) wrap.append(el('div.muted', { style: 'font-size:11px;margin-top:2px' }, `Quality scored ${t.qualityDate}`));
   }
   return wrap;
 }
@@ -808,6 +813,9 @@ function holdingsTable(rows, matrix) {
     },
     { key: 'overallScore', label: 'Score', align: 'r', render: (h) => scoreBar(h.overallScore) },
     { key: 'compounding', label: 'Compounds?', value: compoundingRank, render: compoundingCell },
+    // Where the business sits among its own sector (SPEC 54). Beside the market-wide gate, never
+    // blended into it: it explains that verdict and does not override it.
+    sectorStandingCol(),
     // Who else is watching this stock (SPEC 49.14). Beside the app's own verdict, never blended
     // into it: a brokerage target is somebody else's opinion recorded so it can be scored later,
     // and it contributes zero points to anything here.

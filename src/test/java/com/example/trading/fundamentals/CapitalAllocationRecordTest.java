@@ -41,6 +41,28 @@ class CapitalAllocationRecordTest {
     }
 
     @Test
+    @DisplayName("An oldest year with a P&L and no balance sheet does not blank the two balance-sheet measures (B-166)")
+    void oldestYearWithoutBalanceSheetIsSkippedNotFatal() {
+        // The backfill's oldest years carry sales and profit but no balance sheet; reading h.get(0)
+        // as the opening balance sheet made reinvestment and incremental return "not measured" for
+        // every company.
+        List<AnnualFundamentalsEntity> h = flatSeries(100);
+        AnnualFundamentalsEntity oldest = h.get(0);
+        oldest.setNetBlock(null);
+        oldest.setEquity(null);
+        oldest.setBorrowings(null);
+        // Capital grows 15% over the period so the incremental-return measure applies.
+        h.get(h.size() - 1).setEquity(1000.0);
+        h.get(h.size() - 1).setNetBlock(700.0);
+
+        CapitalAllocationRecord.Result r = CapitalAllocationRecord.analyse(h);
+        var reinvestment = r.components().stream().filter(c -> "reinvestment".equals(c.key())).findFirst().orElseThrow();
+        var incremental = r.components().stream().filter(c -> "incrementalReturn".equals(c.key())).findFirst().orElseThrow();
+        assertThat(reinvestment.status()).isNotEqualTo(CapitalAllocationRecord.Status.NOT_MEASURED);
+        assertThat(incremental.status()).isNotEqualTo(CapitalAllocationRecord.Status.NOT_MEASURED);
+    }
+
+    @Test
     @DisplayName("Fewer than five years says nothing at all")
     void shortHistoryIsNotMeasured() {
         List<AnnualFundamentalsEntity> h = flatSeries(100).subList(0, 4);

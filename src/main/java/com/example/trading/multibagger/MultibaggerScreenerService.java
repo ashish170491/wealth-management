@@ -30,14 +30,20 @@ import java.util.stream.Collectors;
 /**
  * Core Multibagger Screening Engine.
  *
- * Scores stocks across 7 dimensions to identify potential multibagger candidates:
- * 1. Technical Momentum (20%) - Weekly/monthly EMA trend, RSI positioning
- * 2. Volume Accumulation (15%) - Smart money accumulation patterns
- * 3. Relative Strength (15%) - Outperformance vs Nifty 50 index
- * 4. Price Structure (15%) - Base building, higher lows, proximity to 52w high
- * 5. Valuation (15%) - PE vs sector PE, market cap category
- * 6. Institutional Interest (10%) - FII/DII sector flows
- * 7. Sector Tailwind (10%) - Sector rotation and momentum
+ * Scores stocks across 7 dimensions to identify potential multibagger candidates. The weights live
+ * in application.yml (trading.multibagger.*-weight, validated to sum to 1.0 at boot - B-019); the
+ * figures below are the shipped values:
+ * 1. Technical Momentum (20%) - Weekly EMA trend, RSI positioning
+ * 2. Volume Accumulation (13%) - Smart money accumulation patterns
+ * 3. Relative Strength (13%) - Outperformance vs Nifty 50 index
+ * 4. Price Structure (13%) - Base building, higher lows, proximity to 52w high
+ * 5. Valuation (14%) - PE vs sector PE blended with the reverse-DCF expectation gap
+ * 6. Institutional Interest (11%) - Per-stock FII/DII holding trend, small sector-flow tilt
+ * 7. Financial Quality (16%) - Balance-sheet and cash-flow quality
+ *
+ * Sector Tailwind was the eighth dimension until 2026-09-03 and was removed (SPEC 39.2). Where a
+ * business sits among its own sector is shown by the sector-relative lens (SPEC 54), which never
+ * enters this score.
  *
  * Uses Kite API (daily candles) + NSE valuation data + existing FII/DII infrastructure.
  */
@@ -243,7 +249,9 @@ public class MultibaggerScreenerService {
         STOCK_SECTOR_MAP.put("NSE:LUPIN", "Pharma");
         STOCK_SECTOR_MAP.put("NSE:DLF", "Real Estate"); STOCK_SECTOR_MAP.put("NSE:GODREJPROP", "Real Estate");
         STOCK_SECTOR_MAP.put("NSE:OBEROIRLTY", "Real Estate");
-        STOCK_SECTOR_MAP.put("NSE:IRFC", "Infrastructure"); STOCK_SECTOR_MAP.put("NSE:IRCTC", "Infrastructure");
+        // IRFC is a lender to the railways, not a builder of them: NSE files it under Financial Services,
+        // and filing it as Infrastructure kept every lender exemption from reaching it (B-140, B-144).
+        STOCK_SECTOR_MAP.put("NSE:IRFC", "Finance"); STOCK_SECTOR_MAP.put("NSE:IRCTC", "Infrastructure");
         STOCK_SECTOR_MAP.put("NSE:RVNL", "Infrastructure");
         STOCK_SECTOR_MAP.put("NSE:AARTIIND", "Chemicals"); STOCK_SECTOR_MAP.put("NSE:DEEPAKNTR", "Chemicals");
         STOCK_SECTOR_MAP.put("NSE:TATACHEM", "Chemicals");
@@ -589,21 +597,44 @@ public class MultibaggerScreenerService {
         return isCandidate(score) && score.getCompositeScore() >= config.getHighConvictionScore();
     }
 
-    /** Resolve the screening universe from config tier, via the NSE watchlist service. */
+    /**
+     * Resolve the screening universe from config tier, via the NSE watchlist service, plus every
+     * active holding.
+     *
+     * <p>Holdings were not part of it: on 2026-10-10 six holdings, 21% of the book by value (VMM,
+     * EMCURE, NITINSPIN, PITTIENG, SKYGOLD, GULPOLY), had no row in the latest run, so their buy-timing,
+     * compounding, sector-standing and drift readings were weeks or months old or missing. A stock
+     * the investor owns is the one stock that must be scored every run. Holdings are added under
+     * the NSE spelling, because screening history is keyed on NSE (Gotcha 84).
+     */
     private List<String> resolveUniverse() {
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
         try {
             List<String> tierSymbols = nseWatchlist.getSymbolsByTier(config.getScreeningTier());
-            if (tierSymbols != null && !tierSymbols.isEmpty()) {
-                // Merge tier universe with the legacy hardcoded set so nothing is lost
-                java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(tierSymbols);
-                merged.addAll(SCREENING_UNIVERSE);
-                return new java.util.ArrayList<>(merged);
-            }
+            if (tierSymbols != null) merged.addAll(tierSymbols);
         } catch (Exception e) {
             log.warn("Tier universe resolution failed, falling back to legacy SCREENING_UNIVERSE: {}",
                     e.getMessage());
         }
-        return SCREENING_UNIVERSE;
+        // Merge tier universe with the legacy hardcoded set so nothing is lost
+        merged.addAll(SCREENING_UNIVERSE);
+        merged.addAll(heldNseSymbols());
+        return new java.util.ArrayList<>(merged);
+    }
+
+    /** Active holdings as NSE symbols. Empty on failure: a missed holding is a gap, not a crash. */
+    private java.util.Set<String> heldNseSymbols() {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        try {
+            for (HoldingsEntity h : holdingsRepository.findActive()) {
+                String base = com.example.trading.holdings.SymbolVariants.base(h.getSymbol());
+                if (base != null && !base.isBlank()) out.add("NSE:" + base);
+            }
+        } catch (Exception e) {
+            log.warn("Screening universe: holdings unavailable ({}), so a holding outside the tier "
+                    + "lists will not be scored this run.", e.getMessage());
+        }
+        return out;
     }
 
     /**
@@ -616,6 +647,12 @@ public class MultibaggerScreenerService {
      * </ul>
      */
     private boolean passesTierGate(MultibaggerScore score) {
+        // A held stock is always published: the gate decides which small caps are worth showing as
+        // ideas, and a holding is not an idea - it is money already committed, and every holdings
+        // screen reads its row. The candidate gate (isCandidate) still decides what is recommended.
+        if (heldNseSymbols().contains("NSE:" + com.example.trading.holdings.SymbolVariants.base(score.getSymbol()))) {
+            return true;
+        }
         String cat = nseWatchlist.getCategory(score.getSymbol());
         if (com.example.trading.scanner.Nifty200WatchlistService.CAT_SMALLCAP.equals(cat)) {
             if (score.getCompositeScore() < config.getSmallcapMinScore()) return false;
@@ -851,7 +888,10 @@ public class MultibaggerScreenerService {
         NseDataService.FinancialQualityData fq = null;
         Integer fqScore = null; // unmeasured until NSE filings actually yield a score
         try {
-            fq = nseDataService.analyzeFinancialQuality(fqTradingSymbol);
+            // Same industry hint capital efficiency uses below, so the lender exemption (B-144)
+            // fires on the same stocks in both places.
+            fq = nseDataService.analyzeFinancialQuality(fqTradingSymbol,
+                    valuation != null && valuation.getIndustry() != null ? valuation.getIndustry() : sector);
             if (fq != null && fq.getQualityScore() != null) {
                 fqScore = fq.getQualityScore();
                 if (fq.getStrengths() != null) bullishFactors.addAll(fq.getStrengths());
@@ -1087,9 +1127,14 @@ public class MultibaggerScreenerService {
                 }
 
                 // PEG = PE / profit growth%. Only meaningful when both are positive.
+                // Growth is the multi-year profit CAGR the DCF already measured (>= 4 years of
+                // annual accounts), not one quarter's year-on-year change: CENTUM earned "cheap
+                // relative to growth" off a +2,257% quarter, and 63 of 110 PEG<1 rows rested on a
+                // single quarter above 60% (B-145).
                 Double pe = valuation != null ? valuation.getStockPe() : null;
-                if (pe != null && pe > 0 && yoyProfGrowth != null && yoyProfGrowth > 0) {
-                    pegRatio = pe / yoyProfGrowth;
+                Double pegGrowth = dcf != null ? dcf.getHistoricalGrowthPercent() : null;
+                if (pe != null && pe > 0 && pegGrowth != null && pegGrowth > 0) {
+                    pegRatio = pe / pegGrowth;
                     if (pegRatio < 1.0) {
                         wsBonus += 2;
                         bullishFactors.add(String.format("PEG %.2f — cheap relative to growth", pegRatio));
@@ -1142,7 +1187,9 @@ public class MultibaggerScreenerService {
                     if (debtToEquity <= 0.3) ceBonus += 2;
                     else if (debtToEquity > 2.0) ceBonus -= 4;
                 }
-                if (cashConversion != null) {
+                // Not for a lender: lending money out is operating cash outflow, so a growing
+                // loan book reads as "poor cash conversion" (B-144).
+                if (cashConversion != null && !ce.isFinancialSector()) {
                     if (cashConversion >= 0.8) ceBonus += 2;
                     else if (cashConversion < 0.5) ceBonus -= 2;
                 }
@@ -1316,7 +1363,8 @@ public class MultibaggerScreenerService {
                 // matters — the run that decides what the user is shown.
                 boolean scanAnnouncements =
                         composite >= com.example.trading.fundamentals.ForensicScreenService.AUDITOR_SCAN_MIN_COMPOSITE;
-                var fr = forensicScreenService.screen(symbol, scanAnnouncements);
+                var fr = forensicScreenService.screen(symbol, scanAnnouncements,
+                        fq != null && fq.isLender());
                 if (!fr.isClean()) {
                     forensicFlags = fr.toStorageString();
                     // Risk controls are armed by default, unlike the bonuses above — see

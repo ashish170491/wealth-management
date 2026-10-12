@@ -77,6 +77,9 @@ class DiscoverySurfaceContractTest {
             "scoreDelta30dFrom",
             "universeShift30d",
             "compounding",              // SPEC 41, also pinned by CompoundingSurfaceContractTest
+            "sectorStanding",           // SPEC 54, also pinned by SectorStandingSurfaceContractTest
+            "sectorStandingAbove",
+            "sectorStandingRanked",
             "buyTiming",                // SPEC 37.3, the one shared rule table (Gotcha 85)
             "suggestedEntryPrice");
 

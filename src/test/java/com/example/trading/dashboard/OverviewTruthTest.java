@@ -167,4 +167,22 @@ class OverviewTruthTest {
         // Severity ordering must still put the real finding first.
         assertThat(items.get(0).kind()).isEqualTo("EXIT_SIGNAL");
     }
+
+    @Test
+    @DisplayName("Only HIGH forensic flags reach the triage list; MEDIUM and INFO never do (B-124)")
+    void onlyHighForensicFlagsAreRaised() {
+        assertThat(DashboardService.highForensicFlags("CASH_CONVERSION:HIGH;RECEIVABLES:MEDIUM;CORPORATE_ACTION:INFO"))
+                .containsExactly("CASH_CONVERSION");
+        assertThat(DashboardService.highForensicFlags(null)).isEmpty();
+        assertThat(DashboardService.highForensicFlags("DILUTION:MEDIUM")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Business items join the attention list and sort with the other warnings (B-124)")
+    void businessItemsAreMerged() {
+        var business = List.of(new DashboardDto.AttentionItem("FORENSIC_FLAG", "WARNING", "NSE:X",
+                "Accounting red flag: cash conversion", "re-read", null));
+        var items = DashboardService.attention(List.of(), List.of(), drift(true), null, business);
+        assertThat(items).anySatisfy(i -> assertThat(i.kind()).isEqualTo("FORENSIC_FLAG"));
+    }
 }

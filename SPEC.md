@@ -288,7 +288,7 @@ Surface concentration risk that P&L alone cannot show.
 - **Herfindahl-Hirschman Index (HHI)** across stocks — flag if > 2 500 (concentrated) or > 4 000 (dangerous).
 - **Sector concentration** — max sector weight; alert if any sector > 30%.
 - **Market-cap mix** — large/mid/small weights vs target profile.
-- **Correlation clusters** — group holdings into clusters using 90-day daily-return correlation ≥ 0.7; highlight clusters with combined weight > 20%.
+- **Correlation clusters** — group holdings into clusters using 90-day daily-return correlation ≥ 0.7; highlight clusters with combined weight > 20%. **Computed since 2026-10-12** (§55.6) by `CorrelationClusters` from the daily closes already in `holdings_history` — DB-only, so `GET /api/portfolio/risk` stays page-load safe. A pair needs 40 common daily returns or it is counted as unmeasured, never as uncorrelated.
 - **Single-stock cap** — alert if any holding > 15% of total portfolio value.
 
 ### 7.3 Delivery
@@ -778,6 +778,8 @@ Each symbol carries a category label (`LARGE_CAP` / `MIDCAP_100` / `SMALLCAP_250
 
 **The screener screens two lists, not one** (B-053, CLAUDE.md Gotcha 57). `resolveUniverse()` unions the tier list with `MultibaggerScreenerService.SCREENING_UNIVERSE`, a second hardcoded ~90-name list, and — when `trading.universe.dynamic-expansion.enabled` is on — with symbols promoted by the expansion funnel (§30). Anything asking *"is this stock already covered?"* must union all three via `getScreeningUniverse()`; reading only the tier list is how the funnel came to "discover" a stock with five months of screening history.
 
+**Every active holding is screened too (2026-10-12, §55.5).** `resolveUniverse()` adds each active holding under its NSE spelling, and the small/micro-cap tier gate never drops a held stock: a holding is money already committed, not an idea, and every holdings screen reads its row. On 2026-10-10 six holdings (21% of the book) had no row in the latest run. The candidate gate still decides what is recommended.
+
 **Known coverage gap** (measured 2026-08-26). NSE lists 2,559 securities, 2,291 of them mainboard `EQ`; the curated universe of ~361 names had **never looked at 1,598 of them**. That gap is the reason the Under-Discovery lens (§12.10) found one candidate on its first run — it was pointed at the well-covered part of the market by construction. §30 exists to close it, in observation mode.
 
 **Policy-backed themes extend the universe deliberately** (§51, 2026-09-19). The theme map named
@@ -836,9 +838,10 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | 10:30 MON-FRI | Holdings analysis **+ core-holding classification** (§35.7 — no cron of its own) | `HoldingsScheduler.analyzeHoldings` | market |
 | 11:00, 13:00, 15:00 MON-FRI | Holdings report emails | `HoldingsScheduler.sendHoldingsReport` | market |
 | 11:00, 13:00, 15:00 MON-FRI | Watchlist analysis + snapshot (§37.4) | `WatchlistScheduler.analyzeAndReportWatchlist` | market |
-| 11:30 MON-FRI | Annual-fundamentals backfill batch (§32.6) | `FundamentalsBackfillScheduler.backfillBatch` | market |
+| 11:30 MON-FRI | Annual-fundamentals backfill batch (§32.6), then the integrated-filing gap pass for FY2025 (§55.4) — same deadline, same pacing | `FundamentalsBackfillScheduler.backfillBatch` | market |
 | 12:15 MON-FRI | IPO pipeline capture (§45.6) — three NSE list calls, a detail call per issue, one paced Kite quote per listing under a year old | `IpoCaptureScheduler.captureDaily` | market |
 | 12:30 MON-FRI | AMFI daily NAV pull (§52.6) — **one** HTTP GET of ~1.5 MB from a third host. No Kite call, no NSE call, so it competes for neither budget | `MutualFundNavScheduler.pullDailyNav` | market |
+| 12:40 MON-FRI | Macro news read (§48.9, revised 2026-10-12): RSS feeds plus one Kite quote when readings are filed. Skips when `macro.ingest.scheduled` is false | `MacroIngestScheduler.dailyIngest` | market |
 | every 15 min 09:15–15:30 MON-FRI | Headline capture, storage only — no classification, no alert, no email (§48.4) | `MarketImpactNewsService.scheduledNewsCheck` | market — the cron `0 */15 9-15` fires at 09:00 and the guard is what stops it (§3.4) |
 | 13:20 MON-FRI | Analyst target capture + measurement (§49.6) — the capture half is DB-only; the measurement half is one paced Kite call per stock with an open target, bounded and rotating least-recently-measured first | `AnalystTargetScheduler.captureAndMeasure` | market |
 | 14:00 MON-FRI | Daily multibagger screening | `MultibaggerScheduler.dailyQuickScreening` | market |
@@ -2414,7 +2417,7 @@ CSV import is the fallback for exactly those names. A listing that *errored* is 
 #### Expected consequence of the rollout, and how it is observed
 
 **Composites will move while it runs, and that is correct.** `forensic-actionable` defaults `true`
-and a HIGH flag forces the composite cap at 54, so as depth arrives some new true flags appear and
+and a HIGH flag deducts 5 points and disqualifies on every buy-timing surface (§32.4; only an auditor flag forces the 54 cap - corrected 2026-10-11, B-146), so as depth arrives some new true flags appear and
 some false `DILUTION:HIGH` flags disappear. Do **not** disarm `forensic-actionable` during the
 rollout: suppressing it is the removal of a risk control, the wrong direction of Gotcha 42's
 asymmetry.
@@ -3338,7 +3341,7 @@ where a new research feature is classified before it is designed (§20 rule 9).
 
 | Pillar | Measured by | Honest caveat | Gap |
 |---|---|---|---|
-| Business quality | Financial Quality (§12.5, 16% of composite); forensic red flags (§32.4) | Forensics need ≥3 years of `annual_fundamentals`; "no flags" usually means *nothing was checked* (Gotcha 44) | Coverage, not method |
+| Business quality | Financial Quality (§12.5, 16% of composite); forensic red flags (§32.4); **sector-relative lens (§54)** | Forensics need ≥3 years of `annual_fundamentals`; "no flags" usually means *nothing was checked* (Gotcha 44). §54 re-reads existing figures against the stock's own sector, explains §41 and never overrides it, and ranks nothing in FINANCIALS until B-136 | Coverage, not method |
 | Growth | Earnings analysis (§12.4), wealth signals (§12.7), capex cycle (§31), turnarounds (§32.3), **quarterly result tracking (§50)** | Integrated-filing history begins ~Mar-2025, so 8-quarter CAGR fills in by ~2027; capex is shadow-mode. §50 keeps what was previously fetched and discarded, so the thesis monitor no longer rests solely on a composite that is 59% price behaviour — but it scores nothing, and its coverage follows the screening universe | Coverage |
 | Cash generation | Capital efficiency (§12.8) — ROCE, ROE, ROA, D/E, real operating cash conversion | Banks and NBFCs use a separate taxonomy; ROCE and D/E are deliberately not computed for them | — |
 | Management quality | Insider Pulse (§28, shadow); concall guidance ledger (§34) | The ledger's value is in what it refuses to say, and resolution is **manual** by design (§34.3). Insider Pulse scores zero points | **No capital-allocation record** — see 40.3 |
@@ -4223,10 +4226,16 @@ All five GETs are page-load safe (Gotcha 39: a page-load `get()` is ungated).
 
 ### 48.9 The ingest control — no cron, and a refusal that explains itself
 
-**Nothing schedules extraction.** `macro.ingest.scheduled` exists, is bound, is logged at boot and
-is `false`. An extraction costs a model call, and a standing cost nobody decided to pay is not a
-cost worth paying; turning it into a real schedule needs a §15 row and an argument for the slot,
-because §3.4 permits nothing outside 09:15–15:30 on a weekday.
+**Revised 2026-10-12: the news is read at 12:40 on weekdays** (`MacroIngestScheduler`, §15 row),
+while `macro.ingest.scheduled` is true (the default). The original text said nothing schedules
+extraction, because an extraction costs a model call. Nobody pressed the button after 2026-09-12, so
+for a month every holding drew "checked, nothing applies" off an empty window (B-154). The
+configured reader is the free keyword one, so the cost argument did not apply. With a model
+configured, a run costs a rupee or two a day; set the flag false to go back to the button only.
+12:40 is the gap after the AMFI pull and before the 13:00 watchlist run, outside both refusal windows below.
+"When the news was last read" is the newest headline the reader marked read
+(`market_impact_news.macro_extracted_at`), not the newest event: a run that finds no event still
+read the news. An empty window older than that reads `NOT_MEASURED` (§55.3).
 
 The button is the one control on the dashboard that leaves the machine, so it asks first (§27.14,
 Gotcha 118) and names what it fetches, what it costs, which reader will run, **and what it will not
@@ -6356,3 +6365,257 @@ B-121's failure exactly, and Gotcha 132's reason for caring about it.
   worth reading is the one belonging to the evidence beside it.
 
 ---
+
+## 54. Sector-Relative Standing — "how does it compare with its own sector?" ✅ Active (lens, 2026-10-11)
+
+### 54.1 Why this exists
+
+Sector is used to *measure* a stock fairly — the sector P/E median in Valuation, lender treatment in
+capital efficiency (§12.8), the not-applicable gates in §41, peer comparison in Deep Research. It was
+never used to say where a stock's quality sits **among its own peers**. Every quality bar compares
+against the whole universe, which is right for "can this business compound?" and unfair to sectors
+that are cyclical or capital-hungry by nature.
+
+Measured on the 2026-10-10 run (300 stocks) before anything was designed — and the gap was not where
+it was expected:
+
+- **The ROCE gate is fair across sectors.** Only 2 stocks are top-quartile ROCE in their sector yet
+  fail the 18% bar (WELENT, TECHNOE, both infrastructure); only 1 clears the bar from the bottom
+  quartile of its sector (BBOX, IT).
+- **The other gates are where sectors diverge.** Compounder share runs from 7/21 in IT to 1/40 in
+  capital goods, 0/25 in auto and 0/13 in infrastructure. Capital goods fails *earnings steadiness*
+  on 33 of 40 (sector median 22.5, against 50 for IT) and *margin trend* on 22 of 40. Banks fail the
+  ROA ≥ 1.5 bar on 16 of 20 (sector median 1.1%).
+
+So a capital-goods company with steadiness 45 read "fails" when it is steadier than three in four of
+its peers, and nothing on any screen could say so.
+
+**It explains, it never rescues.** Being the best business in a low-return sector does not make a
+business compound — it still has to earn more than its cost of capital. The reading sits **beside**
+§41 and never overrides it, the way §43 sits beside §41 (Gotcha 105): two different questions, so the
+disagreement is named, not reconciled.
+
+### 54.2 Classification (§20 rule 9)
+
+| §20 rule 9 item | Answer |
+|---|---|
+| (a) Pillar | **Business quality** and **cash generation**, read against the stock's own sector. Adds no new signal: it re-reads six figures already on every screening row against a different denominator. |
+| (b) Horizon | Never judged itself and records no recommendation source. Ships with **no measured track record** and says so on screen. |
+| (c) Coverage | Inline, not a `screening_coverage` row (the §47.2 precedent): every ranked figure carries the peer count it was ranked among, and every refusal names its reason. |
+| (d) Shadow | **Worth zero points.** Never enters the composite, never persisted, computed on read. `SectorStandingSurfaceContractTest` fails if a field named `actionable`/`bonus`/`weight`/`points`/`composite` appears. |
+
+### 54.3 What is ranked, and what is left out
+
+Peer group = the shared sector bucket (`SectorMapping.resolve`, the vocabulary every screen uses —
+B-096/B-098), with **one split made inside the lens only**: ENERGY is ranked as two groups, POWER
+(power and utilities) and OIL_GAS, by the screening row's industry (B-139). Ranked together, regulated
+utilities (median debt-to-equity 1.47) read "weaker than most of its sector" on leverage against oil
+and gas (0.45), and the same capital intensity handed them the top quarter on cash conversion — one
+structural feature, two votes. The split is not made in `SectorMapping`, because allocation drift
+reads that vocabulary. Within a group, **lenders and non-lenders never share a denominator**; a
+lender is `capexVerdict == NA_FINANCIAL`, the marker that actually fires (Gotcha 88).
+
+| Figure | Applies to | Better |
+|---|---|---|
+| Return on capital (ROCE) | non-lenders | higher |
+| Return on assets (ROA) | lenders | higher |
+| Return on equity (ROE) | all | higher |
+| Cash conversion | non-lenders | higher |
+| Debt to equity | non-lenders | **lower** |
+| Earnings steadiness | all | higher |
+
+Left out on purpose:
+
+- **Gross margin** reads exactly 100.0 for 54 stocks that report no cost of goods (25 financials,
+  12 IT, and services). A rank on it would rank the absence of a line item.
+- **P/E** is not persisted on the screening row, and the stored `peDeviation` carries a sector median
+  that depends on the order stocks were screened in.
+
+### 54.4 Rules
+
+- **Quartiles, not percentiles.** With 10–40 peers a quarter is as fine as the data supports (§52.13:
+  a band must be coarser than the data behind it). Position is the **mid-rank**: peers strictly
+  worse plus half the other peers tied with the stock, over everyone else. The first build counted
+  only peers strictly worse, which put a tied group at the bottom of its tie while this section
+  claimed the opposite (B-138) — seven debt-free IT companies read "upper middle" on debt. "Ties share
+  the better quartile" was rejected too: 12 of 40 capital-goods companies are tied at the steadiness
+  floor of 0, and lifting them out of the bottom quarter would flatter the erratic businesses the
+  floor describes.
+- **Refusals, each rendered as a sentence, never as a blank or a low reading:**
+  `NOT_APPLICABLE` (the figure does not fit the business); `NOT_MEASURED` (the stock's own figure is
+  missing — never "bottom of the sector"); `TOO_FEW_PEERS` (under **10** measured peers, the §52.8
+  floor — on the 2026-10-10 run **225 of 300 stocks get a verdict and 75 are `NOT_RANKED`**: 32 in
+  FINANCIALS, the rest in TELECOM (3), DEFENSE (2) and the other small buckets); `MIXED_PEER_GROUP` (FINANCIALS, until **B-136** separates
+  asset managers and registrars — ROA 26–30% — from NBFCs at 1–5%; **lifted 2026-10-12** when B-136
+  separated fee businesses from lenders, §55.2 — the bucket list is now empty); `NOT_CLASSIFIED` (no sector).
+- **Summary is counted, never averaged** (Gotcha 103): "in the better half of its sector on N of M
+  checks". `ABOVE_PEERS` at **more than** ⅔, `BELOW_PEERS` at **fewer than** ⅓, `IN_LINE` between;
+  fewer than **3** ranked checks is `NOT_RANKED`, which is a finding about the peer group, not about
+  the business. The cut-offs are strict because of the first live run: with the three checks a
+  lender has, "at least ⅔ / at most ⅓" made the middle unreachable, and all 20 banks read above or
+  below — a verdict with no middle is the B-113 shape, an artefact of the cut-off rather than a
+  finding.
+- **Divergence sentences** fire only where the two readings disagree: a §41 gate FAIL while top
+  quarter in the sector ("…the bar stays where it is"), or a gate PASS while bottom quarter. The §41
+  result never changes a quartile or the verdict.
+- **Never red.** "Below its sector" is amber; red reads as "sell", and a quartile is not that.
+- **No instruction to transact**, pinned by a word-boundary test over every string the lens prints.
+- **No filter chip.** A "top of its sector" chip would turn an explanation into a shortlist (§47.4:
+  lanes do not rank).
+
+### 54.5 Surfaces
+
+One reader (`SectorStandingService`, cross-section cached per screening date + row count) and one
+renderer (`static/js/sector-standing.js`). Holdings and the watchlist look up the spelling the
+compounding lens already chose (B-088's "first spelling that can answer"), so the two cells in a row
+always describe the same screening row (Gotcha 85, 107).
+
+- **Stock page** — panel *"How does it compare with its sector?"* directly under the compounding
+  panel: each figure with value, sector median, peer count and quartile, the refusals, and the
+  divergence box. `GET /api/dashboard/sector-standing?symbol=` — DB-only; **404 = not in the latest
+  screening run**, **200 carrying `NOT_RANKED` = screened, but no peer group could rank it**.
+- **Screener** — "Vs sector" column behind a display-only toggle (§27.10 column budget).
+- **Discovery** — the column on the two screening-row lanes (under-the-radar, good-business-down).
+- **Portfolio and watchlist** — the same column, via `HoldingsViewDecorator` `@Transient` fields and
+  `WatchlistItemView` components. Five wire fields: `sectorStanding`, `sectorStandingReason`,
+  `sectorStandingAbove`, `sectorStandingRanked`, `sectorStandingPeers` — nullable throughout.
+
+### 54.5a Known limits (from the independent review, 2026-10-11)
+
+- **Other buckets are coarser than ideal and are ranked anyway**: INFRASTRUCTURE mixes cement with
+  construction and a railway financier; CONSUMER and CONSUMER_DURABLES split electricals between
+  them; defence is split across DEFENSE and CAPITAL_GOODS. None is as lopsided as ENERGY was, and
+  each would be a split of its own to argue from data, not by taste.
+- **IRFC is ranked as a non-lender** (B-140): its `capexVerdict` reads STEADY, so the lens's lender
+  marker misses it while capital efficiency treats it as one. One stock.
+- **Cash conversion has no ceiling**: a thin profit or heavy depreciation reads as top-quarter cash
+  quality (six ranked readings above 4×). Capping it needs a cross-section check first.
+- **Steadiness is coarse and floors at 0** (17.5% of measured rows), which is why the tie rule matters.
+
+### 54.6 Non-goals
+
+- **No sector bonus, tilt or weight.** Sector Tailwind (§39.2) and the sector-reversal engine both
+  failed measurement; this lens deliberately carries no field that could be turned into either.
+- **No sector-relative thresholds inside §41.** The market-wide bar is the compounding question; this
+  lens only explains a business's position against it.
+- **No sector index for the price dimensions.** Relative strength stays measured against the Nifty.
+
+---
+
+## 55. Whole-App Review Fixes ✅ Active (2026-10-11 / 2026-10-12)
+
+The record of what the four-reviewer pass of 2026-10-11 found and what changed. Each item has its
+BUGS.md entry; this section states the **rules** now in force, because several of them move scores.
+One scoring revision (`MULTIBAGGER_CODE_REVISION` 2 → 3) covers §55.1–§55.2, so the stored
+`scoring_version` splits cleanly at the next screening.
+
+### 55.1 Scoring inputs
+
+- **Financial Quality's cash-conversion sub-score uses real operating cash flow** from the latest
+  annual filing (B-143). It was (profit + depreciation) / profit, which is always at least 1. An
+  unmeasured input now leaves the score, and the other 80 points are rescaled. The single-year weak
+  reading is a warning and **not** a critical HIGH_RISK trigger. One year of cash flow is noisy, so
+  the armed version stays the three-year forensic check.
+- **The DCF benchmark is a profit CAGR over ≥ 4 years of annual accounts** (B-145), the same rule
+  as the analyst plausibility panel (§49.13, B-113). It used to be one quarter's year-on-year change.
+  Below four years the verdict is `INSUFFICIENT_DATA` and the valuation dimension uses its P/E half.
+  PEG uses the same growth figure.
+- **A HIGH forensic flag deducts 5 points; only an auditor problem forces the 54 cap** (B-146). The
+  §32.4 table always said this. §32.6 and two CLAUDE.md gotchas wrongly said a HIGH flag caps.
+
+### 55.2 Who is a lender
+
+One test, `NseDataService.isLender`, used by capital efficiency, the capex cycle, financial
+quality, the forensic screen, the sector lens (§54) and macro exposure (§48):
+
+1. a bank by XBRL taxonomy is a lender;
+2. otherwise the industry must match `bank|financ|nbfc|insur|capital market|holding`, **and**
+3. equity must be **under half of total assets** (B-136). The cut was measured across every stock
+   the industry test catches on 2026-10-10. Fee and investment businesses sit at 0.67 and above
+   (NAM-INDIA, UTIAMC, CAMS, ANANDRATHI, PAYTM, JIOFIN); every lender sits at 0.34 and below. 0.5 is
+   in the gap. A caller holding a screening row and not a balance sheet uses ROA ÷ ROE, which is
+   the same ratio.
+
+For a lender (B-144):
+- Interest coverage, finance-cost drag and the cash sub-score **leave** the Financial Quality score.
+  The other 55 points are rescaled, with no neutral fill-in.
+- The forensic three-year cash check is `notApplicable`, a finding distinct from `notMeasured`.
+- Capital efficiency keeps the cash figure but scores nothing on it.
+
+Measured, computed without saving: ABCAPITAL 54 → 69, LICHSGFIN 54 → 72, IRFC 38 → 49 (IRFC's
+hand-mapped sector moved from Infrastructure to Finance, B-140). CAMS now has a ROCE (48%), and its
+capex verdict is STEADY rather than NA_FINANCIAL.
+
+### 55.3 What the investor is told
+
+- **Both 15:18 holdings emails show the reconciled signal** (§6.6), not the raw momentum rule (B-151).
+- **A holding with no purchase lots** gets its own "check the holding period" step. It is no longer
+  counted as long-term (B-152).
+- **The deep-loss and broke-support alerts are review prompts, not exit instructions** (B-153, §19).
+  The Overview's momentum item reads "Price-trend rule reads SELL — check the business before acting".
+- **Macro exposure on an unread window is `NOT_MEASURED`**, never `NOT_EXPOSED` (B-154, Gotcha 121).
+- **The Overview attention list carries the business**: `FORENSIC_FLAG` (HIGH flags only) and
+  `QUALITY_RISK` (HIGH_RISK balance sheet). Both come from each holding's newest screening row and
+  are worded as reasons to look (B-124).
+- **Holdings buy-timing and core tiering read the newest row across exchange spellings** and carry
+  `qualityDate` (B-150). The old rule was "first spelling with any history", which let a one-off
+  six-month-old BSE row decide four verdicts.
+
+### 55.4 History depth
+
+The legacy archive stops at FY2024 and the screening maintains only the newest year, so the
+March-2025 integrated filing sat in neither (B-166). `FundamentalsBackfillService.fillIntegratedGaps`:
+- runs after the 11:30 batch, and manually via `POST /api/fundamentals/backfill-gaps`;
+- fetches each older year-end integrated filing once, skipping years that already hold a balance
+  sheet;
+- skips, and never converts, a year on the other reporting basis (Gotcha 73);
+- stamps `integrated_gap_checked_on` on each symbol it tries.
+
+First pass: 346 FY2025 years across 399 symbols. `CapitalAllocationRecord` opens on the earliest
+year that has a balance sheet, which makes its reinvestment and incremental-return components
+measurable.
+
+**The FII/DII split is read from the shareholding XBRL** (B-012): the filing's own
+`InstitutionsForeign` / `InstitutionsDomestic` subtotals.
+- Each filed quarter is stored once in `shareholding_split`.
+- The comparison quarter is fetched once if it has never been seen.
+- A quarter with no filed figure is null.
+
+Institutional Interest therefore moves for every stock at the next screening.
+
+### 55.5 Coverage of the book
+
+Every active holding is in the screening universe and is never dropped by the tier gate (§13).
+
+### 55.6 Trust instruments
+
+- **Track Record headlines independent periods**, from the latest recorded walk-forward review, and
+  never a best-of-several return (B-160). The Friday email says not to change weights on its IC
+  table, quotes the period counts, and computes per-dimension IC only for MULTIBAGGER and
+  QUANT_DISCOVERY (B-161).
+- **Macro readings are not picks**: excluded from `/api/accuracy/summary` and served, verdict-signed,
+  by `GET /api/accuracy/macro` (B-162). The Overview headline excludes the deleted SECTOR_REVERSAL
+  (the open half of B-122).
+- **The TWR caveat sizes its uncertainty** in rupees and percentage points instead of asserting a
+  direction (B-164).
+- **A prior walk-forward review counts toward stability only if a horizon separates it** from the
+  next one (B-165).
+- **Correlation clusters are computed** (§7.2).
+
+### 55.7 Tooling
+
+`POST /api/multibagger/evaluate?symbol=` computes a stock's full score **without writing a row or
+recording a pick** (Gotcha 50's compute-to-decide path). It exists so that a scoring change can be
+checked against real stocks before the next scheduled run rewrites the table. It is refused from
+14:00 to 15:30 and without a broker session.
+
+### 55.8 Not changed, deliberately
+
+- **HOLD_OFF + BUY stays BUY** in `SignalReconciliation`. The reviewer suggested lowering it to HOLD,
+  but `SignalReconciliationTest` pins the opposite ("a caution is not a disqualification"), and that
+  was an earlier deliberate decision.
+- **No hard cap for a HIGH forensic flag.** Turning the −5 into a cap would move 16 more stocks in
+  one step on thin evidence (Gotcha 27). If it is wanted, it should be its own decision.
+- **Fundamental invalidation triggers on the conviction record** remain free text. The
+  business-side warnings now reach the Overview through §55.3 instead.
+

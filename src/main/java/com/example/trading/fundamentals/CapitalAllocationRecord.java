@@ -255,12 +255,27 @@ public final class CapitalAllocationRecord {
      * to see — while still producing a ratio that looks measured (B-048).
      */
     private static Component reinvestmentIntensity(List<AnnualFundamentalsEntity> h) {
-        AnnualFundamentalsEntity first = h.get(0);
+        // The opening balance sheet is the EARLIEST year that has one, not simply the oldest row
+        // (B-166): the backfill's oldest years carry a P&L and no balance sheet, so reading
+        // h.get(0) made this measure "not measured" for every company. Depreciation then runs over
+        // the years AFTER that opening year: closing assets = opening + capex - depreciation of
+        // those years, so including the opening year's own charge overstated capex by one year.
+        int firstIdx = -1;
+        for (int i = 0; i < h.size(); i++) {
+            if (h.get(i).getNetBlock() != null) { firstIdx = i; break; }
+        }
+        if (firstIdx < 0 || firstIdx == h.size() - 1) {
+            return new Component("reinvestment", "Is the company still building?",
+                    Status.NOT_MEASURED, null,
+                    "No two years of asset base are on file, so capital spending cannot be worked out. "
+                            + "Unknown, not zero.");
+        }
+        AnnualFundamentalsEntity first = h.get(firstIdx);
         AnnualFundamentalsEntity last = h.get(h.size() - 1);
         Double nbFirst = first.getNetBlock(), nbLast = last.getNetBlock();
         double depreciation = 0;
         int depYears = 0;
-        for (AnnualFundamentalsEntity r : h) {
+        for (AnnualFundamentalsEntity r : h.subList(firstIdx + 1, h.size())) {
             if (r.getDepreciation() != null) {
                 depreciation += r.getDepreciation();
                 depYears++;
@@ -291,7 +306,7 @@ public final class CapitalAllocationRecord {
         Status s = ratio >= 1.5 ? Status.STRONG : ratio >= 0.9 ? Status.ADEQUATE : Status.WEAK;
         String detail = String.format(
                 "Spent about %.1fx its depreciation charge on assets over these %d years. %s",
-                ratio, h.size(),
+                ratio, h.size() - firstIdx - 1,
                 ratio >= 1.5 ? "The asset base is growing well beyond replacement."
                         : ratio >= 0.9 ? "Roughly enough to keep the existing asset base intact."
                         : "Less than it is wearing out, so the asset base is shrinking. For an "
@@ -345,7 +360,11 @@ public final class CapitalAllocationRecord {
      * number with the sign inverted.
      */
     private static Component incrementalReturn(List<AnnualFundamentalsEntity> h) {
+        // Earliest year with a capital base, not the oldest row (B-166).
         AnnualFundamentalsEntity first = h.get(0);
+        for (AnnualFundamentalsEntity r : h) {
+            if (capitalEmployed(r) != null && r.getOperatingProfit() != null) { first = r; break; }
+        }
         AnnualFundamentalsEntity last = h.get(h.size() - 1);
         Double ce0 = capitalEmployed(first), ce1 = capitalEmployed(last);
         Double op0 = first.getOperatingProfit(), op1 = last.getOperatingProfit();

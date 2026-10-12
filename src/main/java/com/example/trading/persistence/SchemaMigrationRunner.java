@@ -59,6 +59,9 @@ public class SchemaMigrationRunner {
      */
     private static final List<String[]> ENSURE_COLUMNS = List.<String[]>of(
             new String[]{"annual_fundamentals", "consolidated", "boolean"},
+            // B-166: the integrated-feed gap pass records when it last tried a symbol. Gotcha 74:
+            // if this column is silently missing the pass re-queues every symbol on every run.
+            new String[]{"fundamentals_backfill_status", "integrated_gap_checked_on", "date"},
             // B-097: a seeded thesis is not a statement. Gotcha 74 case - a silently missing
             // column here would make every investor-written thesis read as generated.
             new String[]{"holding_conviction", "thesis_stated", "boolean"},

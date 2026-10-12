@@ -24,6 +24,7 @@ public class DiversificationService {
 
     private final AllocationService allocationService;
     private final DiversificationConfig config;
+    private final com.example.trading.persistence.HoldingsHistoryRepository historyRepository;
 
     public DiversificationDto.RiskResponse computeRisk() {
         AllocationService.ActualWeights actual = allocationService.computeActualWeights();
@@ -57,6 +58,19 @@ public class DiversificationService {
                             stock.topBucket(), stock.topWeight(), config.getStockMaxPercent())));
         }
 
+        CorrelationClusters.Result correlation = correlation(actual.byStock());
+        if (correlation != null) {
+            for (CorrelationClusters.Cluster c : correlation.clusters()) {
+                if (c.weightPercent() <= config.getCorrelationClusterMaxPercent()) continue;
+                alerts.add(new DiversificationDto.Alert("YELLOW", "CORRELATION", String.format(
+                        "%s move together (average correlation %.2f over %d days) and are %.1f%% of the "
+                                + "portfolio combined - more than the %.0f%% limit. Owning them is closer to one "
+                                + "larger position than to %d separate ones.",
+                        String.join(", ", c.members()), c.averageCorrelation(), config.getCorrelationLookbackDays(),
+                        c.weightPercent(), config.getCorrelationClusterMaxPercent(), c.members().size())));
+            }
+        }
+
         return new DiversificationDto.RiskResponse(
                 actual.totalValue(),
                 actual.holdingsCount(),
@@ -64,7 +78,35 @@ public class DiversificationService {
                 sector,
                 stock,
                 actual.byCap(),
-                alerts);
+                alerts,
+                correlation);
+    }
+
+    /**
+     * Correlation clusters from the daily closes already stored in {@code holdings_history}
+     * (SPEC 7.2). DB-only - one query - so the Overview can keep calling this on page load.
+     * Symbols are keyed by their exchange-free base, because the same holding is written under
+     * NSE and BSE prefixes on different days (B-061). Null on failure, never "no clusters".
+     */
+    private CorrelationClusters.Result correlation(java.util.Map<String, Double> byStock) {
+        try {
+            java.util.Map<String, Double> weights = new java.util.HashMap<>();
+            for (var e : byStock.entrySet()) {
+                weights.merge(com.example.trading.holdings.SymbolVariants.base(e.getKey()), e.getValue(), Double::sum);
+            }
+            java.time.LocalDate from = java.time.LocalDate.now().minusDays(config.getCorrelationLookbackDays());
+            java.util.Map<String, java.util.NavigableMap<java.time.LocalDate, Double>> closes = new java.util.HashMap<>();
+            for (var h : historyRepository.findByRecordDateGreaterThanEqualOrderByRecordDateAsc(from)) {
+                String base = com.example.trading.holdings.SymbolVariants.base(h.getSymbol());
+                if (!weights.containsKey(base) || h.getClosePrice() <= 0) continue;
+                closes.computeIfAbsent(base, k -> new java.util.TreeMap<>()).put(h.getRecordDate(), h.getClosePrice());
+            }
+            return CorrelationClusters.compute(closes, weights, config.getCorrelationClusterThreshold());
+        } catch (Exception e) {
+            log.warn("Correlation clusters unavailable ({}) - the risk view will say so rather than "
+                    + "reporting that nothing moves together.", e.getMessage());
+            return null;
+        }
     }
 
     private double computeHhi(Map<String, Double> stockWeights) {

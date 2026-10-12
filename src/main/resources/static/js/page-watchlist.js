@@ -25,6 +25,7 @@ import {
 import { sparkline } from './charts.js';
 import { entryPriceCell } from './buy-timing.js';
 import { compoundingCell, compoundingRank } from './compounding.js';
+import { sectorStandingCol } from './sector-standing.js';
 import { macroExposureCol } from './macro-cells.js';
 import { themeCol } from './theme-cells.js';
 import {
@@ -331,7 +332,7 @@ function mainTable(active) {
       if (!missing(w.daysWatched)) wrap.append(el('div.muted', { style: 'font-size:11px' }, `${w.daysWatched} day${w.daysWatched === 1 ? '' : 's'}`));
       return wrap;
     } },
-    { key: 'sector', label: 'Sector', render: (w) => w.sector || unmeasured('No sector recorded — appears once the stock is screened') },
+    { key: 'sector', label: 'Sector', value: (w) => (w.sector ? humanLabel(w.sector) : ''), render: (w) => (w.sector ? humanLabel(w.sector) : unmeasured('Not classified into a sector yet — appears once the stock is screened')) },
     { key: 'currentPrice', label: 'Price', align: 'r', render: (w) => {
       const wrap = el('div', {}, inrExact(w.currentPrice, true));
       if (!missing(w.dayChangePercent)) wrap.append(el('div', { class: sign(w.dayChangePercent), style: 'font-size:11px' }, pct(w.dayChangePercent)));
@@ -350,6 +351,8 @@ function mainTable(active) {
       value: compoundingRank,
       render: compoundingCell,
     },
+    // Where the business sits among its own sector (SPEC 54) - same renderer on every surface.
+    sectorStandingCol(),
     // Same renderer as the portfolio, the screener, discovery and the stock page — five
     // surfaces, one cell, nothing to drift (SPEC 48.10).
     macroExposureCol(),

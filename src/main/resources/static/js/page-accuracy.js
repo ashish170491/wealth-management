@@ -30,6 +30,15 @@ import {
 const view = document.getElementById('view');
 
 /** Below this many picks, the numbers are withheld rather than shown misleadingly. */
+/** Independent periods at which the walk-forward gate even starts to answer (SPEC 38.10). */
+const REQUIRED_PERIODS = 12;
+/** Latest recorded walk-forward period counts by horizon; null = never recorded. */
+const periods = { 30: null, 90: null };
+function periodsText() {
+  const f = (n) => (n === null ? '?' : String(n));
+  return `${f(periods[30])} · ${f(periods[90])}`;
+}
+
 const MIN_SAMPLE = 10;
 
 /** The conventional threshold above which an Information Coefficient is considered useful. */
@@ -289,15 +298,36 @@ function headline() {
     });
   }
 
-  const best = usable.reduce((a, b) => ((b.meanExcessReturnPercent ?? -1e9) > (a.meanExcessReturnPercent ?? -1e9) ? b : a));
-  const totalPicks = usable.reduce((a, s) => a + s.sampleSize, 0);
+  // B-160: this used to headline the BEST of the cells ("+11.51%, Quant Discovery at 90 days") and
+  // colour "2 of 6 beating noise" green. Both came from 65 picks issued across about one 90-day
+  // window - one independent test - and the page never mentioned independent periods. The best of
+  // several noisy cells is the one most likely to be luck, so no cell is singled out, nothing is
+  // coloured as a success, and the first tile is how much independent history exists at all.
+  const totalRows = usable.reduce((a, s) => a + s.sampleSize, 0);
   const useful = usable.filter((s) => Number.isFinite(s.informationCoefficient) && s.informationCoefficient >= USEFUL_IC);
+  const p30 = periods[30];
+  const p90 = periods[90];
 
   return el('div', {},
     el('div.grid.kpis', {},
-      kpi({ label: 'Scored Picks', value: num(totalPicks), sub: `across ${usable.length} engine/horizon combinations`, tone: 'neutral' }),
-      kpi({ label: 'Best Excess Return', value: pct(best.meanExcessReturnPercent), raw: best.meanExcessReturnPercent, tone: 'auto', sub: `${humanLabel(best.source)} at ${best.horizonDays} days` }),
-      kpi({ label: 'Combinations Beating Noise', value: `${useful.length} of ${usable.length}`, sub: `IC at or above +${USEFUL_IC.toFixed(2)}`, tone: useful.length > 0 ? 'positive' : 'warning' })));
+      kpi({
+        label: 'Independent Test Periods',
+        value: periodsText(),
+        sub: `at 30 and 90 days — ${REQUIRED_PERIODS} are needed before any weighting question can be answered`,
+        tone: 'warning',
+      }),
+      kpi({
+        label: 'Scored Rows',
+        value: num(totalRows),
+        sub: `across ${usable.length} engine/horizon combinations. Rows, not separate tests: the same pick counts once per horizon and picks from the same dates move together`,
+        tone: 'neutral',
+      }),
+      kpi({
+        label: 'Cells At Or Above IC +0.10',
+        value: `${useful.length} of ${usable.length}`,
+        sub: `${p90 === null && p30 === null ? 'From an unknown number of independent periods' : `From ${periodsText()} independent period(s)`} — an early read that cannot yet be told apart from luck`,
+        tone: 'neutral',
+      })));
 }
 
 // ------------------------------------------------------------ the big table
@@ -623,7 +653,7 @@ async function boot() {
   view.replaceChildren(el('section.section', {}, el('h2.section-title', {}, 'Loading track record…'), skeleton(3)));
   await initChrome();
 
-  const [statsRes, coverageRes, analystRes, analystRecentRes, overlapRes] = await Promise.all([
+  const [statsRes, coverageRes, analystRes, analystRecentRes, overlapRes, rev30, rev90] = await Promise.all([
     get('/api/accuracy/summary', { fallback: [] }).catch(() => ({ data: [] })),
     // DB-only: one table, one date (SPEC 38.4). Verified by hand — a page-load get() is
     // ungated, so only the allowlist on getOnDemand() would have caught a slow endpoint here.
@@ -633,7 +663,17 @@ async function boot() {
     get('/api/analyst/track-record', { fallback: null }).catch(() => ({ data: null })),
     get('/api/analyst/recent?days=365', { fallback: null }).catch(() => ({ data: null })),
     get('/api/analyst/overlap', { fallback: null }).catch(() => ({ data: null })),
+    // Recorded walk-forward reviews, DB-only. The independent-period count is the real sample size.
+    get('/api/learning/reviews?horizon=30', { fallback: [] }).catch(() => ({ data: [] })),
+    get('/api/learning/reviews?horizon=90', { fallback: [] }).catch(() => ({ data: [] })),
   ]);
+  const periodsOf = (r) => {
+    const rows = r && Array.isArray(r.data) ? r.data : [];
+    const first = rows.find((x) => Number.isFinite(x.independentPeriods));
+    return first ? first.independentPeriods : null;
+  };
+  periods[30] = periodsOf(rev30);
+  periods[90] = periodsOf(rev90);
 
   stats = Array.isArray(statsRes.data) ? statsRes.data : [];
   // This endpoint hands back percentages as pre-formatted STRINGS, so they must be coerced
@@ -649,19 +689,15 @@ async function boot() {
   overlap = (overlapRes && overlapRes.data) || null;
 
   const usableStats = stats.filter((s) => s.sampleSize >= MIN_SAMPLE);
-  const bestExcess = usableStats.length
-    ? usableStats.reduce((a, b) => ((b.meanExcessReturnPercent ?? -1e9) > (a.meanExcessReturnPercent ?? -1e9) ? b : a)).meanExcessReturnPercent
-    : null;
   const nodes = [];
 
   nodes.push(withSummary(section('Is the app any good at picking stocks?',
     'This is the app marking its own homework. Every time a scoring engine recommends a stock, the pick is recorded; on its 30, 90, 180 and 365-day anniversary the actual return is measured and compared against the Nifty 50. What matters is excess return — beating the index, not just going up.',
     headline()),
-    // Best excess return over the Nifty, across the engine/horizon cells that have enough picks
-    // to say anything. Null until one does — below MIN_SAMPLE this page deliberately shows no
-    // number at all, and its own heading must not be the exception.
-    bestExcess === null ? null : pct(bestExcess),
-    { type: bestExcess > 0 ? 'success' : 'danger' }));
+    // The folded heading is the only thing the reader sees, so it carries how much independent
+    // history stands behind the page - never a best-of-several return in green (B-160).
+    (periods[30] === null && periods[90] === null) ? null : `${periodsText()} independent periods`,
+    { type: 'warning' }));
 
   nodes.push(withCount(section('Full results by engine and holding period',
     'One row per engine and holding period. "Hit rate" is the share of picks that made money; "vs Nifty" is how much better or worse than simply buying the index; "IC" measures whether a higher score genuinely led to a better return. Combinations with fewer than 10 measured picks show no numbers at all — a hit rate from a handful of picks is noise dressed up as evidence.',

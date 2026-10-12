@@ -113,6 +113,11 @@ public class ForensicScreenService {
         private int yearsAvailable;
         /** Checks that could not run, so "no flags" is never confused with "nothing checked". */
         private List<String> notMeasured;
+        /**
+         * Checks that do not apply to this business - a finding, not a gap (Gotcha 68). Kept
+         * apart from {@link #notMeasured} so a lender is not reported as "not yet checked".
+         */
+        private List<String> notApplicable;
 
         public boolean isClean() {
             return flags.isEmpty();
@@ -137,6 +142,16 @@ public class ForensicScreenService {
      *                             call — pass false inside a large screening loop)
      */
     public ForensicResult screen(String symbol, boolean includeAnnouncements) {
+        return screen(symbol, includeAnnouncements, false);
+    }
+
+    /**
+     * @param lender true for a bank or NBFC (the {@link NseDataService#isLenderIndustry} test):
+     *               the three-year cash-conversion check does not apply, because lending money
+     *               out is operating cash outflow and a growing loan book reads as profit that
+     *               never became cash (B-144: it fired on all 17 NBFCs with the history to run it)
+     */
+    public ForensicResult screen(String symbol, boolean includeAnnouncements, boolean lender) {
         List<AnnualFundamentalsEntity> history = historyService.history(symbol);
         List<String> announcements = List.of();
         if (includeAnnouncements) {
@@ -155,7 +170,7 @@ public class ForensicScreenService {
                 log.debug("Announcements unavailable for {}: {}", symbol, e.getMessage());
             }
         }
-        return evaluate(symbol, history, announcements);
+        return evaluate(symbol, history, announcements, lender);
     }
 
     /**
@@ -166,13 +181,25 @@ public class ForensicScreenService {
      */
     public static ForensicResult evaluate(String symbol, List<AnnualFundamentalsEntity> history,
                                           List<String> announcements) {
+        return evaluate(symbol, history, announcements, false);
+    }
+
+    /** As above, with the lender exemption on the cash-conversion check (B-144). */
+    public static ForensicResult evaluate(String symbol, List<AnnualFundamentalsEntity> history,
+                                          List<String> announcements, boolean lender) {
         List<ForensicFlag> flags = new ArrayList<>();
         List<String> notMeasured = new ArrayList<>();
+        List<String> notApplicable = new ArrayList<>();
         int years = history == null ? 0 : history.size();
 
         checkDilution(history, flags, notMeasured);
         checkReceivables(history, flags, notMeasured);
-        checkCashConversion(history, flags, notMeasured);
+        if (lender) {
+            notApplicable.add("Multi-year cash conversion - not applicable to a lender: lending money out "
+                    + "is operating cash outflow, so a growing loan book reads as profit that never became cash");
+        } else {
+            checkCashConversion(history, flags, notMeasured);
+        }
         boolean auditor = checkAuditor(announcements, flags, notMeasured);
         checkRelatedParty(announcements, flags);
 
@@ -184,6 +211,7 @@ public class ForensicScreenService {
                 .forcesHighRisk(auditor)
                 .yearsAvailable(years)
                 .notMeasured(notMeasured)
+                .notApplicable(notApplicable)
                 .build();
     }
 

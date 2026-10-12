@@ -672,11 +672,10 @@ macro:
   calendar-days: 30               # Look-ahead for the "coming up" calendar
   dedup-window-days: 3            # Two reports of the same factor+direction this close are one event
   ingest:
-    # NO SCHEDULER EXISTS for extraction in this phase, and this flag does not create one. It is
-    # bound and logged at boot so the intent is on the record: adding a cron needs a SPEC 15 row
-    # and a slot argument (09:16 / 12:40 / 14:20 are the candidates - all inside 09:15-15:30).
-    # Extraction runs only from POST /api/macro/ingest, i.e. the button on the Events page.
-    scheduled: false
+    # MacroIngestScheduler reads the news at 12:40 MON-FRI when this is true (SPEC 48.9, revised
+    # 2026-10-12): unread, every holding drew "nothing applies" off an empty window (B-154).
+    # POST /api/macro/ingest still runs it on demand.
+    scheduled: true               # 12:40 MON-FRI read (B-154 improvement, 2026-10-12). Costs nothing on the keyword reader.
     headline-lookback-hours: 36   # Headlines older than this are not offered to the extractor
     max-headlines: 120            # Per ingest. Bounds both the token bill and the wall clock.
     refuse-from: "14:00"          # Live-call guard: the 14:00 screening onwards is spoken for

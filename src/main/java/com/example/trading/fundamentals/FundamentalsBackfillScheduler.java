@@ -56,6 +56,9 @@ public class FundamentalsBackfillScheduler {
                         + "The table now maintains itself from the annual filing on each "
                         + "screening run (Gotcha 49).");
             }
+            // Then the integrated feed's older year-end filings (FY2025), which neither the archive
+            // nor the screening reaches (B-166). Same deadline, same pacing, same session.
+            backfillService.fillIntegratedGaps(config.getBatchSize());
         } catch (Exception e) {
             log.error("Fundamentals backfill batch failed: {}", e.getMessage(), e);
         }

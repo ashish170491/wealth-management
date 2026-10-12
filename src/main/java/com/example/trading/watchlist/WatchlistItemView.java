@@ -166,7 +166,18 @@ public record WatchlistItemView(
         java.util.List<String> themes,
         java.util.List<String> themeLabels,
         java.util.List<String> themePolicies,
-        java.util.List<String> themeRoles) {
+        java.util.List<String> themeRoles,
+
+        // ---- Sector-relative lens (SPEC 54) ---------------------------------------------------
+        // The same five names the screening row map and the holdings row carry, so one renderer
+        // (sector-standing.js) serves every surface. Null throughout means the stock is not in the
+        // latest screening run - "not measured", never a weak reading (Gotcha 21). NOT_RANKED is
+        // a different fact: screened, but no peer group could rank it. Zero points to any score.
+        String sectorStanding,
+        String sectorStandingReason,
+        Integer sectorStandingAbove,
+        Integer sectorStandingRanked,
+        Integer sectorStandingPeers) {
 
     public record SeriesPoint(LocalDate date, Double close) {}
 }

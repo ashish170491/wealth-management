@@ -113,6 +113,17 @@ public class DashboardController {
         return out == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(out);
     }
 
+    /**
+     * "How does this business compare with its own sector?" for one stock (SPEC 54). DB-only,
+     * page-load safe. 404 = not in the latest screening run; 200 carrying NOT_RANKED = screened,
+     * but no peer group could rank it. Different facts, rendered differently.
+     */
+    @GetMapping("/sector-standing")
+    public ResponseEntity<Map<String, Object>> sectorStanding(@RequestParam String symbol) {
+        Map<String, Object> out = dashboardService.sectorStanding(symbol);
+        return out == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(out);
+    }
+
     @GetMapping("/series/holding")
     public List<DashboardDto.HoldingSeriesPoint> holdingSeries(
             @RequestParam String symbol,

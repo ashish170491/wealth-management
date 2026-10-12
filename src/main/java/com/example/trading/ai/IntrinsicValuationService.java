@@ -44,6 +44,7 @@ public class IntrinsicValuationService {
 
     private final StockValuationService valuationService;
     private final NseDataService nseDataService;
+    private final com.example.trading.fundamentals.FundamentalsHistoryService fundamentalsHistoryService;
 
     public ReverseDcfResult analyze(String symbol) {
         String tradingSymbol = symbol.contains(":") ? symbol.substring(symbol.indexOf(":") + 1) : symbol;
@@ -99,16 +100,36 @@ public class IntrinsicValuationService {
         r.setTerminalGrowth(TERMINAL_GROWTH);
         r.setForecastYears(FORECAST_YEARS);
 
-        // Historical growth reference — 2-yr profit CAGR (falls back to YoY if CAGR unavailable)
+        // Historical growth reference: profit CAGR over the annual accounts on file, at least four
+        // years (B-145). This used to fall back to ONE QUARTER's year-on-year profit change
+        // whenever the 8-quarter CAGR was null - which it is for every stock, because NSE's
+        // integrated filing has only ~6 quarters - so "historical growth" equalled a single quarter
+        // on 272 of 272 rows. A ten-year implied growth was being judged against last quarter's
+        // profit swing: "undervalued" meant "profit jumped last quarter" (median +44%) and
+        // "extremely expensive" meant "profit fell". Against a >= 4-year CAGR 130 of 223 verdicts
+        // change. Same benchmark the analyst-target plausibility panel adopted for the same
+        // reason (B-113). Fewer than four years is no record, not a short one.
         Double historicalGrowth = null;
+        String noRecordNote = null;
         try {
-            NseDataService.EarningsGrowthData eg = nseDataService.analyzeEarningsGrowth(tradingSymbol);
-            if (eg != null) {
-                if (eg.getProfitCAGR() != null) historicalGrowth = eg.getProfitCAGR() / 100.0;
-                else if (eg.getYoyProfitGrowth() != null) historicalGrowth = eg.getYoyProfitGrowth() / 100.0;
+            java.util.Map<Integer, Double> profitByYear = new java.util.TreeMap<>();
+            var rows = fundamentalsHistoryService.history(symbol);
+            if ((rows == null || rows.isEmpty()) && !symbol.startsWith("NSE:")) {
+                rows = fundamentalsHistoryService.history("NSE:" + tradingSymbol);
             }
+            if (rows != null) {
+                for (var row : rows) {
+                    if (row.getFiscalYear() != null && row.getNetProfit() != null) {
+                        profitByYear.put(row.getFiscalYear(), row.getNetProfit());
+                    }
+                }
+            }
+            var record = com.example.trading.analyst.AnalystTargetPlausibility.growthRecord(profitByYear);
+            if (record.measured()) historicalGrowth = record.cagrPercent() / 100.0;
+            else noRecordNote = record.note();
         } catch (Exception e) {
             log.debug("Intrinsic valuation: historical growth unavailable for {}", symbol);
+            noRecordNote = "Annual accounts could not be read.";
         }
         r.setHistoricalGrowthPercent(historicalGrowth != null ? historicalGrowth * 100.0 : null);
 
@@ -128,7 +149,15 @@ public class IntrinsicValuationService {
             r.setExpectationGapPercent(expectationGap);
         }
 
-        r.setVerdict(classify(impliedGrowth, historicalGrowth));
+        if (historicalGrowth == null) {
+            // No multi-year record to judge a ten-year requirement against: say so, and let the
+            // valuation dimension fall back to the P/E half rather than score a guess.
+            r.setVerdict("INSUFFICIENT_DATA");
+            r.setCaveat(noRecordNote != null ? noRecordNote
+                    : "Not enough years of annual accounts to compare against.");
+        } else {
+            r.setVerdict(classify(impliedGrowth, historicalGrowth));
+        }
 
         // Sensitivity bands — ±200 bps discount rate
         Double impliedLow = solveImpliedGrowth(annualisedFcfProxy, marketCapCr, DISCOUNT_RATE - 0.02);
@@ -205,7 +234,7 @@ public class IntrinsicValuationService {
         private String symbol;
         private String verdict;                // DEEPLY_UNDERVALUED / UNDERVALUED / FAIRLY_VALUED / EXPENSIVE / EXTREMELY_EXPENSIVE / NOT_APPLICABLE / INSUFFICIENT_DATA
         private Double impliedGrowthPercent;   // growth rate (% / yr) implied by today's price
-        private Double historicalGrowthPercent;// 2-yr profit CAGR (% / yr), or YoY fallback
+        private Double historicalGrowthPercent;// profit CAGR over >= 4 years of annual accounts (% / yr); null below that (B-145)
         private Double expectationGapPercent;  // implied − historical
         private Double impliedGrowthAtLowDiscountPercent;  // sensitivity: discount − 200bps
         private Double impliedGrowthAtHighDiscountPercent; // sensitivity: discount + 200bps

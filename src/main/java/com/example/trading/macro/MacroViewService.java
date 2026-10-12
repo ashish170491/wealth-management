@@ -81,14 +81,30 @@ public class MacroViewService {
         out.put("tailwinds", tailwinds);
         // The sentence that is the feature working rather than failing.
         out.put("nothingTouchesPortfolio", live > 0 && headwinds == 0 && tailwinds == 0);
-        out.put("note", note(live, headwinds, tailwinds, notMeasured));
+        out.put("note", note(live, headwinds, tailwinds, notMeasured, latestIngestIsStale(config.getWindowDays())));
         return out;
     }
 
-    private static String note(long live, int headwinds, int tailwinds, int notMeasured) {
+    /**
+     * True when the news has not been read inside the window (or never). An empty window then
+     * describes the reader, not the world (B-154).
+     */
+    private boolean latestIngestIsStale(int windowDays) {
+        // Same signal the readings use, so the note and the cells cannot disagree.
+        var on = exposureService.newsReadOn();
+        return on == null || on.isBefore(java.time.LocalDate.now().minusDays(Math.max(0, windowDays)));
+    }
+
+    private static String note(long live, int headwinds, int tailwinds, int notMeasured, boolean newsUnread) {
         StringBuilder sb = new StringBuilder();
+        if (live == 0 && newsUnread) {
+            return "The news has not been read inside the last window, so the app has nothing to say about "
+                    + "your holdings - this is an unread feed, not a quiet period. Press \"Read the news "
+                    + "now\" to refresh it. Every holding reads 'not measured' until then.";
+        }
         if (live == 0) {
-            sb.append("No macro event has been recorded in the window. That is the ordinary state.");
+            sb.append("No macro event has been recorded in the window, and the news was read inside it, "
+                    + "so on most days that is the correct answer.");
         } else if (headwinds == 0 && tailwinds == 0) {
             sb.append(live).append(live == 1 ? " event was" : " events were")
                     .append(" recorded in the window, and none of them touches a stock you own.");
@@ -174,7 +190,11 @@ public class MacroViewService {
         out.put("lastIngestAt", latestExtractedAt());
         out.put("dismissedCount", events.stream().filter(MacroEventEntity::isDismissed).count());
         out.put("note", rows.isEmpty()
-                ? "No macro event was recorded in this window. On most days that is the correct answer."
+                ? (latestIngestIsStale(window)
+                        ? "No macro event is recorded in this window, but the news has not been read inside it "
+                                + "(last read: " + latestExtractedAt() + "). That is an unread feed, not a quiet "
+                                + "fortnight - every stock reads 'not measured' until it is read again."
+                        : "No macro event was recorded in this window. On most days that is the correct answer.")
                 : rows.size() + (rows.size() == 1 ? " event" : " events") + " recorded in the last "
                         + window + " days.");
         return out;

@@ -56,6 +56,14 @@ public class ReportPreviewController {
 
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
 
+    /**
+     * One lock per report name. A holdings build makes roughly 74 live NSE calls (integrated
+     * filings, shareholding and announcements per holding) and takes minutes, and nothing stopped
+     * a second request arriving mid-build from starting an identical second build (B-155). The
+     * second caller now waits for the first and is served its result from the cache.
+     */
+    private final Map<String, Object> buildLocks = new ConcurrentHashMap<>();
+
     private record Cached(Instant builtAt, String html) {
         boolean fresh() {
             return Duration.between(builtAt, Instant.now()).compareTo(CACHE_TTL) < 0;
@@ -94,7 +102,17 @@ public class ReportPreviewController {
 
         try {
             long started = System.currentTimeMillis();
-            String body = builder.get();
+            String body;
+            synchronized (buildLocks.computeIfAbsent(name, k -> new Object())) {
+                Cached again = cache.get(name); // someone may have finished while this request waited
+                if (again != null && again.fresh()) {
+                    log.debug("Report preview '{}' built by a concurrent request; reusing it", name);
+                    return html(again.html());
+                }
+                body = builder.get();
+                // Stored inside the lock: a waiting request must find it, not rebuild.
+                if (body != null && !body.isBlank()) cache.put(name, new Cached(Instant.now(), body));
+            }
             log.info("Report preview '{}' built in {} ms", name, System.currentTimeMillis() - started);
 
             if (body == null || body.isBlank()) {

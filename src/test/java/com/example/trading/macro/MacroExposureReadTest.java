@@ -91,6 +91,36 @@ class MacroExposureReadTest {
         assertThat(r.note()).contains("No macro event was recorded");
     }
 
+    @Test
+    @DisplayName("An empty window with the news unread is NOT_MEASURED, never the all-clear (B-154)")
+    void emptyWindowWithUnreadNewsIsNotMeasured() {
+        var rules = List.of(rule(MacroFactor.CRUDE_OIL, Scope.SECTOR, "IT", OnRise.HURT, Strength.HIGH));
+        // Last ingest 29 days ago against a 14-day window: nobody was looking.
+        MacroExposureRead.Result stale = MacroExposureRead.read(new MacroExposureRead.Input(
+                "NSE:TEST", "IT", false, null, rules, List.of(), TODAY, 14, TODAY.minusDays(29)));
+        MacroExposureRead.Result never = MacroExposureRead.read(new MacroExposureRead.Input(
+                "NSE:TEST", "IT", false, null, rules, List.of(), TODAY, 14, null));
+        // Read yesterday and nothing recorded: that IS the finding.
+        MacroExposureRead.Result fresh = MacroExposureRead.read(new MacroExposureRead.Input(
+                "NSE:TEST", "IT", false, null, rules, List.of(), TODAY, 14, TODAY.minusDays(1)));
+
+        assertThat(stale.verdict()).isEqualTo(NOT_MEASURED);
+        assertThat(stale.note()).contains("last read on").contains("says nothing");
+        assertThat(never.verdict()).isEqualTo(NOT_MEASURED);
+        assertThat(never.note()).contains("never been read");
+        assertThat(fresh.verdict()).isEqualTo(NOT_EXPOSED);
+    }
+
+    @Test
+    @DisplayName("News read inside the window but with events that miss the business is still NOT_EXPOSED")
+    void freshNewsWithUntouchedEventsStillNotExposed() {
+        var rules = List.of(rule(MacroFactor.CRUDE_OIL, Scope.SECTOR, "IT", OnRise.HURT, Strength.HIGH));
+        var events = List.of(event(1, MacroFactor.GOLD, MacroDirection.UP, TODAY.minusDays(1)));
+        MacroExposureRead.Result r = MacroExposureRead.read(new MacroExposureRead.Input(
+                "NSE:TEST", "IT", false, null, rules, events, TODAY, 14, TODAY));
+        assertThat(r.verdict()).isEqualTo(NOT_EXPOSED);
+    }
+
     // ------------------------------------------------------------------ direction
 
     @Test

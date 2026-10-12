@@ -23,6 +23,8 @@ public class NseDataService {
 
     /** Bhavcopy-backed delivery % (B-021) — replaces the bot-walled per-stock endpoint. */
     private final NseDeliveryDataService deliveryDataService;
+    /** B-012: real FII/DII per filed quarter, parsed once from the shareholding XBRL. */
+    private final com.example.trading.persistence.ShareholdingSplitRepository shareholdingSplitRepository;
 
     private WebClient webClient;
     private String cachedCookies;
@@ -377,14 +379,31 @@ public class NseDataService {
      * means "unknown", not "no pledge".
      */
     private Double fetchPledgePercentFromXbrl(String xbrlUrl) {
+        ShareholdingFacts f = fetchShareholdingFacts(xbrlUrl);
+        return f == null ? null : f.pledgePercent();
+    }
+
+    /**
+     * What a shareholding-pattern XBRL says about pledge and institutions (B-012).
+     *
+     * @param pledgePercent promoter shares pledged as % of total shares; 0.0 when the filing says
+     *                      explicitly that nothing is pledged, null when it says nothing
+     * @param fiiPercent    foreign institutions (FPI categories, FDI, foreign VC, sovereign funds,
+     *                      depositories) as % of total shares - the filing's own subtotal
+     * @param diiPercent    domestic institutions (mutual funds, insurers, banks, pension funds,
+     *                      AIFs ...) as % of total shares - the filing's own subtotal
+     */
+    public record ShareholdingFacts(Double pledgePercent, Double fiiPercent, Double diiPercent) {
+    }
+
+    /** Download one shareholding XBRL and read it. Null on any failure. */
+    private ShareholdingFacts fetchShareholdingFacts(String xbrlUrl) {
         if (xbrlUrl == null || xbrlUrl.isBlank()) return null;
         try {
-            // XBRL files live at nsearchives.nseindia.com (a different host from the
-            // API origin), so we use a dedicated client rather than the cookie-bound
-            // one used for JSON endpoints. Bump the buffer to 2 MB — XBRL filings are
-            // typically 200–500 KB which exceeds WebClient's default 256 KB limit.
+            // 16 MB like the shared client (B-054): a large company's filing is ~1.3 MB and grows
+            // with every promoter-group entity listed in it.
             String xml = WebClient.builder()
-                    .codecs(c -> c.defaultCodecs().maxInMemorySize(2 * 1024 * 1024))
+                    .codecs(c -> c.defaultCodecs().maxInMemorySize(NSE_MAX_RESPONSE_BYTES))
                     .build().get()
                     .uri(xbrlUrl)
                     .header(HttpHeaders.USER_AGENT,
@@ -394,7 +413,58 @@ public class NseDataService {
                     .bodyToMono(String.class)
                     .block(TIMEOUT);
             if (xml == null || xml.isEmpty()) return null;
+            return parseShareholdingFacts(xml);
+        } catch (Exception e) {
+            log.warn("Shareholding XBRL unreadable ({}): pledge and the FII/DII split will read "
+                    + "'not measured' for this quarter, not zero: {}", xbrlUrl, e.getMessage());
+            return null;
+        }
+    }
 
+    /**
+     * Pure reader for a shareholding-pattern XBRL. The institutional subtotals are the filing's
+     * own {@code InstitutionsForeign_ContextI} / {@code InstitutionsDomestic_ContextI} values of
+     * {@code ShareholdingAsAPercentageOfTotalNumberOfShares}, stored as ratios (0.0906) and
+     * returned as percent (9.06).
+     */
+    public static ShareholdingFacts parseShareholdingFacts(String xml) {
+        Double fii = null, dii = null;
+        try {
+            javax.xml.parsers.DocumentBuilderFactory dbf =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            dbf.setNamespaceAware(false);
+            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            org.w3c.dom.Document doc = dbf.newDocumentBuilder()
+                    .parse(new org.xml.sax.InputSource(new java.io.StringReader(xml)));
+            org.w3c.dom.NodeList all = doc.getElementsByTagName("*");
+            for (int i = 0; i < all.getLength(); i++) {
+                org.w3c.dom.Node n = all.item(i);
+                String local = n.getNodeName();
+                int colon = local.indexOf(':');
+                if (colon >= 0) local = local.substring(colon + 1);
+                if (!"ShareholdingAsAPercentageOfTotalNumberOfShares".equals(local)) continue;
+                org.w3c.dom.Node ctx = n.getAttributes() == null ? null : n.getAttributes().getNamedItem("contextRef");
+                if (ctx == null) continue;
+                String c = ctx.getNodeValue();
+                String txt = n.getTextContent();
+                if (txt == null || txt.isBlank()) continue;
+                try {
+                    double v = Double.parseDouble(txt.trim()) * 100.0;
+                    if ("InstitutionsForeign_ContextI".equals(c)) fii = v;
+                    else if ("InstitutionsDomestic_ContextI".equals(c)) dii = v;
+                } catch (NumberFormatException ignored) {
+                    // an unreadable figure stays null - never zero
+                }
+            }
+        } catch (Exception e) {
+            return new ShareholdingFacts(parsePledge(xml), null, null);
+        }
+        return new ShareholdingFacts(parsePledge(xml), fii, dii);
+    }
+
+    /** The pledge read, unchanged from the original parser (kept separate so it cannot regress). */
+    private static Double parsePledge(String xml) {
+        try {
             javax.xml.parsers.DocumentBuilderFactory dbf =
                     javax.xml.parsers.DocumentBuilderFactory.newInstance();
             dbf.setNamespaceAware(false); // XBRL uses namespaces; ignoring lets us match local names
@@ -457,7 +527,6 @@ public class NseDataService {
             // or convert the unit here once it's clear what downstream expects.
             return promoterPledgeRatio * 100.0;
         } catch (Exception e) {
-            log.debug("XBRL pledge parse failed for {}: {}", xbrlUrl, e.getMessage());
             return null;
         }
     }
@@ -517,6 +586,40 @@ public class NseDataService {
             log.debug("Annual financials fetch failed for {}: {}", tradingSymbol, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * The year-end filings in the integrated feed OTHER than ones already on file (B-166).
+     *
+     * <p>{@link #fetchAnnualFinancials} reads only the newest March filing, and the legacy archive
+     * stops at the filings made before NSE moved (FY2024). The integrated feed carries the March-2025
+     * filing too, so FY2025 sat in neither source: no stock had a FY2025 row, balance sheets existed
+     * only for 2023, 2024 and 2026, and the four-year persistence floor (SPEC 43) could not be met
+     * from balance-sheet gates anywhere. This returns each remaining March filing parsed, skipping
+     * the years the caller already holds.
+     *
+     * @param skipYears fiscal years (year-ending, e.g. 2025) already stored with a balance sheet
+     */
+    public List<BalanceSheetData> fetchIntegratedAnnualYears(String tradingSymbol, java.util.Set<Integer> skipYears) {
+        List<BalanceSheetData> out = new ArrayList<>();
+        try {
+            for (Map<String, Object> f : financialFilings(tradingSymbol, true)) {
+                java.time.LocalDate qe = parseIntegratedDate(getString(f, "qe_Date", null));
+                if (qe == null || (skipYears != null && skipYears.contains(qe.getYear()))) continue;
+                String url = getString(f, "xbrl", null);
+                if (url != null && !isXbrlCached(url)) pace();
+                XbrlDoc doc = fetchAndParseXbrl(url);
+                if (doc == null) continue;
+                BalanceSheetData bs = buildAnnual(doc, tradingSymbol,
+                        deriveFyLabel(getString(f, "qe_Date", null)),
+                        "Consolidated".equalsIgnoreCase(getString(f, "consolidated", "")),
+                        getString(f, "broadcast_Date", null));
+                if (bs != null) out.add(bs);
+            }
+        } catch (Exception e) {
+            log.debug("Integrated annual years failed for {}: {}", tradingSymbol, e.getMessage());
+        }
+        return out;
     }
 
     /**
@@ -1149,8 +1252,7 @@ public class NseDataService {
         ce.setConsolidated(bs.isConsolidated());
 
         // Banking taxonomy is authoritative for financial-sector detection; industry hint is a fallback.
-        boolean isFinancial = bs.isBanking() || (industryHint != null && industryHint.toLowerCase()
-                .matches(".*(bank|financ|nbfc|insur|capital market|holding).*"));
+        boolean isFinancial = isLender(bs, industryHint);
         ce.setFinancialSector(isFinancial);
 
         Double equity = bs.getEquity();
@@ -1219,9 +1321,16 @@ public class NseDataService {
         if (cfo != null && netProfit != null && netProfit > 0) {
             double cc = cfo / netProfit;
             ce.setCashConversionRatio(cc);
+            if (isFinancial) {
+                // Lending money out is operating cash outflow, so for a lender this ratio measures
+                // loan growth, not earnings quality. Kept as a figure, never as a strength or a red
+                // flag, and never counted in the overall verdict below (B-144).
+                ce.setCashConversionVerdict("NA_FINANCIAL");
+            } else {
             ce.setCashConversionVerdict(cc >= 0.8 ? "STRONG" : cc >= 0.5 ? "ADEQUATE" : cc >= 0 ? "WEAK" : "NEGATIVE");
             if (cc >= 0.8) ce.getStrengths().add(String.format("Strong cash conversion (CFO is %.0f%% of profit — earnings are real cash)", cc * 100));
             else if (cc < 0.5) ce.getRedFlags().add(String.format("Weak cash conversion (CFO only %.0f%% of profit — accounting-quality watch)", cc * 100));
+            }
         }
 
         // Dividend payout = dividends paid / net profit
@@ -1281,8 +1390,7 @@ public class NseDataService {
                     + "(no filing, very recent IPO, or unsupported format)");
             return cc;
         }
-        boolean isFinancial = bs.isBanking() || (industryHint != null && industryHint.toLowerCase()
-                .matches(".*(bank|financ|nbfc|insur|capital market|holding).*"));
+        boolean isFinancial = isLender(bs, industryHint);
         return classifyCapexCycle(bs, isFinancial);
     }
 
@@ -2384,8 +2492,86 @@ public class NseDataService {
      * score with a red flag still yields verdict HIGH_RISK.
      */
     public FinancialQualityData analyzeFinancialQuality(String tradingSymbol) {
+        return analyzeFinancialQuality(tradingSymbol, null);
+    }
+
+    /**
+     * The industry test every lender exemption in this app shares: banks file under their own
+     * XBRL taxonomy, but NBFCs and housing-finance companies file under Ind-AS and are only
+     * recognisable by industry. One copy, so capital efficiency, the capex cycle, financial
+     * quality and the forensic screen cannot disagree about who is a lender (B-144).
+     *
+     * <p>Known over-reach (B-136): it also catches fee-earning financials (AMCs, registrars,
+     * brokers), which file under "Financial Services". For them the exemptions below cost only
+     * a measurement, never a false flag.
+     */
+    /**
+     * Equity at or above this share of total assets marks a fee-earning financial - an asset
+     * manager, registrar, wealth manager or payments business - rather than a lender (B-136).
+     *
+     * <p>Measured on the 2026-10-10 run across every stock the industry test catches: the fee and
+     * investment businesses sit at 0.67 and above (NAM-INDIA 0.90, UTIAMC 0.89, JIOFIN 0.82,
+     * ANANDRATHI 0.76, CAMS 0.73, PAYTM 0.67) and every lender at 0.34 and below (SBFC 0.34,
+     * HOMEFIRST 0.29, BAJFINANCE 0.21, banks 0.06-0.18). 0.5 sits in that empty gap. Lending is
+     * borrowing money to lend it on, so a lender's balance sheet is mostly other people's money;
+     * a fee business's is mostly its own.
+     */
+    public static final double FEE_FINANCIAL_MIN_EQUITY_TO_ASSETS = 0.5;
+
+    /** True when the balance sheet is mostly the company's own money - see the constant above. */
+    public static boolean isFeeFinancial(Double equity, Double totalAssets) {
+        return equity != null && totalAssets != null && totalAssets > 0
+                && equity / totalAssets >= FEE_FINANCIAL_MIN_EQUITY_TO_ASSETS;
+    }
+
+    /**
+     * The same test from stored returns, for callers holding a screening row and not a balance
+     * sheet: ROA / ROE is equity / assets.
+     */
+    public static boolean isFeeFinancialByReturns(Double roaPercent, Double roePercent) {
+        return roaPercent != null && roePercent != null && roaPercent > 0 && roePercent > 0
+                && roaPercent / roePercent >= FEE_FINANCIAL_MIN_EQUITY_TO_ASSETS;
+    }
+
+    /** A bank (by taxonomy), or a financial by industry whose balance sheet is mostly borrowed money. */
+    public static boolean isLender(BalanceSheetData bs, String industryHint) {
+        if (bs != null && bs.isBanking()) return true;
+        if (!isLenderIndustry(industryHint)) return false;
+        return bs == null || !isFeeFinancial(bs.getEquity(), bs.getTotalAssets());
+    }
+
+    /** {@link #isLender(BalanceSheetData, String)} for a symbol; reads the cached annual filing. */
+    public boolean isLender(String tradingSymbol, String industryHint) {
+        if (!isLenderIndustry(industryHint)) return false;
+        try {
+            return isLender(fetchAnnualFinancials(tradingSymbol), industryHint);
+        } catch (Exception e) {
+            return true; // the industry says lender and nothing contradicts it
+        }
+    }
+
+    public static boolean isLenderIndustry(String industryHint) {
+        return industryHint != null && industryHint.toLowerCase(java.util.Locale.ROOT)
+                .matches(".*(bank|financ|nbfc|insur|capital market|holding).*");
+    }
+
+    /**
+     * Financial quality with the lender exemption applied when the industry says so (B-144).
+     *
+     * <p>For a lender, interest is the cost of goods and borrowing is the raw material, so
+     * interest coverage, finance cost as a share of revenue and its trend measure the business
+     * model rather than distress - an NBFC at 1.4x was being forced to HIGH_RISK and capped at 54
+     * for being an NBFC. The profit-plus-depreciation cash proxy is meaningless for a lender too.
+     * Those two sub-scores (45 of the 100 points) leave the denominator and the other three are
+     * rescaled, the not-applicable rule this app applies everywhere else (Gotcha 68) rather than
+     * a neutral fill-in that would read as measured.
+     */
+    public FinancialQualityData analyzeFinancialQuality(String tradingSymbol, String industryHint) {
+        // Not the industry alone (B-136): an asset manager is filed under Financial Services too.
+        boolean lender = isLender(tradingSymbol, industryHint);
         FinancialQualityData q = new FinancialQualityData();
         q.setSymbol(tradingSymbol);
+        q.setLender(lender);
         q.setStrengths(new ArrayList<>());
         q.setRedFlags(new ArrayList<>());
 
@@ -2422,18 +2608,27 @@ public class NseDataService {
         q.setFinanceCostToRevenueLatest(fcToRevenue);
         q.setDebtDataAvailable(hasFc);
 
-        // --- Cash-flow proxy: profit + depreciation (crude OCF) ---
-        Double ocfProxy = null;
+        // --- Cash conversion: REAL operating cash flow over net profit, from the latest annual
+        // filing (B-143). This used to be (profit + depreciation) / profit, which is >= 1 whenever
+        // profit is positive because depreciation is never negative: minimum 1.0006 over 263 stocks,
+        // so the "accounting-quality" trigger was unreachable and 112 stocks printed "Strong cash
+        // conversion" - 14 of them with a real CFO/PAT below 0.5 (PAYTM -1.35, GRASIM -1.73).
+        // Left null when the filing carries no cash-flow statement or profit is not positive: an
+        // unmeasured input leaves the score rather than scoring a neutral 10 (the old fill-in
+        // ranked "no data" below every measured row, i.e. it penalised absence).
+        Double ocfProxy = null;   // kept on the DTO for callers; now the real annual CFO (Rs cr)
         Double ocfToProfit = null;
         boolean hasCf = false;
-        if (!quarters.isEmpty()) {
-            QuarterlyResult latest = quarters.get(0);
-            if (latest.getProfit() != null && latest.getDepreciation() != null) {
-                hasCf = true;
-                ocfProxy = latest.getProfit() + latest.getDepreciation();
-                if (latest.getProfit() > 0) {
-                    ocfToProfit = ocfProxy / latest.getProfit();
+        if (!lender) {
+            try {
+                BalanceSheetData bs = fetchAnnualFinancials(tradingSymbol);
+                if (bs != null && bs.getOperatingCashFlow() != null && bs.getNetProfit() != null) {
+                    hasCf = true;
+                    ocfProxy = bs.getOperatingCashFlow();
+                    if (bs.getNetProfit() > 0) ocfToProfit = bs.getOperatingCashFlow() / bs.getNetProfit();
                 }
+            } catch (Exception e) {
+                log.debug("Financial quality: annual cash flow unavailable for {}: {}", tradingSymbol, e.getMessage());
             }
         }
         q.setOcfProxyLatest(ocfProxy);
@@ -2468,13 +2663,29 @@ public class NseDataService {
         q.setMarginTrend(marginTrend);
 
         // === SCORING ===
-        int leverageScore = scoreLeverage(interestCoverage, fcToRevenue, pledge, q.getStrengths(), q.getRedFlags()); // 0-25
-        int cashFlowScore = scoreCashFlow(ocfToProfit, q.getStrengths(), q.getRedFlags());                           // 0-20
         int marginScore = scoreMargin(latestNetMargin, marginTrend, q.getStrengths(), q.getRedFlags());              // 0-25
         int consistencyScore = scoreConsistency(growthVerdict, q.getStrengths(), q.getRedFlags());                   // 0-15
-        int pledgeTrendBonus = scorePledgeAndTrend(pledge, interestTrend, q.getStrengths(), q.getRedFlags());        // 0-15
-
-        int total = leverageScore + cashFlowScore + marginScore + consistencyScore + pledgeTrendBonus;
+        int total;
+        if (lender) {
+            // Interest cover, finance-cost drag and its trend do not apply (B-144): pledge is
+            // still read, but the interest trend is not passed on.
+            int pledgeScore = scorePledgeAndTrend(pledge, null, q.getStrengths(), q.getRedFlags());              // 0-15
+            int applicable = marginScore + consistencyScore + pledgeScore;                                      // of 55
+            total = (int) Math.round(applicable * 100.0 / 55.0);
+            q.getStrengths().add("Lender: interest cover and cash conversion are not applicable "
+                    + "(interest is a lender's cost of goods, and lending money out is operating cash outflow)");
+        } else {
+            int leverageScore = scoreLeverage(interestCoverage, fcToRevenue, pledge, q.getStrengths(), q.getRedFlags()); // 0-25
+            int pledgeTrendBonus = scorePledgeAndTrend(pledge, interestTrend, q.getStrengths(), q.getRedFlags());        // 0-15
+            if (ocfToProfit != null) {
+                int cashFlowScore = scoreCashFlow(ocfToProfit, q.getStrengths(), q.getRedFlags());                       // 0-20
+                total = leverageScore + cashFlowScore + marginScore + consistencyScore + pledgeTrendBonus;
+            } else {
+                // Cash conversion unmeasured: the other 80 points are rescaled, so a stock is not
+                // marked down for NSE not publishing the statement (and cannot be marked up by it).
+                total = (int) Math.round((leverageScore + marginScore + consistencyScore + pledgeTrendBonus) * 100.0 / 80.0);
+            }
+        }
         total = Math.max(0, Math.min(100, total));
 
         q.setQualityScore(total);
@@ -2502,11 +2713,17 @@ public class NseDataService {
     }
 
     private int scoreCashFlow(Double ocfToProfit, List<String> pros, List<String> flags) {
-        if (ocfToProfit == null) return 10; // neutral when data missing
-        if (ocfToProfit >= 1.3) { pros.add(String.format("Strong cash conversion: OCF %.2fx profit", ocfToProfit)); return 20; }
-        if (ocfToProfit >= 1.0) { pros.add(String.format("Healthy cash conversion: OCF %.2fx profit", ocfToProfit)); return 15; }
+        if (ocfToProfit == null) return 10; // not reached from analyzeFinancialQuality; kept for direct callers
+        if (ocfToProfit >= 1.3) { pros.add(String.format("Strong cash conversion: operating cash %.2fx profit", ocfToProfit)); return 20; }
+        if (ocfToProfit >= 1.0) { pros.add(String.format("Healthy cash conversion: operating cash %.2fx profit", ocfToProfit)); return 15; }
         if (ocfToProfit >= 0.7) return 10;
-        flags.add(String.format("Weak cash conversion: OCF only %.2fx profit (accounting-quality concern)", ocfToProfit));
+        // Deliberately NOT worded "accounting-quality": that phrase is one of classifyQuality's
+        // critical triggers, which force HIGH_RISK and the 54 cap. One year of operating cash flow
+        // is noisy (working capital for a growing business swings it), so this scores low and
+        // warns but does not arm a cap on its own - the three-year forensic check is the armed
+        // version (B-143). Arming a single-year trigger would cap 18 more non-lenders, 8 of them
+        // candidates, on a measure not yet validated.
+        flags.add(String.format("Weak cash conversion: operating cash only %.2fx profit in the latest year (watch)", ocfToProfit));
         return 3;
     }
 
@@ -2581,10 +2798,9 @@ public class NseDataService {
      * <ul>
      *   <li>Promoter % comes from {@code pr_and_prgrp}; public % from {@code public_val}.</li>
      *   <li>FII vs DII split is <i>not</i> in the JSON — it lives in the per-record XBRL
-     *       file. We approximate by splitting institutional holding (= 100 - promoter -
-     *       public-non-institutional) 50/50 between FII and DII; downstream consumers
-     *       compare changes over quarters so the split itself doesn't matter much for
-     *       trend detection.</li>
+     *       file, and is read from there (B-012): the newest quarter from the file already
+     *       fetched for pledge, older quarters from {@code shareholding_split}, the comparison
+     *       quarter fetched once if never seen. A quarter with no filed figure is null.</li>
      *   <li>Pledge % is not in the JSON either. We rely on the boolean
      *       {@code WhetherAnySharesHeldByPromotersAreEncumberedUnderPledged} from XBRL —
      *       not parsed yet, so {@code pledgedPercent} stays null. {@code FinancialQuality}
@@ -2592,6 +2808,31 @@ public class NseDataService {
      *       a follow-up XBRL parser is needed.</li>
      * </ul>
      */
+    /** Persist one filed quarter's split. A filing never changes, so an existing row is left alone. */
+    private void storeSplit(String tradingSymbol, java.time.LocalDate quarter, ShareholdingFacts facts) {
+        if (quarter == null || facts == null || (facts.fiiPercent() == null && facts.diiPercent() == null)) return;
+        try {
+            if (shareholdingSplitRepository.findBySymbolAndQuarterDate(tradingSymbol, quarter).isPresent()) return;
+            shareholdingSplitRepository.save(com.example.trading.persistence.ShareholdingSplitEntity.builder()
+                    .symbol(tradingSymbol).quarterDate(quarter)
+                    .fiiPercent(facts.fiiPercent()).diiPercent(facts.diiPercent()).build());
+        } catch (Exception e) {
+            log.debug("Shareholding split not stored for {} {}: {}", tradingSymbol, quarter, e.getMessage());
+        }
+    }
+
+    private void applyStoredSplit(ShareholdingQuarter sq, String tradingSymbol, java.time.LocalDate quarter) {
+        if (quarter == null) return;
+        try {
+            shareholdingSplitRepository.findBySymbolAndQuarterDate(tradingSymbol, quarter).ifPresent(r -> {
+                sq.setFiiHolding(r.getFiiPercent());
+                sq.setDiiHolding(r.getDiiPercent());
+            });
+        } catch (Exception e) {
+            log.debug("Shareholding split lookup failed for {} {}: {}", tradingSymbol, quarter, e.getMessage());
+        }
+    }
+
     @SuppressWarnings("unchecked")
     public ShareholdingHistory fetchShareholdingHistory(String tradingSymbol) {
         String cacheKey = "shareholding_history:" + tradingSymbol;
@@ -2626,6 +2867,7 @@ public class NseDataService {
                     return lb.compareTo(la);
                 });
 
+                List<String> xbrlByIndex = new ArrayList<>();
                 for (Map<String, Object> item : response) {
                     if (history.getQuarters().size() >= 8) break; // last 8 quarters max
                     ShareholdingQuarter sq = new ShareholdingQuarter();
@@ -2636,31 +2878,42 @@ public class NseDataService {
                     sq.setPromoterHolding(promoter);
                     sq.setPublicHolding(publicHld);
 
-                    // Approximate institutional from residuals: 100 - promoter - employee trusts (when present)
-                    Double employeeTrusts = parseDoubleSafe(item.get("employeeTrusts"));
-                    if (promoter != null && publicHld != null) {
-                        // The "public" bucket lumps retail + institutional (FII/DII). Without XBRL we
-                        // can't isolate FII/DII, so split half-half as a placeholder. Trend detection
-                        // (comparing across quarters) still works because both halves move together.
-                        double instApprox = Math.max(0, publicHld - 5.0); // crude: assume retail ~5%
-                        sq.setFiiHolding(instApprox * 0.5);
-                        sq.setDiiHolding(instApprox * 0.5);
-                    }
-                    if (employeeTrusts != null) {
-                        // not exposed on ShareholdingQuarter — informational only
-                    }
-
-                    // Pledge % is not in the JSON — it lives in the per-record XBRL.
-                    // Parse the latest quarter's XBRL only to keep network cost bounded
-                    // (one ~300 KB file fetch per stock per 30-min cache TTL).
+                    // FII and DII are the filing's own institutional subtotals, read from the XBRL
+                    // (B-012). This used to split "public minus 5%" half and half, so FII == DII on
+                    // 297 of 297 stocks and the Institutional Interest dimension scored the change
+                    // in PUBLIC holding. The newest quarter's XBRL is downloaded anyway for the
+                    // pledge figure; older quarters come from the table, and a quarter never seen
+                    // is null - never a guess.
+                    java.time.LocalDate qDate = parseNseDate(sq.getDate());
                     if (history.getQuarters().isEmpty()) {
-                        String xbrlUrl = getString(item, "xbrl", null);
-                        sq.setPledgedPercent(fetchPledgePercentFromXbrl(xbrlUrl));
+                        ShareholdingFacts facts = fetchShareholdingFacts(getString(item, "xbrl", null));
+                        sq.setPledgedPercent(facts == null ? null : facts.pledgePercent());
+                        if (facts != null) {
+                            sq.setFiiHolding(facts.fiiPercent());
+                            sq.setDiiHolding(facts.diiPercent());
+                            storeSplit(tradingSymbol, qDate, facts);
+                        }
                     } else {
                         sq.setPledgedPercent(null);
+                        applyStoredSplit(sq, tradingSymbol, qDate);
                     }
+                    xbrlByIndex.add(getString(item, "xbrl", null));
 
                     history.getQuarters().add(sq);
+                }
+
+                // The comparison quarter: fetch its filing once if it has never been read, so the
+                // change is measured between two filed figures rather than left null for ever.
+                int last = history.getQuarters().size() - 1;
+                if (last >= 1 && history.getQuarters().get(last).getFiiHolding() == null
+                        && last < xbrlByIndex.size()) {
+                    ShareholdingQuarter q = history.getQuarters().get(last);
+                    ShareholdingFacts facts = fetchShareholdingFacts(xbrlByIndex.get(last));
+                    if (facts != null) {
+                        q.setFiiHolding(facts.fiiPercent());
+                        q.setDiiHolding(facts.diiPercent());
+                        storeSplit(tradingSymbol, parseNseDate(q.getDate()), facts);
+                    }
                 }
 
                 if (history.getQuarters().size() >= 2) {
@@ -3050,8 +3303,8 @@ public class NseDataService {
         private Double promoterPledgePercent;      // from shareholding
 
         // Cash-flow proxy
-        private Double ocfProxyLatest;             // Profit + Depreciation (crude OCF, ₹ cr)
-        private Double ocfToProfitRatio;           // OCF proxy / Net Profit — ≥1 healthy, <0.7 accounting-quality flag
+        private Double ocfProxyLatest;             // latest annual operating cash flow (₹ cr, B-143 - was profit + depreciation)
+        private Double ocfToProfitRatio;           // real operating cash flow / net profit — ≥1 healthy, <0.7 weak (watch); null when unmeasured
 
         // Capital efficiency
         private Double priceToBook;
@@ -3063,6 +3316,8 @@ public class NseDataService {
         private int quartersAvailable;
         private boolean cashFlowDataAvailable;
         private boolean debtDataAvailable;
+        /** Lender exemption applied: interest cover and cash conversion left the score (B-144). */
+        private boolean lender;
     }
 
     @Data
