@@ -1,5 +1,6 @@
 package com.example.trading.funds;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +42,7 @@ public class MutualFundNavScheduler {
         }
         if (!config.isNavPullEnabled()) {
             log.info("AMFI NAV pull is disabled by configuration - skipping");
+            JobRunContext.skip("Switched off in config (trading.funds.nav-pull-enabled is false)");
             return;
         }
 

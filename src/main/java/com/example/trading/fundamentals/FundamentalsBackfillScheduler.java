@@ -1,5 +1,6 @@
 package com.example.trading.fundamentals;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,7 @@ public class FundamentalsBackfillScheduler {
         }
         if (!config.isEnabled()) {
             log.debug("Fundamentals backfill: disabled in config");
+            JobRunContext.skip("Switched off in config (trading.fundamentals.backfill.enabled is false)");
             return;
         }
         try {

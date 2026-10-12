@@ -856,7 +856,7 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | **08:00 SAT** | Weekly full screening + coverage vector + shadow composites + universe expansion Stage A + retirement pass | `MultibaggerScheduler.weeklyFullScreening` | **Saturday carve-out** |
 | **09:00 SAT** | Weekly multibagger report email | `MultibaggerScheduler.sendWeeklyReport` | **Saturday carve-out** |
 
-**29 scheduled methods; no job fires before 09:15 on a weekday.** *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, the 13:20 analyst target pass was added the same day, and the 12:30 AMFI NAV pull on 2026-09-20.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
+**30 scheduled methods; no job fires before 09:15 on a weekday.** *(30 as counted by `JobKeyContractTest` on 2026-10-12, which scans the annotations and fails if one has no label. The jobs page (§56) lists them live from the scheduler, so it cannot drift the way this table has.)* *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, the 13:20 analyst target pass was added the same day, and the 12:30 AMFI NAV pull on 2026-09-20.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
 
 **Why the 11:30 job is a weekday job and not a third Saturday caller** (2026-09-06). §40.3 originally proposed invoking the backfill from inside `weeklyFullScreening()`. That is right about Gotcha 28 and wrong about capacity: the Saturday window is 07:50–10:35 and that job already carries a full screening run, the coverage vector, shadow composites, the retirement pass and the Stage A coarse scan (measured 11–22 minutes), with the report following at 09:00. Roughly 4,000 paced NSE requests do not fit, and crowding that window pushes the report past the point where its guard aborts it in silence. A weekday job inside the ordinary §3.4 window is **not** the Saturday exception — it uses `isMarketOpen()` and never touches the carve-out — and it runs five times a week instead of once. 11:30 is a genuine gap here, clear of every NSE-heavy job (09:45, 10:00 ×2, 14:00, 14:45), and it uses **no Kite calls at all**, so it never competes for the broker budget that has twice starved the afternoon (Gotcha 23, B-014).
 
@@ -6619,3 +6619,133 @@ checked against real stocks before the next scheduled run rewrites the table. It
 - **Fundamental invalidation triggers on the conviction record** remain free text. The
   business-side warnings now reach the Overview through §55.3 instead.
 
+---
+
+## 56. Scheduled Job Status ✅ Active (2026-10-12)
+
+### 56.1 Why this exists
+
+Thirty jobs run this app, and until now nothing recorded that any of them had run. "Did the 14:00
+screening finish, and how long did it take?" was answered by reading the log by hand, and the log
+keeps one day. The cost of not knowing is on record. B-014 starved the 15:22–15:28 block past the
+cut-off for weeks. B-116 killed the IPO capture daily for a week and B-135 killed the NAV pull, and
+in both the scheduler caught the exception and carried on. B-154 left the news reader switched off
+for a month. None of these was found from a job; each was found from a freshness stamp that had
+stopped moving.
+
+`jobs.html` ("Jobs" in the nav) answers a different question from Data Health (§44). Data Health
+asks **is the data fresh and measured?** Jobs asks **did the job run, how did it end, how long did
+it take, and was any fire lost?** A job can succeed and write nothing, and that is Data Health's
+finding, not this page's. Each page names the other rather than restating it (Gotcha 85).
+
+### 56.2 The ledger
+
+`job_run` holds one row per fire of every `@Scheduled` method. The row is written at **start** as
+RUNNING and settled at stop, so a run cut off by the 15:35 shutdown or a crash survives as RUNNING,
+and the next process start turns it into **INTERRUPTED**. `app_boot` holds one row per process
+start, with `lastSeenAt` advanced whenever any job finishes (at most once a minute) and on a clean
+shutdown. Both tables are trimmed after `trading.cleanup.job-run-retention-days` (180) by the 15:28
+cleanup. That is roughly 80 rows a weekday.
+
+**Recording is hooked into Spring's own scheduled-task observation**, which `SchedulingConfig` wires
+to an `ObservationRegistry` carrying `JobRunRecorder`. No job is edited to be recorded, so a new job
+is recorded automatically and none can be forgotten. Every database call in the recorder is wrapped;
+a ledger failure leaves a run unrecorded and never breaks the job.
+
+`outcome` is a plain string column, never `@Enumerated`, because of B-135: Hibernate's CHECK
+constraint never learns a new enum value.
+
+### 56.3 What a run amounted to
+
+| Outcome | Rule (in precedence order) |
+|---|---|
+| FAILED | threw out of the method |
+| COMPLETED_WITH_ERRORS | returned normally but logged ≥1 ERROR line **on its own thread** |
+| SKIPPED | called `JobRunContext.skip(reason)`, or its **first** market-window check returned false |
+| SUCCEEDED | none of the above |
+| INTERRUPTED | still RUNNING when its process went away |
+| RUNNING | in progress in this process |
+
+**COMPLETED_WITH_ERRORS is the reason the page is worth having.** Nearly every scheduled method
+ends in `catch (Exception e) { log.error(...) }`, so "did it throw?" reads green on nearly every
+real failure. `JobLogTap`, a Logback appender, counts WARN and ERROR lines on the running job's
+thread and keeps the first ERROR message. Work a job hands to another thread (reactive callbacks,
+parallel streams) is not attributed, and the page says so.
+
+**Skips are detected two ways.** `MarketHoursService.isMarketOpen()` and
+`isSaturdayScreeningWindow()` report their answer to the active run. Only the first check counts,
+because §3.4 makes it the first statement of every job, and a job that asks again mid-run as a
+deadline test (the IPO capture does) must not be reclassified. Every config-switch and weekend
+early return calls `JobRunContext.skip("Switched off in config (<property>)")`, so a disabled job
+reads SKIPPED **naming the property** and not as a 2 ms success. The holdings scheduler tested its
+switch *before* the window guard, so a disabled run never consulted the window. It now tests the
+switch first and skips explicitly. An ERROR outranks a skip: the weekly screening's no-token abort
+is an error worth seeing.
+
+### 56.4 Fires that never ran
+
+A fire with no run leaves no row, so the page walks each job's cron over the window and judges
+every fire:
+
+| Status | Meaning |
+|---|---|
+| RAN | a run is filed against this fire (`scheduledFor`) |
+| APP_NOT_RUNNING | no process was alive from the fire to 2 minutes after it. Most no-row fires are this, because Windows tasks stop the app nightly |
+| OVERLAPPED | the app was up, but this job's previous run was still going. Spring times a cron's next fire from when the last run *finished*, so an overrun swallows the fires it covers |
+| MISSED | the app was demonstrably up, nothing of this job was running, and no run exists. The one unexplained case, and a PROBLEM |
+
+Fires before the first recorded boot are not judged at all: "no record" is not "did not run". A
+process killed outright reads as alive only up to its last finished job, so the page errs toward
+**under-reporting misses, never toward false ones**. This is §44.3 rule 1's reasoning: a channel that
+cries wolf stops being read.
+
+### 56.5 The catalog
+
+The list of jobs is read from Spring's `ScheduledTaskHolder`, **not** from a hand-kept table. It is
+complete and current by construction. Its crons are **resolved**, with every `${…}` placeholder
+substituted, which is the trap Data Health fell into by reading annotation literals. `JobSchedule`
+says each cron in plain English ("Weekdays, every 15 min from 09:00 to 15:45") using Spring's own
+`CronExpression`. It also counts how many of a run-day's fires fall outside both market windows: the
+headline capture's 09:00 and 15:45 fires are refused by design, and the page says so, so their
+SKIPPED rows are not read as faults. `JobLabels` gives each job a name and what it touches (Kite,
+NSE, email). `JobKeyContractTest` fails if a scheduled method has no label or a label names no job.
+
+### 56.6 Statistics and verdict
+
+Duration statistics count only runs that did their work. Skips take about 2 ms by construction and
+would make every frequent job look fast. The headline is the **median**, so one throttled day does
+not move "typical"; the 90th percentile is withheld below 5 runs. Start delay (`startedAt −
+scheduledFor`) is the B-014 instrument: over 2 minutes means all four scheduler threads were busy.
+
+| Verdict | When |
+|---|---|
+| PROBLEM | latest real run FAILED, COMPLETED_WITH_ERRORS or INTERRUPTED, **or** a MISSED fire in the window |
+| WATCH | an earlier bad run since recovered; a fire swallowed by overrun; started >2 min late; took >3× its median and >1 min; last fire skipped by a config switch |
+| OK | otherwise |
+| NO_HISTORY / NOT_DUE | never ran: due only while the app was off / not due since the ledger began |
+
+A failure that has since recovered is WATCH and never PROBLEM. A page that stays red after a
+recovery is a page whose red stops being read.
+
+### 56.7 Endpoints and page
+
+- `GET /api/jobs?days=14`: every job with its schedule, next run, last fire, last real run, last
+  clean success, statistics, window counts, verdict and reasons, plus running-now, problems and the
+  page's limits. DB-only plus the scheduler's in-memory registry; page-load safe.
+- `GET /api/jobs/runs?job=&days=30&limit=200`: one job's runs, newest first. `job` is the full key
+  or `Class.method`; 404 when unknown.
+- `GET /api/jobs/timeline?date=`: every run on one day (default: the latest day with runs), with
+  the previous and next days that have runs.
+- **There is no "run this job now" endpoint, by design.** Each job already has its own manual trigger
+  with its own refusal windows (B-049), and a generic one would bypass all of them.
+
+The page shows: a summary; running now (flagged when longer than 9 in 10 of its past runs); every
+job; what went wrong; a day timeline of bars per job, with the peak concurrency against the 4-thread
+pool; one job's run history; a reading guide; and the limits. Its freshness subset in `nav.js` is
+empty, because every row carries its own run times.
+
+### 56.8 What it cannot see
+
+Manual POST triggers do the same work outside the scheduler and leave no row. Errors logged on other
+threads are not counted. "Succeeded" says nothing about output. There is no holiday calendar. All
+four limits are printed on the page.

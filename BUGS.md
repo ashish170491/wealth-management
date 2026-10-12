@@ -106,6 +106,14 @@ and renaming it over the original is the version of this that cannot lose data.
 
 ## Resolved Bugs
 
+### B-167 - Data Health's "Need attention" card never turned red  `RESOLVED 2026-10-12`
+
+- **Severity:** P3. **Found:** building the jobs page (SPEC §56), which copied the Data Health page's KPI code and with it the defect.
+- **Root cause:** `page-health.js` passed `tone: 'bad' | 'good'` to `kpi()`, which uses the tone as a CSS class. `app.css` defines only `.summary-card.positive`, `.negative` and `.warning`, so the card took no colour at all. It was the same neutral grey with five problems as with none. This is Gotcha 104 and 126(n) again: a class name that does not exist fails silently, with the attribute present.
+- **Blast radius:** the headline card of the screen built to say "something is broken" looked the same either way. The folded-heading summary chip was unaffected (it goes through `badge()`), so the verdict was still readable, just not at a glance on the card itself.
+- **Fix:** `tone: 'negative' | 'positive'` in [page-health.js:58](src/main/resources/static/js/page-health.js#L58). The new jobs page uses the defined tones from the start. A grep confirmed no other page passes `bad`/`good`.
+- **Verification:** grep for `tone: ... 'bad'|'good'` across `static/js` returns nothing; card colour checked on the rendered page.
+
 ### B-136 / B-137 / B-142 - fee financials, missing colour classes, watchlist sector  `RESOLVED 2026-10-12`
 
 - **B-136 (P1) asset managers, registrars and wealth managers were judged as lenders.** The discriminator the entry asked for is the balance sheet, not the name: a financial is a lender only when equity is **under half of total assets** (or it files the banking taxonomy). Measured gap on 2026-10-10: fee/investment businesses 0.67-0.90 (NAM-INDIA, UTIAMC, JIOFIN, ANANDRATHI, CAMS, PAYTM), lenders 0.06-0.34. `NseDataService.isLender` / `isFeeFinancial` / `isFeeFinancialByReturns` (ROA Ã· ROE = equity Ã· assets, for callers holding only a screening row) are now the single test - three more copies of the industry regex (capex cycle, macro exposure, and the forensic callers) were replaced. The sector lens's FINANCIALS refusal is lifted (`MIXED_BUCKETS` now empty), because lenders and non-lenders in one bucket never share a denominator. **Verified live:** CAMS evaluates with ROCE 48.2%, capex STEADY (was NA_FINANCIAL); `/api/dashboard/sector-standing?symbol=NSE:CAMS` is a non-lender with six fee peers (too few, said so) instead of a lender ranked on ROA; BAJFINANCE is ranked among 19 financials lenders. Pinned in `SectorStandingTest`.

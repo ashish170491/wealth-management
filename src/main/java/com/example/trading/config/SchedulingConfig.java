@@ -1,10 +1,15 @@
 package com.example.trading.config;
 
+import com.example.trading.jobs.JobRunRecorder;
+import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 
 /**
  * Provides a multi-threaded {@link TaskScheduler} for all {@code @Scheduled} jobs.
@@ -28,10 +33,42 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * <p>Pool sizing: 4 threads. The heavy scans (multibagger, breakout, sector reversal) are staggered
  * across the day and rarely overlap; 4 is comfortably enough to keep the afternoon batch from
  * starving without inviting wide concurrency.
+ *
+ * <p><b>Job-run ledger (SPEC §56).</b> This class also hands the scheduler an
+ * {@link ObservationRegistry} carrying {@link JobRunRecorder}. Spring 6.2 wraps every
+ * {@code @Scheduled} method in an observation, but with no registry configured it uses a no-op one
+ * and the hook never fires; this app has no Actuator to supply one. Wiring it here records every
+ * job, present and future, with no edit to any job.
  */
 @Configuration
 @Slf4j
-public class SchedulingConfig {
+public class SchedulingConfig implements SchedulingConfigurer {
+
+    /** Exposed so the jobs page can say "N of 4 threads busy" without restating the number. */
+    public static final int POOL_SIZE = 4;
+
+    private final ObjectProvider<JobRunRecorder> recorder;
+
+    public SchedulingConfig(ObjectProvider<JobRunRecorder> recorder) {
+        this.recorder = recorder;
+    }
+
+    /**
+     * Called once, after every bean exists and before the first job is scheduled - so fetching
+     * the recorder lazily here cannot create a start-up cycle with the JPA repositories it needs.
+     */
+    @Override
+    public void configureTasks(ScheduledTaskRegistrar registrar) {
+        JobRunRecorder handler = recorder.getIfAvailable();
+        if (handler == null) {
+            log.warn("Job-run ledger not wired: no JobRunRecorder bean - the jobs page will show no runs");
+            return;
+        }
+        ObservationRegistry registry = ObservationRegistry.create();
+        registry.observationConfig().observationHandler(handler);
+        registrar.setObservationRegistry(registry);
+        log.info("Job-run ledger wired: every @Scheduled run is recorded to job_run (SPEC §56)");
+    }
 
     /**
      * Bean name {@code taskScheduler} is what Spring's scheduling annotation post-processor looks
@@ -40,7 +77,7 @@ public class SchedulingConfig {
     @Bean
     public TaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(4);
+        scheduler.setPoolSize(POOL_SIZE);
         scheduler.setThreadNamePrefix("sched-");
         // Let an in-flight job (e.g. tax-lot capture at 15:28) finish during the 15:30–15:35
         // shutdown ramp rather than being killed mid-write.
@@ -49,7 +86,7 @@ public class SchedulingConfig {
         scheduler.setRemoveOnCancelPolicy(true);
         scheduler.initialize();
         log.info("Scheduler pool initialized: {} threads (prefix '{}') — replaces single-threaded default (B-014)",
-                4, "sched-");
+                POOL_SIZE, "sched-");
         return scheduler;
     }
 }

@@ -1,5 +1,6 @@
 package com.example.trading.fiidii;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.fiidii.FiiDiiDTO.*;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class FiiDiiScheduler {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
         if (!config.isEnabled() || !isWeekday()) {
             log.debug("FII/DII fetch skipped - disabled or weekend");
+            JobRunContext.skip("Switched off in config (trading.fiidii.enabled), or a weekend");
             return;
         }
 
@@ -92,6 +94,7 @@ public class FiiDiiScheduler {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
         if (!config.isEnabled() || !config.isSendAlerts() || !isWeekday()) {
             log.debug("FII/DII report skipped - disabled or weekend");
+            JobRunContext.skip("Switched off in config (trading.fiidii.enabled or send-alerts), or a weekend");
             return;
         }
 

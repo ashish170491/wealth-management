@@ -1,5 +1,6 @@
 package com.example.trading.analyst;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +48,10 @@ public class AnalystTargetScheduler {
         if (!marketHoursService.isMarketOpen()) {
             return; // Outside 09:15-15:30 IST — SPEC §3.4.
         }
-        if (!config.isEnabled()) return;
+        if (!config.isEnabled()) {
+            JobRunContext.skip("Switched off in config (trading.analyst-targets.enabled is false)");
+            return;
+        }
 
         // The structured feed first: it publishes what the headline parser can only infer, so a
         // call captured here is already on file (same dedup key) when the headline for the same

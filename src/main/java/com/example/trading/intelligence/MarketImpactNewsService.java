@@ -1,5 +1,6 @@
 package com.example.trading.intelligence;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.intelligence.MultiSourceNewsFetcher.RawNewsItem;
 import com.example.trading.macro.MacroKeywordExtractor;
 import com.example.trading.scheduler.MarketHoursService;
@@ -67,6 +68,7 @@ public class MarketImpactNewsService {
         }
         if (!config.isEnabled()) {
             log.debug("trading.market-impact-news.enabled is false - skipping news scan");
+            JobRunContext.skip("Switched off in config (trading.market-impact-news.enabled is false)");
             return;
         }
         scanOnce();

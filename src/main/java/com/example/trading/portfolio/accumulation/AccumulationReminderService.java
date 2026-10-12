@@ -1,5 +1,6 @@
 package com.example.trading.portfolio.accumulation;
 
+import com.example.trading.jobs.JobRunContext;
 import com.example.trading.notification.EmailNotificationService;
 import com.example.trading.notification.EmailTemplateService;
 import com.example.trading.persistence.HoldingsEntity;
@@ -48,7 +49,10 @@ public class AccumulationReminderService {
     @Scheduled(cron = "0 0 10 * * MON-FRI", zone = "Asia/Kolkata")
     public void dailyCheck() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
-        if (!enabled) return;
+        if (!enabled) {
+            JobRunContext.skip("Switched off in config (portfolio.reports.accumulation-reminder-enabled is false)");
+            return;
+        }
         try {
             sendIfAnyDue();
         } catch (Exception e) {

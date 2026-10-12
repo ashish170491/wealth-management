@@ -19,6 +19,13 @@ public class DataCleanupConfig {
     private boolean enabled = true;
 
     /**
+     * Retention for the scheduled-job run ledger and its process-start rows (SPEC §56.2), days.
+     * ~80 rows a weekday, so 180 days is a few thousand rows - enough to see a slow drift in a
+     * job's duration across two quarters.
+     */
+    private int jobRunRetentionDays = 180;
+
+    /**
      * Retention period for completed trades (days).
      * Default: 90 days (3 months)
      */
