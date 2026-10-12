@@ -119,7 +119,7 @@ public class Nifty200WatchlistService {
     private static final List<String> NIFTY_SMALLCAP_250 = Arrays.asList(
         // Capital Goods / Industrials
         "APARINDS", "BLUESTARCO", "CARBORUNIV", "ELGIEQUIP", "GRINDWELL",
-        "HEG", "HONDAPOWER", "IFCI", "ISGEC", "JYOTHYLAB",
+        "HEGAM", "HONDAPOWER", "IFCI", "ISGEC", "JYOTHYLAB",
         "KEC", "KIRLOSBROS", "KIRLOSENG", "RAILTEL", "RATNAMANI", "SANSERA", "SHAILY", "SKIPPER",
         "TRITURBINE",
         // Chemicals / Specialty
