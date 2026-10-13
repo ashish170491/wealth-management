@@ -186,7 +186,7 @@ public class NseDeliveryDataService {
 
     private WebClient getClient() {
         if (client == null) {
-            client = WebClient.builder()
+            client = com.example.trading.config.JvmDns.webClientBuilder()
                     .baseUrl(ARCHIVE_BASE)
                     .defaultHeader(HttpHeaders.USER_AGENT, UA)
                     // The archive host needs only a browser UA — no cookies, unlike www.nseindia.com.

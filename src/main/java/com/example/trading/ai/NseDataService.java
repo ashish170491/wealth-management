@@ -155,7 +155,7 @@ public class NseDataService {
      */
     private WebClient getWebClient() {
         if (webClient == null) {
-            webClient = WebClient.builder()
+            webClient = com.example.trading.config.JvmDns.webClientBuilder()
                     .baseUrl(NSE_BASE_URL)
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(NSE_MAX_RESPONSE_BYTES))
                     .defaultHeader(HttpHeaders.USER_AGENT,
@@ -402,7 +402,7 @@ public class NseDataService {
         try {
             // 16 MB like the shared client (B-054): a large company's filing is ~1.3 MB and grows
             // with every promoter-group entity listed in it.
-            String xml = WebClient.builder()
+            String xml = com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(NSE_MAX_RESPONSE_BYTES))
                     .build().get()
                     .uri(xbrlUrl)
@@ -995,7 +995,7 @@ public class NseDataService {
         XbrlDoc cachedDoc = getCached(cacheKey);
         if (cachedDoc != null) return cachedDoc;
         try {
-            String xml = WebClient.builder()
+            String xml = com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(8 * 1024 * 1024))
                     .build().get()
                     .uri(url)
@@ -1865,7 +1865,7 @@ public class NseDataService {
         List<Map<String, String>> out = new ArrayList<>();
         if (xmlUrl == null || xmlUrl.isBlank()) return out;
         try {
-            String xml = WebClient.builder()
+            String xml = com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(2 * 1024 * 1024))
                     .build().get()
                     .uri(xmlUrl)
@@ -1945,7 +1945,7 @@ public class NseDataService {
 
         List<Map<String, String>> rows = new ArrayList<>();
         try {
-            String csv = WebClient.builder()
+            String csv = com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(8 * 1024 * 1024))
                     .build().get()
                     .uri("https://nsearchives.nseindia.com/content/equities/" + file)
@@ -1990,7 +1990,7 @@ public class NseDataService {
 
         List<EquityListing> out = new ArrayList<>();
         try {
-            String csv = WebClient.builder()
+            String csv = com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
                     .build().get()
                     .uri("https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv")
@@ -2265,7 +2265,7 @@ public class NseDataService {
     public byte[] fetchAttachmentBytes(String url) {
         if (url == null || url.isBlank()) return null;
         try {
-            return org.springframework.web.reactive.function.client.WebClient.builder()
+            return com.example.trading.config.JvmDns.webClientBuilder()
                     .codecs(c -> c.defaultCodecs().maxInMemorySize(20 * 1024 * 1024))
                     .build()
                     .get()

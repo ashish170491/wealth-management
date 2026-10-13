@@ -26,7 +26,7 @@ public class StockNewsService {
     private static final Pattern PUB_DATE_PATTERN = Pattern.compile("<pubDate>(.+?)</pubDate>");
 
     public StockNewsService() {
-        this.webClient = WebClient.builder()
+        this.webClient = com.example.trading.config.JvmDns.webClientBuilder()
                 .defaultHeader(HttpHeaders.USER_AGENT,
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .defaultHeader(HttpHeaders.ACCEPT, "application/xml, text/xml, */*")
