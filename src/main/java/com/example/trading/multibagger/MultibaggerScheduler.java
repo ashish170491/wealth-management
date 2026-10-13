@@ -1,5 +1,6 @@
 package com.example.trading.multibagger;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.broker.kite.TokenManagementService;
 import com.example.trading.scheduler.MarketHoursService;
@@ -107,6 +108,12 @@ public class MultibaggerScheduler {
             return;
         }
 
+        runDailyNow();
+    }
+
+    /** The work of {@link #dailyQuickScreening()} without its guards (SPEC 56.9). */
+    @JobRerun("dailyQuickScreening")
+    public void runDailyNow() {
         log.info("Multibagger Scheduler: Starting daily post-market screening...");
         try {
             screenerService.runFullScreening();

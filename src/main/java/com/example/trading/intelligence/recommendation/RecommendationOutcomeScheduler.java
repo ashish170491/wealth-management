@@ -1,5 +1,6 @@
 package com.example.trading.intelligence.recommendation;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.marketdata.MarketDataService;
 import com.example.trading.persistence.RecommendationEntity;
 import com.example.trading.persistence.RecommendationOutcomeEntity;
@@ -62,6 +63,7 @@ public class RecommendationOutcomeScheduler {
      * {@code {"status":"ok"}} having done nothing, which is exactly what it did when
      * verifying the B-022 backfill on a Saturday.
      */
+    @JobRerun("updateOutcomesScheduled")
     public void updateOutcomes() {
         log.info("Recommendation outcomes: starting update");
         int persisted = 0;

@@ -1,5 +1,6 @@
 package com.example.trading.portfolio.report;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,11 @@ public class PortfolioReportScheduler {
             JobRunContext.skip("Switched off in config (portfolio.reports.daily-enabled is false)");
             return;
         }
+        runDailyNow();
+    }
+
+    @JobRerun("dailySnapshot")
+    public void runDailyNow() {
         run("daily");
     }
 
@@ -59,6 +65,11 @@ public class PortfolioReportScheduler {
             JobRunContext.skip("Switched off in config (portfolio.reports.monthly-enabled is false)");
             return;
         }
+        runMonthlyNow();
+    }
+
+    @JobRerun("monthlyReview")
+    public void runMonthlyNow() {
         run("monthly");
     }
 
@@ -70,6 +81,11 @@ public class PortfolioReportScheduler {
             JobRunContext.skip("Switched off in config (portfolio.reports.quarterly-enabled is false)");
             return;
         }
+        runQuarterlyNow();
+    }
+
+    @JobRerun("quarterlyRebalance")
+    public void runQuarterlyNow() {
         run("quarterly");
     }
 

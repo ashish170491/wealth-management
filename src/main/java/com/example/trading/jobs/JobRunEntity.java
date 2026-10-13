@@ -76,4 +76,17 @@ public class JobRunEntity {
 
     @Column(length = 40)
     private String threadName;
+
+    /**
+     * {@code MANUAL} for a re-run started from the jobs page (SPEC §56.9); null for a scheduled
+     * fire, which is every row written before re-runs existed. A string, never an enum (B-135).
+     */
+    @Column(length = 16)
+    private String runTrigger;
+
+    public static final String TRIGGER_MANUAL = "MANUAL";
+
+    public boolean isManual() {
+        return TRIGGER_MANUAL.equals(runTrigger);
+    }
 }

@@ -1,5 +1,6 @@
 package com.example.trading.universe.ipo;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,12 @@ public class IpoCaptureScheduler {
         if (!marketHoursService.isMarketOpen()) {
             return; // Outside 09:15-15:30 IST — SPEC §3.4.
         }
+        runNow();
+    }
+
+    /** The work of {@link #captureDaily()} without its guard (SPEC 56.9). */
+    @JobRerun("captureDaily")
+    public void runNow() {
         try {
             IpoTrackingService.CaptureResult r = trackingService.capture(this::shouldStop);
             log.info("Scheduled IPO capture done: {}", r.note());

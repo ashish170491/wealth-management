@@ -1,5 +1,6 @@
 package com.example.trading.portfolio.accumulation;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.notification.EmailNotificationService;
 import com.example.trading.notification.EmailTemplateService;
@@ -53,6 +54,12 @@ public class AccumulationReminderService {
             JobRunContext.skip("Switched off in config (portfolio.reports.accumulation-reminder-enabled is false)");
             return;
         }
+        runNow();
+    }
+
+    /** The work of {@link #dailyCheck()} without its guards (SPEC 56.9). */
+    @JobRerun("dailyCheck")
+    public void runNow() {
         try {
             sendIfAnyDue();
         } catch (Exception e) {

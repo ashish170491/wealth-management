@@ -1,5 +1,6 @@
 package com.example.trading.macro;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +40,12 @@ public class MacroIngestScheduler {
             JobRunContext.skip("Switched off in config (macro.ingest.scheduled is false) - the news stays unread");
             return;
         }
+        runNow();
+    }
+
+    /** The work of {@link #dailyIngest()} without its guards (SPEC 56.9). */
+    @JobRerun("dailyIngest")
+    public void runNow() {
         try {
             MacroIngestService.IngestResult r = ingestService.ingest();
             log.info("Macro ingest (scheduled): {}", r.note());

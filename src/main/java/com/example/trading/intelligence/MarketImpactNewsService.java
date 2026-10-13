@@ -1,5 +1,6 @@
 package com.example.trading.intelligence;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.intelligence.MultiSourceNewsFetcher.RawNewsItem;
 import com.example.trading.macro.MacroKeywordExtractor;
@@ -90,6 +91,7 @@ public class MarketImpactNewsService {
      * filter is deliberately the same one the fallback extractor uses: a headline the app would
      * never be able to turn into an event is not worth the row.
      */
+    @JobRerun("scheduledNewsCheck")
     public int scanOnce() {
         try {
             LocalDateTime since = fetchSince();

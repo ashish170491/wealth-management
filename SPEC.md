@@ -6736,8 +6736,11 @@ recovery is a page whose red stops being read.
   or `Class.method`; 404 when unknown.
 - `GET /api/jobs/timeline?date=`: every run on one day (default: the latest day with runs), with
   the previous and next days that have runs.
-- **There is no "run this job now" endpoint, by design.** Each job already has its own manual trigger
-  with its own refusal windows (B-049), and a generic one would bypass all of them.
+- `POST /api/jobs/rerun?job=`: re-runs one job whose latest real run went wrong **today** (§56.9).
+  202 when started, 409 with the reason in the body when refused, 404 when unknown. This replaces
+  the earlier rule that no "run this job now" endpoint should exist. That rule was about a
+  *generic* trigger bypassing each job's refusal windows (B-049), and §56.9 keeps the windows in
+  one place instead.
 
 The page shows: a summary; running now (flagged when longer than 9 in 10 of its past runs); every
 job; what went wrong; a day timeline of bars per job, with the peak concurrency against the 4-thread
@@ -6746,6 +6749,59 @@ empty, because every row carries its own run times.
 
 ### 56.8 What it cannot see
 
-Manual POST triggers do the same work outside the scheduler and leave no row. Errors logged on other
-threads are not counted. "Succeeded" says nothing about output. There is no holiday calendar. All
-four limits are printed on the page.
+The per-job manual POST triggers (for example `POST /api/trading/holdings/refresh`) do the same work
+outside the scheduler and leave no row; only a re-run from this page (§56.9) is recorded. Errors
+logged on other threads are not counted. "Succeeded" says nothing about output. There is no holiday
+calendar. All four limits are printed on the page.
+
+### 56.9 Re-running a job that went wrong (2026-10-13)
+
+A row whose latest real run **failed, finished with errors or never finished today** carries a
+**Re-run** button under the job's name. It exists because the investor asked for one after the
+15:15 and 15:18 holdings jobs failed on 13 Oct (B-174), and the only way back was a hand-picked
+sequence of four endpoints. The obvious build would wire each button to the job's existing manual
+endpoint. A survey of all 30 ruled that out:
+
+- Two jobs have no endpoint and four have endpoints that do only part of the work. The 15:18
+  report's daily snapshot and the watchlist's daily snapshot cannot be triggered at all.
+- Refusal windows are inconsistent: `POST /api/multibagger/screen`, a 12-minute broker-heavy run,
+  has none.
+- About ten endpoints report success when the work failed.
+
+**So the button runs the scheduled code itself.** Each scheduled method is now nothing but its
+guards followed by a public method marked `@JobRerun("<scheduled method>")`, and the button calls
+that method. The schedule and the button therefore cannot drift apart. `JobRerunCoverageTest`
+fails if a scheduled method has neither a `@JobRerun` method nor a written reason in
+`JobRerunPolicy.NOT_RERUNNABLE`.
+
+| Rule | Why |
+|---|---|
+| Offered only when the latest real run is FAILED, COMPLETED_WITH_ERRORS or INTERRUPTED **and started today** | Re-running yesterday's tax-lot capture today would capture today's trades, not yesterday's. An older failure says so instead of offering a button that would do different work |
+| Broker or NSE work refused 14:00 to the close on a trading day; NSE work also 09:40-10:15 | B-014 and B-049. Which jobs touch what is read from `JobLabels`, the table the page already shows |
+| Broker work refused without a live session | It would fail on every call and file a run of failures |
+| One re-run at a time, on its own thread (`job-rerun-N`), never on the scheduler's pool | It cannot take a pool thread from the afternoon jobs or stack a second broker-heavy pass |
+| Refused while the job itself is running | Two copies of one job are never intended |
+| Re-checked on the server when clicked | The page may be minutes old |
+
+A refusal is printed beside the button rather than discovered by clicking, and the button asks
+first (Gotcha 118). The confirmation names what the job touches, and for a job that sends email it
+says that a run which got as far as sending will produce the email twice.
+
+**A re-run is recorded like a scheduled run, with `job_run.run_trigger = MANUAL`.** It goes through
+the same recorder, so an ERROR line on the re-run thread makes it COMPLETED_WITH_ERRORS, never a
+success. A successful re-run turns the job's verdict from PROBLEM to WATCH ("an earlier bad run
+since recovered"). It carries no `scheduledFor`, so it is never filed against a cron fire and cannot
+make a lost fire read as RAN. Its window checks are ignored, because its only window checks are
+mid-run deadline tests (the insider and IPO captures make one), and after the close they say
+"closed" while the run does its full work.
+
+**Not re-runnable, with the reason printed on the page:**
+- the 09:45 Kite login recovery: the login is retried automatically on a rejected call (B-171) and
+  at every start, and it runs in the background, so a button could not report whether it worked;
+- the two Saturday jobs: Gotcha 28's carve-out, and the weekly screening takes over half an hour.
+
+Two behaviour changes in the extracted methods, both to the after-close case only: the holdings
+report records the daily snapshot when the hour is **15 or later** (was exactly 15), and the
+watchlist job already wrote its snapshot from hour 15. Both writes are idempotent per symbol and
+date. Inside market hours the cron fires at the same times as before, so scheduled behaviour is
+unchanged.

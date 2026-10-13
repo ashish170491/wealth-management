@@ -97,6 +97,10 @@ public class SchemaMigrationRunner {
             // add a declared column, and if this one is missing every insider filing is
             // re-downloaded on every run while appearing to work.
             new String[]{"insider_disclosures", "filing_app_id", "varchar(32)"},
+            // SPEC §56.9: a re-run from the jobs page is filed as MANUAL. Gotcha 74 case - if
+            // this column is silently missing, every manual re-run fails to record and the page
+            // stays red after a successful re-run.
+            new String[]{"job_run", "run_trigger", "varchar(16)"},
             // Schema lock for the universe backfill (SPEC §32.6). These five must exist BEFORE
             // the ~4,000-request archive pass runs: every year it writes is stamped source=XBRL,
             // and the import path then refuses to touch that row (Gotcha 49), so a column added

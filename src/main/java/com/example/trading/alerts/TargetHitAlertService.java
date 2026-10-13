@@ -1,5 +1,6 @@
 package com.example.trading.alerts;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.marketdata.MarketDataService;
 import com.example.trading.notification.EmailNotificationService;
 import com.example.trading.notification.EmailTemplateService;
@@ -60,6 +61,12 @@ public class TargetHitAlertService {
     @Scheduled(cron = "0 5 15 * * MON-FRI", zone = "Asia/Kolkata")
     public void scheduledScan() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
+        runNow();
+    }
+
+    /** The work of {@link #scheduledScan()} without its guard (SPEC 56.9). */
+    @JobRerun("scheduledScan")
+    public void runNow() {
         try {
             int n = scanAndAlert();
             log.info("Target-hit scan complete: {} newly-hit stock(s) emailed", n);

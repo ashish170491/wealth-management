@@ -17,7 +17,7 @@
 
 import { initChrome, registerRefresh } from './nav.js';
 import { el, section, card, table, kpi, mount, empty, withCount, withSummary, badge } from './ui.js';
-import { get } from './api.js';
+import { get, post, OfflineError } from './api.js';
 import { dateTimeIst, shortDate, NOT_MEASURED } from './format.js';
 
 const view = document.getElementById('view');
@@ -187,6 +187,131 @@ function runningTable(ov) {
   ], ov.runningNow, { sortKey: 'startedAt', sortDir: 'asc', filter: false });
 }
 
+// ------------------------------------------------------------------ re-run (SPEC 56.9)
+//
+// Offered only when a job's latest real run went wrong TODAY, and every refusal is decided on the
+// server (JobRerunPolicy) and printed beside the button rather than discovered by clicking. The
+// button asks first, like the IPO capture (Gotcha 118): a re-run can call the broker and NSE and
+// can send an email a second time.
+
+const RERUN_POLL_MS = 4000;
+const RERUN_FOLLOW_MS = 45 * 60 * 1000;   // the daily screening, the longest re-runnable job, takes ~12 min
+let rerunHost = el('div');
+let rerunState = null;                     // { kind: 'confirm'|'running'|'done'|'error', job, ... }
+
+function rerunControl(j) {
+  const r = j.rerun;
+  if (!r) return null;
+  if (!r.offered) return sub(r.reason);
+  const button = el('button.action.secondary.compact', {
+    type: 'button',
+    style: 'margin-top:6px',
+    title: r.allowedNow ? 'Runs this job again now. Asks for confirmation first.' : r.reason,
+  }, 'Re-run');
+  if (!r.allowedNow || (rerunState && rerunState.kind === 'running')) button.disabled = true;
+  button.addEventListener('click', () => {
+    rerunState = { kind: 'confirm', job: j };
+    showRerun();
+    rerunHost.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  return el('div', {}, button, r.allowedNow ? null : sub(r.reason));
+}
+
+function showRerun() {
+  const s = rerunState;
+  if (!s) { rerunHost.replaceChildren(); return; }
+  const j = s.job;
+  if (s.kind === 'confirm') {
+    const yes = el('button.action.compact', { type: 'button' }, 'Yes, re-run now');
+    const no = el('button.action.secondary.compact', { type: 'button' }, 'Cancel');
+    yes.addEventListener('click', () => startRerun(j));
+    no.addEventListener('click', () => { rerunState = null; showRerun(); });
+    rerunHost.replaceChildren(el('div.alert.warning', {},
+      el('div.alert-title', {}, `Re-run “${j.label}” now?`),
+      el('div', {}, 'It runs the same code its schedule runs, minus the market-hours guard, on a thread of its own, '
+        + 'and it is recorded on this page as a manual run — so if it works, this job stops reading as a problem.'),
+      j.touches ? el('div', { style: 'margin-top:7px' }, el('b', {}, 'It uses: '), j.touches, '.') : null,
+      j.rerun.sendsEmail
+        ? el('div', { style: 'margin-top:7px' }, el('b', {}, 'It sends its email again. '),
+          'If the run that went wrong got as far as sending, you will receive that email twice.')
+        : null,
+      el('div.muted', { style: 'margin-top:7px' },
+        'Work that calls the broker or NSE is refused from 14:00 to the close on a trading day, and NSE work also '
+        + '09:40–10:15, so a re-run cannot starve the afternoon jobs. One re-run at a time. If it is refused you will be told why.'),
+      el('div', { style: 'margin-top:11px;display:flex;gap:9px;flex-wrap:wrap' }, yes, no)));
+    return;
+  }
+  const type = s.kind === 'error' ? 'danger' : s.kind === 'done' ? (s.ok ? 'success' : 'danger') : 'info';
+  const close = el('button.action.secondary.compact', { type: 'button', style: 'margin-top:9px' }, 'Dismiss');
+  close.addEventListener('click', () => { rerunState = null; showRerun(); });
+  rerunHost.replaceChildren(el(`div.alert.${type}`, {},
+    el('div.alert-title', {}, s.title),
+    s.body ? el('div', {}, s.body) : null,
+    s.kind === 'running' ? null : close));
+}
+
+async function startRerun(j) {
+  rerunState = { kind: 'running', job: j, title: `Starting “${j.label}”…` };
+  showRerun();
+  try {
+    const r = await post(`/api/jobs/rerun?job=${encodeURIComponent(j.key)}`);
+    rerunState = {
+      kind: 'running', job: j, runId: r.runId, started: Date.now(),
+      title: `Re-running “${j.label}”`,
+      body: 'Started. This panel follows it and the page refreshes when it finishes. Closing the page does not stop it.',
+    };
+    showRerun();
+    await reloadQuietly();
+    followRerun();
+  } catch (err) {
+    rerunState = {
+      kind: 'error', job: j, title: 'Not started',
+      body: err instanceof OfflineError ? 'The app is not reachable right now.' : String(err.message || err),
+    };
+    showRerun();
+  }
+}
+
+async function followRerun() {
+  const s = rerunState;
+  if (!s || s.kind !== 'running' || !s.runId) return;
+  if (Date.now() - s.started > RERUN_FOLLOW_MS) {
+    rerunState = {
+      ...s, kind: 'done', ok: false,
+      title: `Still running after ${Math.round(RERUN_FOLLOW_MS / 60000)} minutes`,
+      body: 'Stopped following it here. Its result will appear in this job’s history when it finishes.',
+    };
+    showRerun();
+    return;
+  }
+  try {
+    const { data } = await get(`/api/jobs/runs?job=${encodeURIComponent(s.job.key)}&days=1&limit=20`, { cache: false });
+    const run = (data.runs || []).find((x) => x.id === s.runId);
+    if (run && run.outcome !== 'RUNNING') {
+      const o = OUTCOME[run.outcome] || { label: run.outcome };
+      const ok = run.outcome === 'SUCCEEDED';
+      rerunState = {
+        kind: 'done', job: s.job, ok,
+        title: `“${s.job.label}”: ${o.label.toLowerCase()} in ${dur(run.durationMs)}`,
+        body: ok ? 'It is filed as a manual run, so this job now reads as recovered.'
+          : (runDetail(run) || 'See this job’s history below for what it logged.'),
+      };
+      historyJob = s.job.key;
+      await reloadQuietly();
+      return;
+    }
+  } catch (_) { /* a missed poll is retried; the run itself is unaffected */ }
+  setTimeout(followRerun, RERUN_POLL_MS);
+}
+
+async function reloadQuietly() {
+  try {
+    const { data } = await get(`/api/jobs?days=${WINDOW_DAYS}`, { cache: false });
+    overview = data;
+    paint(overview);
+  } catch (_) { /* keep the page as it is */ }
+}
+
 function jobsTable(ov) {
   return table([
     {
@@ -195,7 +320,8 @@ function jobsTable(ov) {
       render: (j) => el('span', {},
         el('span.cell-main', {}, j.label),
         sub(j.shortKey),
-        j.touches ? sub(`Uses: ${j.touches}`) : null),
+        j.touches ? sub(`Uses: ${j.touches}`) : null,
+        rerunControl(j)),
     },
     {
       key: 'verdict',
@@ -439,7 +565,12 @@ function historyBody(h) {
       + `across ${st.runsMeasured} real run${st.runsMeasured === 1 ? '' : 's'}.`),
     table([
       { key: 'startedAt', label: 'Started', render: (r) => dateTimeIst(r.startedAt) },
-      { key: 'scheduledFor', label: 'Due at', render: (r) => (r.scheduledFor ? hhmm(r.scheduledFor) : NOT_MEASURED) },
+      {
+        key: 'scheduledFor',
+        label: 'Due at',
+        render: (r) => (r.trigger === 'MANUAL' ? el('span.muted', {}, 'manual re-run')
+          : r.scheduledFor ? hhmm(r.scheduledFor) : NOT_MEASURED),
+      },
       { key: 'startLagMs', label: 'Delay', render: (r) => lag(r.startLagMs) },
       { key: 'durationMs', label: 'Took', align: 'r', render: (r) => el('span.num', {}, dur(r.durationMs)) },
       { key: 'outcome', label: 'Result', render: (r) => outcomeBadge(r.outcome) },
@@ -494,6 +625,8 @@ function notRecordedCard(items) {
 // ------------------------------------------------------------------ page
 
 function paint(ov) {
+  rerunHost = el('div');
+  showRerun();
   const s = ov.summary;
   const headline = s.problem ? `${s.problem} need attention` : s.watch ? `${s.watch} to watch` : 'All clear';
 
@@ -518,8 +651,9 @@ function paint(ov) {
     withCount(section('Every scheduled job',
       'Sorted with the ones that need attention first. "Last fired" includes skips; "Last real run" is the newest run '
       + 'that actually did its work, which is what Took and Start delay describe. Typical is the middle run, not the '
-      + 'average, so one slow day does not move it.',
-      jobsTable(ov)), ov.jobs.length),
+      + 'average, so one slow day does not move it. A job whose latest run went wrong today has a Re-run button '
+      + 'under its name; one that cannot be re-run says why instead.',
+      el('div', {}, rerunHost, jobsTable(ov))), ov.jobs.length),
 
     withCount(section('What went wrong',
       `Every failed, errored or cut-off run and every lost fire in the last ${ov.windowDays} days, newest first.`,
