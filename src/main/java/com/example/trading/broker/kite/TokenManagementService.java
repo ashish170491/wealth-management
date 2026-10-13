@@ -10,6 +10,7 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.time.Instant;
 
 @Service
 @Slf4j
@@ -19,6 +20,16 @@ public class TokenManagementService {
     private final KiteAuthService authService;
     private final KiteConfig config;
     private volatile boolean loginInProgress = false;
+
+    /**
+     * The shortest gap between two logins the broker client may trigger (B-171). A rejected token
+     * re-logs in at once; a rejection that keeps coming back (wrong credentials, a Kite outage)
+     * must not turn every paced request into a login attempt.
+     */
+    static final Duration RELOGIN_COOLDOWN = Duration.ofMinutes(5);
+
+    /** When the last login was started, by any path; null before the first. */
+    private volatile Instant lastLoginAttempt;
 
     /**
      * Zerodha sessions expire every morning. Token is also refreshed on startup via
@@ -43,13 +54,43 @@ public class TokenManagementService {
         }
     }
 
+    /**
+     * The broker client found the session dead (B-171): Kite answered {@code TokenException}, or
+     * the token predates the last 06:00 cut-off. Log in again now rather than waiting for the
+     * 09:45 recovery job. Before this, a process that ran across midnight (an evening deploy)
+     * failed every Kite call from 06:00 until 09:45, and the 09:20 holdings sync with it.
+     */
+    @EventListener
+    public void onTokenRejected(KiteTokenRejectedEvent event) {
+        handleRejection(event.reason(), Instant.now());
+    }
+
+    /** Package-private so the cooldown can be tested without a clock. */
+    boolean handleRejection(String reason, Instant now) {
+        Instant last = lastLoginAttempt;
+        if (last != null && Duration.between(last, now).compareTo(RELOGIN_COOLDOWN) < 0) {
+            log.debug("Kite session rejected ({}), but a login started {} s ago - not retrying yet",
+                    reason, Duration.between(last, now).toSeconds());
+            return false;
+        }
+        log.warn("Kite session is dead ({}). Logging in again now instead of waiting for the 09:45 recovery (B-171).",
+                reason);
+        refreshAccessToken(now);
+        return true;
+    }
+
     public void refreshAccessToken() {
+        refreshAccessToken(Instant.now());
+    }
+
+    private void refreshAccessToken(Instant now) {
         if (loginInProgress) {
             log.warn("Login already in progress. Skipping duplicate request.");
             return;
         }
         
         loginInProgress = true;
+        lastLoginAttempt = now;
         authService.automateLogin()
                 // Any auth step whose HTTP response carries an empty body completes the chain
                 // empty rather than erroring, which used to look like a successful refresh
@@ -78,10 +119,13 @@ public class TokenManagementService {
     }
     
     /**
-     * Check if the current access token is valid (not placeholder).
+     * Check if the current access token is usable: present, not a placeholder, and not issued
+     * before the last 06:00 cut-off. The last test was missing until B-171, so a process that ran
+     * overnight reported yesterday's dead token as valid and let guarded jobs run on it.
      */
     public boolean hasValidToken() {
         String token = config.getAccessToken();
-        return token != null && !token.isEmpty() && !token.contains("placeholder");
+        return token != null && !token.isEmpty() && !token.contains("placeholder")
+                && !KiteSessionClock.isExpired(config.getAccessTokenIssuedAt(), Instant.now());
     }
 }

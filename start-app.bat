@@ -16,6 +16,14 @@ REM must never stop the app from starting. Probe first and fall back rather than
 REM the redirect, which produces exactly the silent failure this logging exists to prevent.
 >>"%LOG%" echo. 2>nul || set "LOG=%~dp0logs\start-app-alt-%RANDOM%.log"
 
+REM Keep the machine awake through the build and while the app runs (B-173). The 09:00 task
+REM wakes this laptop, but Modern Standby let it fall asleep mid-build on 13 Oct 2026 and the
+REM app came up at 11:43. Launched FIRST because the build is where it slept. Same handle rule as
+REM Step 3: its own redirect to nul, so it never inherits ours. It exits by itself once nothing
+REM has listened on 8080 for 20 minutes, and a second copy exits at once.
+start "Intraday keep-awake" /B powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\keep-awake.ps1" > nul 2>&1
+>> "%LOG%" echo [Step 0] Keep-awake helper launched at %TIME% (B-173).
+
 call :build >> "%LOG%" 2>&1
 if errorlevel 1 exit /b 1
 call :freeport >> "%LOG%" 2>&1

@@ -2,6 +2,8 @@ package com.example.trading.broker.kite;
 
 import com.example.trading.broker.BrokerClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ClientCodecConfigurer;
@@ -43,6 +45,17 @@ public class KiteBrokerClient implements BrokerClient {
 
     private final KiteConfig config;
     private final WebClient webClient;
+
+    /**
+     * Where a dead session is reported (B-171). Setter-injected and optional so a client built by
+     * hand in a test needs none; {@link TokenManagementService} is the listener.
+     */
+    private ApplicationEventPublisher events;
+
+    @Autowired(required = false)
+    void setEventPublisher(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     public KiteBrokerClient(KiteConfig config, WebClient.Builder webClientBuilder) {
         this.config = config;
@@ -535,8 +548,42 @@ public class KiteBrokerClient implements BrokerClient {
         // Defer so every subscription — including each retry — claims its own slot. Pacing via
         // delaySubscription keeps this non-blocking: these calls are .block()ed from scheduler
         // threads, and sleeping inside the reactive chain would stall the event loop.
-        Mono<T> paced = Mono.defer(() -> action.delaySubscription(reserveSlot()));
-        return executeWithRetryInternal(paced);
+        Mono<T> paced = Mono.defer(() -> {
+            // A token from before the last 06:00 is dead whatever it says (B-171). Report it so
+            // a login starts now; this request still goes out and fails, which is no worse than
+            // before, and the next one has a live session.
+            if (KiteSessionClock.isExpired(config.getAccessTokenIssuedAt(), java.time.Instant.now())) {
+                reportDeadSession("token issued " + config.getAccessTokenIssuedAt()
+                        + ", before today's 06:00 expiry");
+            }
+            return action.delaySubscription(reserveSlot());
+        });
+        return executeWithRetryInternal(paced)
+                // Kite answers a dead token with 403 + TokenException, not 401, so the retry
+                // filter below never saw it. Every method maps the error body into its message.
+                .doOnError(error -> {
+                    if (isTokenRejection(error)) {
+                        reportDeadSession("Kite answered TokenException");
+                    }
+                });
+    }
+
+    /** True when an error anywhere in the cause chain carries Kite's TokenException. Pure. */
+    static boolean isTokenRejection(Throwable error) {
+        for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            String msg = t instanceof WebClientResponseException wcre
+                    ? wcre.getResponseBodyAsString() + " " + wcre.getMessage()
+                    : t.getMessage();
+            if (msg != null && msg.contains("TokenException")) return true;
+        }
+        return false;
+    }
+
+    private void reportDeadSession(String reason) {
+        ApplicationEventPublisher publisher = events;
+        if (publisher != null) {
+            publisher.publishEvent(new KiteTokenRejectedEvent(reason));
+        }
     }
 
     private <T> Mono<T> executeWithRetryInternal(Mono<T> action) {
@@ -570,7 +617,7 @@ public class KiteBrokerClient implements BrokerClient {
                                     rateLimited ? " (rate-limited)" : "",
                                     failure.getMessage());
                             if (isUnauthorized(failure)) {
-                                refreshAccessToken();
+                                reportDeadSession("Kite answered 401 Unauthorized");
                             }
                         }));
     }
@@ -580,11 +627,6 @@ public class KiteBrokerClient implements BrokerClient {
             return ex.getStatusCode() == HttpStatus.UNAUTHORIZED;
         }
         return false;
-    }
-
-    private void refreshAccessToken() {
-        // Placeholder for token refresh logic
-        log.info("Simulating access token refresh...");
     }
 
     private String buildFormBody(Map<String, Object> params) {
