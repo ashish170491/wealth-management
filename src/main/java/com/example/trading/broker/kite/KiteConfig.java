@@ -20,6 +20,14 @@ public class KiteConfig {
     @NotBlank(message = "Access Token is required")
     private String accessToken;
 
+    /**
+     * When this app obtained {@link #accessToken}; null when the token came from configuration
+     * and its issue time is unknown. Not a property anyone sets: {@code KiteAuthService} stamps
+     * it on login, and {@link KiteSessionClock} reads it to tell a token from yesterday (dead
+     * since 06:00) from today's (B-171).
+     */
+    private volatile java.time.Instant accessTokenIssuedAt;
+
     @NotBlank(message = "Base URL is required")
     private String baseUrl = "https://api.kite.trade";
 

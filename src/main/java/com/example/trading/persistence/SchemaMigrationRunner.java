@@ -35,6 +35,7 @@ public class SchemaMigrationRunner {
 
     @PostConstruct
     public void run() {
+        detectDatabaseEncoding();
         log.info("Schema migration: checking LOB→TEXT conversions...");
         for (String[] tableColumn : LOB_TO_TEXT_COLUMNS) {
             migrateLobToText(tableColumn[0], tableColumn[1]);
@@ -45,6 +46,27 @@ public class SchemaMigrationRunner {
         dropObsoleteNotNullConstraints();
         normalizeRecommendationSymbols();
         backfillOutcomeDaysElapsed();
+    }
+
+    /**
+     * Tell {@link StorableText} what the database can hold (B-172). Runs first, and in a
+     * {@code @PostConstruct} that every scheduled job starts after, so no write precedes it.
+     * A failure leaves the pass-through default, which is how the app behaved before.
+     */
+    private void detectDatabaseEncoding() {
+        try {
+            String encoding = jdbc.queryForObject("SHOW server_encoding", String.class);
+            if (StorableText.configure(encoding)) {
+                log.warn("Database encoding is {}: it cannot store characters such as the rupee sign, so "
+                        + "text the database would reject is rewritten on write (rupee sign -> \"Rs\", "
+                        + "others -> '?'). Converting tradingdb to UTF8 switches this off. B-172.", encoding);
+            } else {
+                log.info("Database encoding is {}: text is stored as given.", encoding);
+            }
+        } catch (Exception e) {
+            log.warn("Could not read the database encoding ({}); text is stored as given, and a "
+                    + "character the database cannot hold will fail its write (B-172).", e.getMessage());
+        }
     }
 
     /**

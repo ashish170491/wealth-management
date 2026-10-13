@@ -74,6 +74,9 @@ public class KiteAuthService {
 
                                         // Update the config dynamically for the current session
                                         config.setAccessToken(accessToken);
+                                        // Kite kills every token at ~06:00 next morning; the issue
+                                        // time is what lets the app notice that (B-171).
+                                        config.setAccessTokenIssuedAt(java.time.Instant.now());
 
                                         log.info("Successfully obtained and updated new access_token");
                                         return accessToken;

@@ -5,6 +5,7 @@ import com.example.trading.intelligence.MultiSourceNewsFetcher.RawNewsItem;
 import com.example.trading.macro.MacroKeywordExtractor;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
+import com.example.trading.persistence.StorableText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -74,6 +75,13 @@ public class MarketImpactNewsService {
         scanOnce();
     }
 
+    /** The innermost cause's message: the SQL error, not Spring's "could not execute statement". */
+    private static String rootMessage(Throwable e) {
+        Throwable t = e;
+        while (t.getCause() != null && t.getCause() != t) t = t.getCause();
+        return t.getMessage();
+    }
+
     /**
      * Fetch, filter and store. Returns how many headlines were new.
      *
@@ -92,6 +100,7 @@ public class MarketImpactNewsService {
             }
 
             int stored = 0;
+            int failed = 0;
             int skippedDuplicate = 0;
             int skippedIrrelevant = 0;
 
@@ -111,19 +120,30 @@ public class MarketImpactNewsService {
                     continue;
                 }
 
-                newsRepository.save(MarketImpactNewsEntity.builder()
-                        .title(truncate(item.title(), 500))
-                        .description(truncate(item.description(), 2000))
-                        .source(item.source())
-                        .url(truncate(item.url(), 1000))
-                        .publishedAt(item.publishedAt())
-                        .titleHash(hash)
-                        .build());
-                stored++;
+                // One headline per save, and one bad headline never costs the rest (B-172): the
+                // first headline carrying a rupee sign used to abort the whole scan, and because it
+                // was never stored it was never "already seen", so it blocked the next scan too.
+                // storable() runs BEFORE truncate, so a rupee sign spelled "Rs" cannot push a
+                // title past its column width after it was cut to fit.
+                try {
+                    newsRepository.save(MarketImpactNewsEntity.builder()
+                            .title(truncate(StorableText.storable(item.title()), 500))
+                            .description(truncate(StorableText.storable(item.description()), 2000))
+                            .source(item.source())
+                            .url(truncate(item.url(), 1000))
+                            .publishedAt(item.publishedAt())
+                            .titleHash(hash)
+                            .build());
+                    stored++;
+                } catch (Exception e) {
+                    failed++;
+                    log.warn("News scan: could not store \"{}\" ({}) - continuing with the rest",
+                            item.title(), rootMessage(e));
+                }
             }
 
-            log.info("News scan since {}: {} fetched, {} stored, {} already seen, {} not market news",
-                    since, items.size(), stored, skippedDuplicate, skippedIrrelevant);
+            log.info("News scan since {}: {} fetched, {} stored, {} failed, {} already seen, {} not market news",
+                    since, items.size(), stored, failed, skippedDuplicate, skippedIrrelevant);
             return stored;
 
         } catch (Exception e) {
