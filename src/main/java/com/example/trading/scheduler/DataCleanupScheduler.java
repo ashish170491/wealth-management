@@ -1,5 +1,6 @@
 package com.example.trading.scheduler;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.persistence.*;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +53,17 @@ public class DataCleanupScheduler {
     @Transactional
     public void performDailyCleanup() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
+        runNow();
+    }
+
+    /**
+     * The work of {@link #performDailyCleanup()} without its guard (SPEC 56.9). Transactional in
+     * its own right: the jobs page calls it through the proxy, while the scheduled method calls it
+     * from inside its own transaction.
+     */
+    @JobRerun("performDailyCleanup")
+    @Transactional
+    public void runNow() {
         log.info("=== Starting Daily Data Cleanup ===");
         long startTime = System.currentTimeMillis();
         Map<String, Integer> deletionStats = new HashMap<>();

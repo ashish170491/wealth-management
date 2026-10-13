@@ -1,5 +1,6 @@
 package com.example.trading.holdings;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.ai.AiService;
 import com.example.trading.notification.EmailNotificationService;
 import com.example.trading.notification.EmailTemplateService;
@@ -64,6 +65,7 @@ public class ExitTimingAlertService {
      * Checks all holdings for exit conditions and sends an email alert if any are found.
      * Can be called manually from a controller.
      */
+    @JobRerun("scheduledCheck")
     public void checkExitConditions() {
         try {
             clearAlertsIfNewDay();

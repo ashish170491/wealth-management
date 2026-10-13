@@ -1,5 +1,6 @@
 package com.example.trading.watchlist;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,15 @@ public class WatchlistScheduler {
             return;
         }
 
+        runNow();
+    }
+
+    /**
+     * The work of {@link #analyzeAndReportWatchlist()} without its guards (SPEC 56.9). A re-run
+     * after the close also writes the daily snapshot, which is an upsert.
+     */
+    @JobRerun("analyzeAndReportWatchlist")
+    public void runNow() {
         LocalTime now = LocalTime.now();
         log.info("=== SCHEDULED TASK: Watchlist Analysis & Report ({}) ===", now.getHour() + ":00");
 

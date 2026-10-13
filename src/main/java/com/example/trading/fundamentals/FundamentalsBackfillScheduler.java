@@ -1,5 +1,6 @@
 package com.example.trading.fundamentals;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,12 @@ public class FundamentalsBackfillScheduler {
             JobRunContext.skip("Switched off in config (trading.fundamentals.backfill.enabled is false)");
             return;
         }
+        runNow();
+    }
+
+    /** The work of {@link #backfillBatch()} without its guards (SPEC 56.9). */
+    @JobRerun("backfillBatch")
+    public void runNow() {
         try {
             FundamentalsBackfillService.BatchResult r = backfillService.runBatch(config.getBatchSize());
             if (r.symbolsAttempted() == 0 && r.remainingPending() == 0) {

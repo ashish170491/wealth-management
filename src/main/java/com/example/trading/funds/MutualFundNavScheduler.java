@@ -1,5 +1,6 @@
 package com.example.trading.funds;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +47,12 @@ public class MutualFundNavScheduler {
             return;
         }
 
+        runNow();
+    }
+
+    /** The work of {@link #pullDailyNav()} without its guards (SPEC 56.9). */
+    @JobRerun("pullDailyNav")
+    public void runNow() {
         MutualFundNavSyncService.SyncResult result = syncService.sync();
         if (!result.succeeded()) {
             // Recorded on mf_sync_run as well, so the data-health screen can name the job rather

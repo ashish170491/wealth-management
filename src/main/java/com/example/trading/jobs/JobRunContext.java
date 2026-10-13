@@ -32,6 +32,13 @@ public final class JobRunContext {
     static final class ActiveRun {
         final Long runId;
         final String jobKey;
+        /**
+         * A re-run from the jobs page (SPEC §56.9). Its window checks are ignored: it has no guard by
+         * design, so any window check it makes is a mid-run deadline test (the insider and IPO
+         * captures make one), and after the close that test says "closed" while the run does its
+         * full work. Counting it would file a real run as SKIPPED.
+         */
+        final boolean manual;
         Boolean firstWindowCheckOpen;
         String explicitSkipReason;
         int errorsLogged;
@@ -40,8 +47,13 @@ public final class JobRunContext {
         Throwable thrown;
 
         ActiveRun(Long runId, String jobKey) {
+            this(runId, jobKey, false);
+        }
+
+        ActiveRun(Long runId, String jobKey, boolean manual) {
             this.runId = runId;
             this.jobKey = jobKey;
+            this.manual = manual;
         }
     }
 
@@ -59,7 +71,7 @@ public final class JobRunContext {
     /** Records the market-window guard's answer. Only the first check of a run is kept. */
     public static void noteWindowCheck(boolean open) {
         ActiveRun run = CURRENT.get();
-        if (run != null && run.firstWindowCheckOpen == null) {
+        if (run != null && !run.manual && run.firstWindowCheckOpen == null) {
             run.firstWindowCheckOpen = open;
         }
     }

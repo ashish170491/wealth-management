@@ -49,21 +49,11 @@ public class JobRunRecorder implements ObservationHandler<ScheduledTaskObservati
         String key = keyOf(context.getMethod());
         Long id = null;
         try {
-            boot.ensureRegistered();
             LocalDateTime now = LocalDateTime.now(JobCatalog.IST);
             LocalDateTime fire = catalog.cronFor(key)
                     .map(cron -> JobSchedule.latestFireAtOrBefore(cron, JobCatalog.IST, now, FIRE_LOOKBACK))
                     .orElse(null);
-            JobRunEntity row = runs.save(JobRunEntity.builder()
-                    .jobKey(key)
-                    .bootId(boot.bootId())
-                    .scheduledFor(fire)
-                    .startedAt(now)
-                    .startLagMs(fire == null ? null : Duration.between(fire, now).toMillis())
-                    .outcome(JobOutcome.RUNNING.name())
-                    .threadName(JobOutcome.truncate(Thread.currentThread().getName(), 40))
-                    .build());
-            id = row.getId();
+            id = openRow(key, fire, null);
         } catch (Exception e) {
             log.debug("Job ledger: could not record the start of {}: {}", key, e.getMessage());
         }
@@ -80,6 +70,36 @@ public class JobRunRecorder implements ObservationHandler<ScheduledTaskObservati
 
     @Override
     public void onStop(ScheduledTaskObservationContext context) {
+        settleCurrent(context.getError());
+    }
+
+    /**
+     * Inserts the RUNNING row for a run and returns its id. Shared by scheduled fires and by
+     * re-runs from the jobs page (SPEC §56.9), so the two are recorded by one piece of code.
+     * {@code fire} is null for a manual run: it answers no cron fire, and filing it against one
+     * would make a fire that never ran read as RAN.
+     */
+    Long openRow(String key, LocalDateTime fire, String trigger) {
+        boot.ensureRegistered();
+        LocalDateTime now = LocalDateTime.now(JobCatalog.IST);
+        JobRunEntity row = runs.save(JobRunEntity.builder()
+                .jobKey(key)
+                .bootId(boot.bootId())
+                .scheduledFor(fire)
+                .startedAt(now)
+                .startLagMs(fire == null ? null : Duration.between(fire, now).toMillis())
+                .outcome(JobOutcome.RUNNING.name())
+                .threadName(JobOutcome.truncate(Thread.currentThread().getName(), 40))
+                .runTrigger(trigger)
+                .build());
+        return row.getId();
+    }
+
+    /**
+     * Ends the run active on this thread and settles its row. {@code error} is what escaped the
+     * method, if anything; an error recorded earlier by {@link #onError} wins.
+     */
+    void settleCurrent(Throwable error) {
         JobRunContext.ActiveRun run = JobRunContext.current();
         // Clear before writing, so a WARN from this method's own failure is not counted against the job.
         JobRunContext.end();
@@ -87,7 +107,7 @@ public class JobRunRecorder implements ObservationHandler<ScheduledTaskObservati
         try {
             JobRunEntity row = runs.findById(run.runId).orElse(null);
             if (row == null) return;
-            Throwable thrown = run.thrown != null ? run.thrown : context.getError();
+            Throwable thrown = run.thrown != null ? run.thrown : error;
             JobOutcome.Signals signals = new JobOutcome.Signals(thrown, run.errorsLogged,
                     run.explicitSkipReason, run.firstWindowCheckOpen);
             LocalDateTime now = LocalDateTime.now(JobCatalog.IST);
@@ -98,6 +118,9 @@ public class JobRunRecorder implements ObservationHandler<ScheduledTaskObservati
             row.setErrorsLogged(run.errorsLogged);
             row.setWarningsLogged(run.warningsLogged);
             row.setFirstError(run.firstError);
+            // A manual run is inserted on the request thread and runs on the re-run thread; record
+            // the thread that did the work.
+            row.setThreadName(JobOutcome.truncate(Thread.currentThread().getName(), 40));
             runs.save(row);
             boot.touch();
         } catch (Exception e) {

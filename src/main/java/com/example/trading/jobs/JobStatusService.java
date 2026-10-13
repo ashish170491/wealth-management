@@ -40,12 +40,15 @@ public class JobStatusService {
     private final AppBootRepository boots;
     private final JobBootTracker boot;
     private final ObjectProvider<TaskScheduler> scheduler;
+    private final ObjectProvider<JobRerunService> reruns;
 
     /** Schedules never change inside a process, and describing one walks a year of fires. */
     private final Map<String, JobSchedule> scheduleCache = new ConcurrentHashMap<>();
 
     public JobStatusService(JobCatalog catalog, JobRunRepository runs, AppBootRepository boots,
-                            JobBootTracker boot, ObjectProvider<TaskScheduler> scheduler) {
+                            JobBootTracker boot, ObjectProvider<TaskScheduler> scheduler,
+                            ObjectProvider<JobRerunService> reruns) {
+        this.reruns = reruns;
         this.catalog = catalog;
         this.runs = runs;
         this.boots = boots;
@@ -94,11 +97,14 @@ public class JobStatusService {
             JobStatusDto.RunView lastRun = view(latest.get(key));
             JobStatusDto.RunView lastReal = view(latestReal.get(key));
             JobVerdict verdict = JobVerdict.judge(lastRun, lastReal, counts, stats, window);
+            JobRerunService rerunService = reruns.getIfAvailable();
+            JobRerunPolicy.Decision rerun = rerunService == null ? null
+                    : rerunService.decision(key, lastRun, lastReal);
 
             rows.add(new JobStatusDto.JobRow(key, JobLabels.shortKey(key), label.name(), label.touches(),
                     def.cron(), schedule.text(), schedule.timesOnRunDay(), schedule.outsideWindowOnRunDay(),
                     schedule.runsPerYear(), def.nextRun(), lastRun, lastReal, lastOk.get(key), stats, counts,
-                    verdict.verdict(), verdict.reasons()));
+                    verdict.verdict(), verdict.reasons(), rerun));
 
             failed += counts.failed();
             errored += counts.withErrors();
@@ -263,7 +269,7 @@ public class JobStatusService {
         return new JobStatusDto.RunView(r.getId(), r.getJobKey(), JobLabels.of(r.getJobKey()).name(),
                 r.getScheduledFor(), r.getStartedAt(), r.getFinishedAt(), r.getDurationMs(), r.getStartLagMs(),
                 r.getOutcome(), r.getReason(), r.getErrorsLogged(), r.getWarningsLogged(), r.getFirstError(),
-                r.getThreadName());
+                r.getThreadName(), r.getRunTrigger());
     }
 
     /** Accepts the full key or the short {@code Class.method} form. */

@@ -1,5 +1,6 @@
 package com.example.trading.scanner;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,12 @@ public class QuantitativeDiscoveryScheduler {
     @Scheduled(cron = "0 0 10 * * MON-FRI", zone = "Asia/Kolkata")
     public void dailyDiscoveryScan() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
+        runNow();
+    }
+
+    /** The work of {@link #dailyDiscoveryScan()} without its guard (SPEC 56.9). */
+    @JobRerun("dailyDiscoveryScan")
+    public void runNow() {
         log.info("Discovery Scheduler: Running daily quantitative scan...");
         try {
             reportService.runAndSendReport();

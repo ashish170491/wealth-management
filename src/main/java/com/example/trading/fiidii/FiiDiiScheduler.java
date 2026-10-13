@@ -1,5 +1,6 @@
 package com.example.trading.fiidii;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.fiidii.FiiDiiDTO.*;
 import com.example.trading.scheduler.MarketHoursService;
@@ -45,6 +46,12 @@ public class FiiDiiScheduler {
             return;
         }
 
+        runFetchNow();
+    }
+
+    /** The work of {@link #fetchFiiDiiData()} without its guards (SPEC 56.9). */
+    @JobRerun("fetchFiiDiiData")
+    public void runFetchNow() {
         log.info("=== SCHEDULED TASK: Fetching FII/DII Data ===");
         
         try {
@@ -98,6 +105,12 @@ public class FiiDiiScheduler {
             return;
         }
 
+        runReportNow();
+    }
+
+    /** The work of {@link #sendFiiDiiReport()} without its guards (SPEC 56.9). */
+    @JobRerun("sendFiiDiiReport")
+    public void runReportNow() {
         log.info("=== SCHEDULED TASK: Sending FII/DII Report ===");
 
         try {

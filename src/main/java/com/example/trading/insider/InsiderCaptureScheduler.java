@@ -1,5 +1,6 @@
 package com.example.trading.insider;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.persistence.HoldingsEntity;
 import com.example.trading.persistence.HoldingsRepository;
 import com.example.trading.persistence.MultibaggerScoreEntity;
@@ -86,6 +87,7 @@ public class InsiderCaptureScheduler {
     }
 
     /** Public so the manual endpoint and tests can drive the same path. */
+    @JobRerun("captureDaily")
     public CaptureResult runCapture() {
         long start = System.currentTimeMillis();
         int deals = 0;

@@ -1,5 +1,6 @@
 package com.example.trading.notification;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.ai.AiService;
 import com.example.trading.fiidii.FiiDiiDTO.DailyActivity;
 import com.example.trading.fiidii.FiiDiiDataService;
@@ -50,6 +51,7 @@ public class MorningBriefingService {
     /**
      * Build and send the morning briefing email. Can be called manually from a controller.
      */
+    @JobRerun("scheduledMorningBriefing")
     public void sendMorningBriefing() {
         log.info("Morning Briefing: Building consolidated pre-market email...");
 

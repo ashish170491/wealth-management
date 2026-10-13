@@ -1,5 +1,6 @@
 package com.example.trading.analyst;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +54,12 @@ public class AnalystTargetScheduler {
             return;
         }
 
+        runNow();
+    }
+
+    /** The work of {@link #captureAndMeasure()} without its guards (SPEC 56.9). */
+    @JobRerun("captureAndMeasure")
+    public void runNow() {
         // The structured feed first: it publishes what the headline parser can only infer, so a
         // call captured here is already on file (same dedup key) when the headline for the same
         // call is mined below - which is what stops one note being counted as two (SPEC 49.11).

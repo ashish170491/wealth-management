@@ -1,5 +1,6 @@
 package com.example.trading.holdings;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.jobs.JobRunContext;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,12 @@ public class HoldingsScheduler {
             return; // SPEC §3.4: market-hours only.
         }
 
+        runSyncNow();
+    }
+
+    /** The work of {@link #syncHoldingsFromBroker()} without its guards (SPEC 56.9). */
+    @JobRerun("syncHoldingsFromBroker")
+    public void runSyncNow() {
         log.info("=== SCHEDULED TASK: Holdings Sync from Broker ===");
         try {
             holdingsAnalysisService.syncHoldingsFromBroker();
@@ -62,6 +69,12 @@ public class HoldingsScheduler {
             return; // SPEC §3.4: market-hours only.
         }
 
+        runAnalysisNow();
+    }
+
+    /** The work of {@link #analyzeHoldings()} without its guards (SPEC 56.9). */
+    @JobRerun("analyzeHoldings")
+    public void runAnalysisNow() {
         log.info("=== SCHEDULED TASK: Holdings Technical Analysis (Mid-Morning) ===");
         try {
             // First sync latest prices
@@ -103,6 +116,16 @@ public class HoldingsScheduler {
             return; // SPEC §3.4: market-hours only.
         }
 
+        runReportNow();
+    }
+
+    /**
+     * The work of {@link #sendHoldingsReport()} without its guards (SPEC 56.9). The daily snapshot
+     * is recorded on the last report of the day, so a re-run after the close records it too; it is
+     * idempotent per symbol and date.
+     */
+    @JobRerun("sendHoldingsReport")
+    public void runReportNow() {
         LocalTime now = LocalTime.now(marketHoursService.getMarketZone());
         log.info("=== SCHEDULED TASK: Holdings Report ({}) ===", now.getHour() + ":00");
         try {
@@ -115,7 +138,7 @@ public class HoldingsScheduler {
             holdingsAnalysisService.analyzeAllHoldings();
 
             // Record daily snapshot only at 3 PM (end of day)
-            if (now.getHour() == 15) {
+            if (now.getHour() >= 15) {
                 log.info("Recording daily snapshot (3 PM report)...");
                 holdingsAnalysisService.recordDailySnapshot();
             }
@@ -142,6 +165,12 @@ public class HoldingsScheduler {
             return; // SPEC §3.4: market-hours only.
         }
 
+        runPriceRefreshNow();
+    }
+
+    /** The work of {@link #refreshHoldingsPrices()} without its guards (SPEC 56.9). */
+    @JobRerun("refreshHoldingsPrices")
+    public void runPriceRefreshNow() {
         log.debug("Refreshing holdings prices (hourly during market hours)");
         try {
             holdingsAnalysisService.syncHoldingsFromBroker();

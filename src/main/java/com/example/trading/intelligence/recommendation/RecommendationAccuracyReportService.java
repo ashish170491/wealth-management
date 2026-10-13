@@ -1,5 +1,6 @@
 package com.example.trading.intelligence.recommendation;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.intelligence.recommendation.RecommendationAccuracyService.SourceHorizonStats;
 import com.example.trading.persistence.RecommendationEntity;
 import com.example.trading.notification.EmailNotificationService;
@@ -42,6 +43,12 @@ public class RecommendationAccuracyReportService {
     @Scheduled(cron = "0 25 15 * * FRI", zone = "Asia/Kolkata")
     public void sendWeeklyReport() {
         if (!marketHoursService.isMarketOpen()) return; // SPEC §3.4: market-hours only.
+        runNow();
+    }
+
+    /** The work of {@link #sendWeeklyReport()} without its guard (SPEC 56.9). */
+    @JobRerun("sendWeeklyReport")
+    public void runNow() {
         try {
             sendReport();
         } catch (Exception e) {

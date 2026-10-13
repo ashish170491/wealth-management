@@ -52,7 +52,9 @@ public final class JobStatusDto {
             Counts counts,
             /* PROBLEM / WATCH / OK / NO_HISTORY / NOT_DUE. */
             String verdict,
-            List<String> reasons) {
+            List<String> reasons,
+            /* Re-run button state (SPEC 56.9). Null when the latest real run did not go wrong. */
+            JobRerunPolicy.Decision rerun) {
     }
 
     public record Counts(int runs, int succeeded, int withErrors, int failed, int skipped,
@@ -74,7 +76,9 @@ public final class JobStatusDto {
             Integer errorsLogged,
             Integer warningsLogged,
             String firstError,
-            String threadName) {
+            String threadName,
+            /* MANUAL for a re-run started from the jobs page (SPEC 56.9); null for a scheduled fire. */
+            String trigger) {
     }
 
     /** One thing that went wrong: a bad run, or a fire that should have run and did not. */

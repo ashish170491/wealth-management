@@ -1,5 +1,6 @@
 package com.example.trading.portfolio.tax;
 
+import com.example.trading.jobs.JobRerun;
 import com.example.trading.broker.BrokerClient;
 import com.example.trading.scheduler.MarketHoursService;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +55,7 @@ public class TaxLotAutoCaptureScheduler {
     }
 
     /** Public entry-point so a controller can trigger this on demand without exposing internals. */
+    @JobRerun("captureTodayTrades")
     public Map<String, Object> runCapture() {
         log.info("TaxLot auto-capture: fetching today's trades from broker");
         List<Map<String, Object>> trades;

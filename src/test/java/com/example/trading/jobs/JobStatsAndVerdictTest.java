@@ -58,7 +58,7 @@ class JobStatsAndVerdictTest {
 
     private static JobStatusDto.RunView run(JobOutcome o, Long dur, Long lag, String reason, Integer errs, String first) {
         LocalDateTime t = LocalDateTime.of(2026, 10, 12, 14, 0);
-        return new JobStatusDto.RunView(1L, "k", "Job", t, t, t, dur, lag, o.name(), reason, errs, 0, first, "sched-1");
+        return new JobStatusDto.RunView(1L, "k", "Job", t, t, t, dur, lag, o.name(), reason, errs, 0, first, "sched-1", null);
     }
 
     private static JobStatusDto.Counts counts(int runs, int failed, int errs, int interrupted,
