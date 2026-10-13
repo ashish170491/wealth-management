@@ -57,14 +57,14 @@ public class AmfiNavClient {
             SslContext ssl = SslContextBuilder.forClient()
                     .trustManager(PlatformTrust.unionOfJdkAndOs())
                     .build();
-            return HttpClient.create().secure(spec -> spec.sslContext(ssl));
+            return com.example.trading.config.JvmDns.apply(HttpClient.create().secure(spec -> spec.sslContext(ssl)));
         } catch (Exception e) {
             // Fall back to the default client rather than to an insecure one. If the JDK trust
             // store alone cannot verify AMFI, the fetch fails loudly and says so - which is the
             // whole contract of this class.
             log.warn("Could not build the widened trust context ({}); falling back to the default "
                     + "JDK trust store. AMFI fetches may fail PKIX validation.", e.getMessage());
-            return HttpClient.create();
+            return com.example.trading.config.JvmDns.apply(HttpClient.create());
         }
     }
 

@@ -29,7 +29,7 @@ public class ClaudeAiService implements AiService {
     public ClaudeAiService(AiConfig config) {
         this.config = config;
         String baseUrl = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.anthropic.com";
-        this.webClient = WebClient.builder()
+        this.webClient = com.example.trading.config.JvmDns.webClientBuilder()
                 .baseUrl(baseUrl)
                 .defaultHeader("x-api-key", config.getApiKey())
                 .defaultHeader("anthropic-version", "2023-06-01")

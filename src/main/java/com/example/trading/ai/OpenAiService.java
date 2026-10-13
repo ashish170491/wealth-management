@@ -31,7 +31,7 @@ public class OpenAiService implements AiService {
     public OpenAiService(AiConfig config) {
         this.config = config;
         String baseUrl = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.openai.com";
-        this.webClient = WebClient.builder()
+        this.webClient = com.example.trading.config.JvmDns.webClientBuilder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + config.getApiKey())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
