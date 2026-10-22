@@ -592,6 +592,65 @@ function macroSection() {
       + 'record, because a ledger that quietly deleted its mistakes could never be judged.'));
 }
 
+/**
+ * What the "What does today's price require?" panel is, and what it refuses to be (SPEC 57).
+ * The vocabulary (standard error, reference multiple, hurdle) is the app's own and a reader will
+ * meet it on every stock page, so it is explained here once and linked from there.
+ */
+function valuationGapSection() {
+  const item = (title, body) => el('div', { style: 'margin-bottom:11px' },
+    el('div', { style: 'font-weight:600;margin-bottom:2px' }, title),
+    el('div', { style: 'font-size:13.5px' }, body));
+
+  return card(
+    el('div', { style: 'font-size:13.5px;line-height:1.65;margin-bottom:12px' },
+      'Every stock page has a section called ', el('strong', {}, '“What does today’s price require?”'),
+      '. It takes the price you could pay today and asks what would have to be true about the '
+      + 'company’s earnings for that price to have earned a fair return, then sets that against what '
+      + 'the company’s earnings have actually done. It is arithmetic on figures the app already holds. '
+      + 'It does not say what will happen, it does not recommend anything, and it adds no points '
+      + 'to any score.'),
+
+    item('The record, and how sure it is',
+      'The app fits a straight-line trend through every year of earnings per share on file (five to ten '
+      + 'years, bonus issues and splits divided out so years can be compared). Beside the growth rate it '
+      + 'always shows the uncertainty (the “standard error”), how many years were used, and R-squared, '
+      + 'which says how much of the ups and downs the trend explains. Five or six points can only '
+      + 'support so much, and a growth rate shown without those would look firmer than it is.'),
+
+    item('The historical-trend comparison',
+      'If, and only if, the record is steady enough, the section shows what earnings per share would be '
+      + 'in the year ending March 2031 if the past trend simply carried on. When the record is too '
+      + 'uneven it shows nothing here and says which test it failed. This figure is worked out when you '
+      + 'open the page and is never saved anywhere. It is a comparison with the past, not a forecast.'),
+
+    item('The required-growth grid',
+      'A what-if table. For each of three “reference multiples” (13×, 25× and 35× earnings) it shows how '
+      + 'fast earnings would have to grow to March 2031 for today’s price to have earned 12% a year from '
+      + 'price movement alone. The multiples are columns in a table, nothing more: they are not what any '
+      + 'business deserves and not a prediction of what the market will pay. The page says how they were '
+      + 'chosen and what is wrong with them.'),
+
+    item('Why the reverse-DCF reading is a separate card',
+      'The older “Is the price sensible?” reading asks a different question in a different way: what '
+      + 'growth does today’s price imply over ten years, with a terminal value? It usually moves with the '
+      + 'grid because both start from today’s price, and sometimes lands close by accident. Neither '
+      + 'confirms the other, so the app never blends or averages them.'),
+
+    item('When it says “Not read”',
+      'A refusal means the data cannot support a reading: banks and other financial businesses (their '
+      + 'earnings are not comparable), fewer than five consecutive years of accounts, a loss year in the '
+      + 'record, a share count that jumps in a way that cannot be explained, or earnings that do not '
+      + 'match the reported quarters. It always names the reason and the number. It is a statement about '
+      + 'the data and never a judgement on the business.'),
+
+    item('The validation record',
+      'A weekday job leaves a small record of the inputs and the fitted trend (never a future figure) '
+      + 'so that, once the company has filed its results for the next few years, the app can check how '
+      + 'well a past trend really did. That cannot be known before those results exist. Collecting the '
+      + 'record is not proof that the method works.'));
+}
+
 function ipoSection() {
   const item = (title, body) => el('div', { style: 'margin-bottom:11px' },
     el('div', { style: 'font-weight:600;margin-bottom:2px' }, title),
@@ -842,6 +901,10 @@ async function render() {
       'Rate decisions, tariffs, the oil price, the rupee, the monsoon. What the Events page does '
       + 'with them, and the two words it refuses to turn them into.',
       macroSection()),
+
+    section('What today’s price requires, and what that does not mean',
+      'The section on every stock page that compares the price with the company’s own earnings record, and the words it uses.',
+      valuationGapSection()),
 
     section('What to ignore',
       'Parts of the app that are not ready to act on. They are shown for honesty, not for use.',

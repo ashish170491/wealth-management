@@ -426,7 +426,7 @@ Plus post-composite bonuses: earnings-growth verdict (up to ±8), insider activi
 
 > **Growth and ownership are persisted, not discarded (2026-09-09, B-098).** `earnings_growth_verdict`, `yoy_revenue_growth`, `yoy_profit_growth`, `promoter_holding_pct`, `promoter_holding_change_pct`, `fii_holding_pct` and `dii_holding_pct` are written on every row from the earnings and shareholding fetches the bonuses already consume — zero extra NSE calls, seven nullable wrappers, `ENSURE_COLUMNS` entries, and coverage rows `PromoterHolding` / `YoyProfitGrowth` / `EarningsGrowthVerdict` (§38.2). They contribute **nothing new** to the composite (the bonuses that read them are unchanged) and exist so the screener can show the Growth pillar and promoter skin-in-the-game. Rows before 2026-09-09 read "not measured" for all seven. Sector is the screener's own table backed by `universe-sectors.csv` (NSE's index classification, refined so a bank reads Banking), resolved through `SectorMapping` on read; a stock nobody has classified is **null**, never "Other". The 30-day score change on the screener is read against the universe's median move through the same `medianShift` the holdings decay verdict uses (B-064), and is null — never zero — below 30 paired symbols.
 
-**Intrinsic valuation — reverse DCF (sanity check, not price target).** `IntrinsicValuationService` solves the growth rate that would justify the current market cap, given a fixed 10-year DCF with 12% discount, 4% terminal growth, and `FCF proxy = profit + depreciation`. Compares the implied growth against the 2-year profit CAGR to produce an **expectation gap** (implied − historical). Verdicts: `DEEPLY_UNDERVALUED` / `UNDERVALUED` / `FAIRLY_VALUED` / `EXPENSIVE` / `EXTREMELY_EXPENSIVE` / `NOT_APPLICABLE` (loss-making) / `INSUFFICIENT_DATA`. Exposed via `GET /api/research/valuation/{symbol}`; persisted on `multibagger_scores.dcf_*` columns; fed into `StockResearchService` Deep Research as data dimension 17.
+**Intrinsic valuation — reverse DCF (sanity check, not price target).** `IntrinsicValuationService` solves the growth rate that would justify the current market cap, given a fixed 10-year DCF with 12% discount, 4% terminal growth, and `FCF proxy = profit + depreciation`. Compares the implied growth against the company’s profit CAGR over **at least four years of annual accounts** (`AnalystTargetPlausibility.growthRecord`; B-113, B-145 — the stored `dcf_historical_growth_percent` is no longer a single quarter or a two-year figure, and thinner history is `INSUFFICIENT_DATA`) to produce an **expectation gap** (implied − historical). *The §57 valuation-gap lens restates the stored implied growth beside a different, closed-form question and never recomputes it.* Verdicts: `DEEPLY_UNDERVALUED` / `UNDERVALUED` / `FAIRLY_VALUED` / `EXPENSIVE` / `EXTREMELY_EXPENSIVE` / `NOT_APPLICABLE` (loss-making) / `INSUFFICIENT_DATA`. Exposed via `GET /api/research/valuation/{symbol}`; persisted on `multibagger_scores.dcf_*` columns; fed into `StockResearchService` Deep Research as data dimension 17.
 
 **Known caveat:** the 10-year window + 4% terminal growth **systematically under-values long-duration compounders** (IT services, platforms, pharma) — their `EXPENSIVE` / `EXTREMELY_EXPENSIVE` verdict should be read skeptically. Banks, insurers, and commodity cyclicals need residual-income or through-cycle models — this service does not currently distinguish sector, and treats them with the same DCF. Both issues are Phase-2 work.
 
@@ -841,6 +841,7 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | 11:30 MON-FRI | Annual-fundamentals backfill batch (§32.6), then the integrated-filing gap pass for FY2025 (§55.4) — same deadline, same pacing | `FundamentalsBackfillScheduler.backfillBatch` | market |
 | 12:15 MON-FRI | IPO pipeline capture (§45.6) — three NSE list calls, a detail call per issue, one paced Kite quote per listing under a year old | `IpoCaptureScheduler.captureDaily` | market |
 | 12:30 MON-FRI | AMFI daily NAV pull (§52.6) — **one** HTTP GET of ~1.5 MB from a third host. No Kite call, no NSE call, so it competes for neither budget | `MutualFundNavScheduler.pullDailyNav` | market |
+| 12:35 MON-FRI | Valuation-gap validation snapshot (§57.6) — **DB-only**: no Kite, no NSE, no model call and no broker session needed. Writes a row per stock only when its inputs changed; its own `job_run` outcome. Skips when `valuation-gap.snapshot-enabled` is false | `ValuationGapSnapshotScheduler.captureWeekdays` | market |
 | 12:40 MON-FRI | Macro news read (§48.9, revised 2026-10-12): RSS feeds plus one Kite quote when readings are filed. Skips when `macro.ingest.scheduled` is false | `MacroIngestScheduler.dailyIngest` | market |
 | every 15 min 09:15–15:30 MON-FRI | Headline capture, storage only — no classification, no alert, no email (§48.4) | `MarketImpactNewsService.scheduledNewsCheck` | market — the cron `0 */15 9-15` fires at 09:00 and the guard is what stops it (§3.4) |
 | 13:20 MON-FRI | Analyst target capture + measurement (§49.6) — the capture half is DB-only; the measurement half is one paced Kite call per stock with an open target, bounded and rotating least-recently-measured first | `AnalystTargetScheduler.captureAndMeasure` | market |
@@ -856,7 +857,7 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 | **08:00 SAT** | Weekly full screening + coverage vector + shadow composites + universe expansion Stage A + retirement pass | `MultibaggerScheduler.weeklyFullScreening` | **Saturday carve-out** |
 | **09:00 SAT** | Weekly multibagger report email | `MultibaggerScheduler.sendWeeklyReport` | **Saturday carve-out** |
 
-**30 scheduled methods; no job fires before 09:15 on a weekday.** *(30 as counted by `JobKeyContractTest` on 2026-10-12, which scans the annotations and fails if one has no label. The jobs page (§56) lists them live from the scheduler, so it cannot drift the way this table has.)* *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, the 13:20 analyst target pass was added the same day, and the 12:30 AMFI NAV pull on 2026-09-20.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
+**31 scheduled methods; no job fires before 09:15 on a weekday.** *(31 as counted by `JobKeyContractTest` on 2026-10-14, after the 12:35 valuation-gap snapshot job was added; 30 on 2026-10-12, which scans the annotations and fails if one has no label. The jobs page (§56) lists them live from the scheduler, so it cannot drift the way this table has.)* *(Counted from the annotations, not from this table, which had drifted: it read 28 when the true figure was 27. The 12:15 IPO capture arrived 2026-09-09, the 15:20 market-impact summary was deleted 2026-09-12, the 13:20 analyst target pass was added the same day, and the 12:30 AMFI NAV pull on 2026-09-20.)* The Saturday pair is the only exception to §3.4, and only those two may use `isSaturdayScreeningWindow()` (Gotcha 28). The 15:05–15:28 block is deliberately lightweight — a long scan there starves it past 15:30, where the guard aborts silently (B-014).
 
 **Why the 11:30 job is a weekday job and not a third Saturday caller** (2026-09-06). §40.3 originally proposed invoking the backfill from inside `weeklyFullScreening()`. That is right about Gotcha 28 and wrong about capacity: the Saturday window is 07:50–10:35 and that job already carries a full screening run, the coverage vector, shadow composites, the retirement pass and the Stage A coarse scan (measured 11–22 minutes), with the report following at 09:00. Roughly 4,000 paced NSE requests do not fit, and crowding that window pushes the report past the point where its guard aborts it in silence. A weekday job inside the ordinary §3.4 window is **not** the Saturday exception — it uses `isMarketOpen()` and never touches the carve-out — and it runs five times a week instead of once. 11:30 is a genuine gap here, clear of every NSE-heavy job (09:45, 10:00 ×2, 14:00, 14:45), and it uses **no Kite calls at all**, so it never competes for the broker budget that has twice starved the afternoon (Gotcha 23, B-014).
 
@@ -875,6 +876,9 @@ Every job below carries `zone = "Asia/Kolkata"` and, unless the Guard column say
 - `GET /api/analyst/recent?days=` — recently recorded targets across every stock. DB-only
 - `POST /api/analyst/capture` — mine the stored headline feed now (DB-only, but it writes)
 - `POST /api/analyst/measure` — measure the open book now; **refused from 14:00 with a 409 carrying its reason**
+- `GET /api/valuation-gap?symbol=` — what today’s price requires of earnings against the business’s own record (§57): the record with its standard error, the FY2031 historical-trend comparison (only when reliable, never stored), the required-growth grid, and the stored reverse-DCF reading — three separate cards. 200 always, 404 only for a stock in no table. DB-only
+- `GET /api/valuation-gap/rules` / `/coverage` / `/snapshots?symbol=` — the rule table and fingerprint; the funnel by first failing gate plus the snapshot record’s counts; one stock’s stored validation rows. DB- or classpath-only
+- `POST /api/valuation-gap/snapshot` — capture the method-validation record now. Idempotent; **403 from any non-loopback address**, 409 with the reason when switched off or no complete screening date is within 5 days. `POST /challenge?symbol=` — the optional, off-by-default assumption challenger
 - `GET /api/earnings/result?symbol=` — what a company reported last quarter, judged against the same quarter a year earlier, with every filed quarter on record and the next-result window (§50.6). 200 carrying `NOT_MEASURED` rather than 404 when nothing is captured. DB-only
 - `GET /api/earnings/portfolio` — every active holding's result read plus the mandatory coverage line. DB-only
 - `GET /api/earnings/recent?days=` — results published across the book, ordered by the day the **company** published. DB-only
@@ -1033,6 +1037,11 @@ silently folded into HHI, sector weights and the TWR series.
 | `mf_holding` | What the investor owns, from Kite `/mf/holdings`, keyed `(isin, folio)`. `quantity numeric(18,4)` — **never `int`**. Nullable `amfi_scheme_code` beside `scheme_resolved_from`; **soft-delete** via `active`/`exited_on`, because here the history *is* the feature |
 | `mf_sync_run` | One row per NAV pull: `last_pulled_at`, rows parsed, unparsed lines, unclassified headers. The freshness key reads this, **not** a NAV date (§52.6) |
 | `mf_history_fetch` | One row per **month**, unique on `for_month`. Records that a month was *asked about*, which is a different fact from whether any NAV came back. `status ∈ FETCHED / NOT_PUBLISHED / FAILED`, plus `date_used` — the business day that actually answered, which is **not** the calendar month end when that fell on a weekend or a holiday. Without it, "never fetched" and "fetched, and those schemes had no NAV" are indistinguishable in `mf_nav_history` — both are an absence of rows, and the second one read as fact says a fund ceased to exist (§52.7, Gotcha 102) |
+
+### Valuation-gap record (✅ — §57.6, 2026-10-14)
+| Table | Purpose / retention |
+|---|---|
+| `valuation_gap_snapshot` | The method-validation record: a stock’s **inputs and fitted trend** frozen when computed, so the method can later be graded against filed FY2027–FY2031 results (rule VG-V1). **Append-only** (`@Immutable`, a repository with no delete and no bulk save). `UNIQUE (symbol, ruleset, inputs_hash)`: a row is written only when the method’s inputs change. Stores **no future EPS level, grid, multiple, verdict, AI text or analyst data**. Refusal rows keep the raw series. **Retained forever; no cleanup arm** — the evidence must outlive the reference year (FY2031 filings land April–June 2031) |
 
 ### Goal table (✅ — §53, 2026-09-20)
 | Table | Purpose / retention |
@@ -1259,6 +1268,7 @@ Profit surprise is primary; revenue surprise is the fallback when profit is flat
 - ~~Price-target-vs-current-price gap analysis.~~ Partly addressed by §49 from headline-quoted
   targets — recorded and measured, never treated as consensus, and thin by construction (§49.7).
 - Event-driven alerts on upgrades/downgrades (the signal is batch-aggregated, not real-time).
+- *(§57 does not close the §25.2 “IC back-test of the trend-break proxy” item: that item grades a three-quarter proxy against post-earnings drift, a different method from §57’s multi-year log-linear fit.)*
 - Brokerage-reputation weighting (Motilal vs. smaller firms are treated equally).
 - Historical back-test of the proxy's IC vs. actual post-earnings drift.
 
@@ -1302,7 +1312,7 @@ Consolidated index of Phase-2 work items from across the spec, with cross-refere
 |---|---|---|
 | Per-stock WACC (CAPM-driven cost of equity) | §12.5 DCF block | Currently fixed 12% — noisy for retail but worth revisiting |
 | Sector-specific models (residual income for banks, through-cycle for commodity cyclicals) | §12.5 DCF block | Current single-DCF mis-values these; flagged in service Javadoc |
-| Forward DCF / price-target generation | §12.5 DCF block | Deliberate non-goal (too assumption-sensitive for retail) — keep skipped |
+| Forward DCF / price-target generation | §12.5 DCF block | Deliberate non-goal (too assumption-sensitive for retail) — keep skipped. **§57 does not reopen it**: its historical-trend comparison is the record’s own fit, shown only when reliable, computed on read and never stored, and its validation record stores inputs and fit parameters only (§57.6) |
 
 ### 25.4 Holdings & Thesis Drift
 
@@ -1448,6 +1458,8 @@ carry the provenance or not be raised. Reporting the gap in one row is not the s
 | `POST /api/watchlist/analyze`, `/analyze-and-report` | Re-analyses every tracked symbol (2 Kite calls each) and the second one emails. Not exposed |
 | `POST /api/watchlist/items`, `/items/refresh` | Live Kite calls (2–4, or 5–20 s with `quality=true`). Button-only via `post()`, never on load; the server refuses them from 14:55 with a 409 |
 | `DELETE /api/portfolio/tax-lots/all` | Destructive. **Never rendered in the UI** |
+
+`GET /api/valuation-gap` (§57.7) is DB-only and is loaded on the stock page’s load, verified by hand (Gotcha 39); `POST /api/valuation-gap/snapshot` is loopback-only and not exposed in the UI, and `POST /api/valuation-gap/challenge` is button-only behind a confirmation.
 
 The six-endpoint research allowlist is hard-coded as an array in `page-stock.js` so a future edit cannot casually add an email-sender.
 
@@ -3346,7 +3358,7 @@ where a new research feature is classified before it is designed (§20 rule 9).
 | Cash generation | Capital efficiency (§12.8) — ROCE, ROE, ROA, D/E, real operating cash conversion | Banks and NBFCs use a separate taxonomy; ROCE and D/E are deliberately not computed for them | — |
 | Management quality | Insider Pulse (§28, shadow); concall guidance ledger (§34) | The ledger's value is in what it refuses to say, and resolution is **manual** by design (§34.3). Insider Pulse scores zero points | **No capital-allocation record** — see 40.3 |
 | Competitive advantage | **Compounding lens (§41)** — five gates over return on capital, cash conversion, leverage, steadiness and margin trend | Reads the **latest year only**. Multi-year history exists for ~19 of 288 stocks, so persistence — the actual evidence of a moat — is unmeasured for 93% of the universe | Persistence. Closed by 40.3 item 1 |
-| Valuation | Reverse-DCF expectation gap blended 50/50 with PE-vs-sector (§12.5) | Systematically under-values long-duration compounders; the rebuilt XBRL implementation has no forward returns yet (Gotcha 27) | — |
+| Valuation | Reverse-DCF expectation gap blended 50/50 with PE-vs-sector (§12.5); **valuation-gap lens (§57)** — what the price requires, against the business’s own earnings record | Systematically under-values long-duration compounders; the rebuilt XBRL implementation has no forward returns yet (Gotcha 27). §57 is a lens with **zero points**; it can read only ~100 of 310 stocks (§57.10), refuses rather than guesses, and its validation record cannot be graded before FY2027 results exist (mid-2027) | Validation, not method |
 | Risk | Forensics (§32.4), core-holding gates (§35), diversification (§7), thesis drift (§6.2), macro & geopolitical exposure (§48) | Three of seven core gates pass on absent data and never count toward the quorum (§35.2). Macro exposure is judged only where the map has a rule, and a missing rule is a gap in the app rather than an all-clear (§48.6) | Macro exposure is shadowed, worth zero points, and measured at 180/365d (§48.2) |
 
 **Pre-listing companies sit outside every row above.** An IPO has no filings this app can read, so §45's structure read (fresh issue versus offer for sale, who filled the book) is a *management-quality tell* on the offer, not a pillar measurement, and it contributes nothing to any score. Post-listing, a new company enters the ordinary pillars as its filings arrive, on the §30.4 timetable.
@@ -6805,3 +6817,316 @@ report records the daily snapshot when the hour is **15 or later** (was exactly 
 watchlist job already wrote its snapshot from hour 15. Both writes are idempotent per symbol and
 date. Inside market hours the cron fires at the same times as before, so scheduled behaviour is
 unchanged.
+
+---
+
+## 57. Valuation Gap & Implied Growth ✅ Active (lens + method-validation record, 2026-10-14)
+
+*Rule-set `VG-2`. Approved in three steps (design 2026-10-13, two `sme-review` rounds, final approval with safeguards 2026-10-14).
+Namespace `/api/valuation-gap`. Contributes **zero points** to any score and has no field that could.*
+
+### 57.1 The question, and what this is not
+
+*"If this business's earnings simply keep following their own record, what is today's price paying
+for — and what growth would the price need if the market later pays a stated reference multiple?"*
+
+It states **what would have to be true**. It says nothing about what will happen and recommends
+nothing. §19 and §25.3 are unchanged: there is no forward DCF, no price target, no buy/sell wording,
+no rupee range, no below/within/above badge and no verdict word anywhere on the surface. The
+vocabulary is pinned by `ValuationVocabularyTest` over every printed string, every JSON key, every
+field name and every enum constant.
+
+**An earlier draft proposed a rupee implied-value range and a below/within/above badge. Both were
+dropped on evidence** (round 1 of `sme-review`): the range read "above" for 85.7% of stocks, sat
+31% below the §12.5 reading, and contradicted it on 31 of 119 stocks (Gotcha 85). Reinstating either
+would need a §25.3 amendment, a corrected model, a runtime degeneracy check and a persisted
+shadow record.
+
+### 57.2 The blocks (on the stock page: "What does today's price require?")
+
+| Block | Content | Kind |
+|---|---|---|
+| A. The earnings record | Adjusted EPS per year (5–10), bonus issues and splits divided out, basis, the latest-year cross-check | REPORTED / DERIVED |
+| B. Normalised EPS `E0` | The latest EPS, lowered to the fitted value only when it is a clear peak (VG-N1) | DERIVED |
+| C. The record's own trend | Log-linear fit: growth, **standard error**, **observation count**, years spanned, R², endpoint rate | DERIVED |
+| **D. Historical-trend comparison** | `PE0 = price ÷ E0`, and — **only when both reliability gates pass** — "EPS in FY2031 if the past trend simply carried on". Computed on read, **never stored** | DERIVED |
+| **E. Required-growth grid** (card) | Per reference multiple, the yearly EPS growth to FY2031 for today's price to have earned 12% a year from **price movement alone**, with the gap to the record's trend in points and the 10% / 14% sensitivity | DERIVED + ASSUMPTION |
+| **F. Existing reverse-DCF reading** (card) | `dcf_implied_growth_percent` **exactly as stored, never recomputed**, with a pointer to the "Is the price sensible?" panel. No verdict word and no EPS milestone | REPORTED |
+| G. Provenance, rules applied, coverage line, caveats | Always sent, always drawn on screen, never in a tooltip | — |
+
+**Two methodologies, kept apart.** Card E: *stated multiple · reference year FY2031 · price-return
+hurdle 12% · EPS · closed form · no terminal growth.* Card F: *10-year constant growth + 4% terminal ·
+discount 12% · profit-plus-depreciation proxy · solved by the existing service.* Both start from
+today's price so they move together (**measured correlation 0.79** on the 92 stocks that have both)
+and for some stocks land close by accident; they differ materially elsewhere. The mandatory callout
+says exactly that — *"Different questions, built differently; neither confirms the other"* — and they
+are never blended, averaged, ranked or reconciled. (The first draft said they "would not agree by
+construction"; that was wrong and is withdrawn.)
+
+**Block D's fixed presentation order:** trend growth **± standard error** → **observations (years)** →
+R² → `PE0` → the FY2031 comparison, under the fixed sentence *"This compares today's price with where
+the past earnings trend would lead if it simply carried on. It says nothing about what will actually
+happen."* If either gate fails only the FY2031 comparison is withheld (`TREND_UNRELIABLE`, quoting the
+failing figure); everything else still shows. **On the screen the panel puts card D and card E with
+card F between them**, so the trend comparison and the multiple grid never sit side by side: a reader
+can multiply two numbers and the product would be a price the app never computed. That residual risk
+is stated, not removed — decision 2 kept D's FY2031 EPS, and the reviewer had advised dropping it.
+
+### 57.3 Formulas (rule-set VG-2)
+
+`P` = `multibagger_scores.current_price` on the valuation date `D` (the screening date of the row used,
+not today). `FY0` = the latest fiscal year in the series (FY2026 = year ended 31 Mar 2026).
+`n = 2031 − FY0`. `T = (2031-03-31 − D) / 365.25` (**4.4627** for 2026-10-13: 1,630 days).
+`r = 12%`, pinned to `IntrinsicValuationService` by reflection in a test.
+
+- **Adjusted EPS.** `EPS_t = net_profit_t / (share_count_t × cumulative corporate-action factor)`, every
+  year restated onto the latest year's share basis. Rule **VG-S1**, in order, for each year-on-year
+  step in share count: (1) a face-value change *is* a split and its ratio is the action (a share count
+  that disagrees with it by more than 25% is refused); (2) a ratio of **1.5 or more within 1%** of a
+  simple bonus ratio is divided out (the cut-off is the ratio minus the tolerance, so a real 1-for-2
+  bonus reading 1.4999 is not lost — found on the first live run, IOC); (3) a grid-like step of **1.25
+  or less with no face-value change is ambiguous and the stock is refused** — a 1:20 bonus and a 5%
+  rights issue look the same; (4) any other step within ±25% is a real issue or buyback and stays
+  in; (5) anything else is refused. Three consistency refusals run first: a share count at or below
+  0.01 crore, a face value that goes back to an earlier value, and a one-year spike that reverses.
+  Face value and share count are **not independent evidence** (the count is derived as paid-up capital
+  ÷ face value), so only the reversal checks can catch a mis-tag. Parity with
+  `CapitalAllocationRecord`'s action count on exact bonuses and splits is a test.
+- **Record and normalised EPS.** Log-linear least squares of `ln EPS` on the fiscal year over every
+  contiguous year on one basis (5–10), anchored at the latest year: `slope`, `intercept` (the fitted
+  `ln EPS` at FY0), `c = exp(slope) − 1`, `se` = standard error of the slope ×100 (**percentage points**
+  of annual log-growth), `R²` (null when earnings are identical every year). `E0 = EPS_FY0` unless it
+  exceeds **1.5× the fitted FY0 value**, then `E0` = the fitted value (`PEAK_ADJUSTED`). One-sided: a
+  trough is never lifted, because lifting a bad year toward the trend is a forecast of recovery.
+- **Reliability gates (VG-T1) [P].** `se ≤ 5.0` points **and** `R² ≥ 0.5`. They decide whether the FY2031
+  comparison is *shown*. They are provisional starting values, **not proof that a trend carries on**.
+- **Historical-trend comparison (screen only).** `EPS_FY2031 = E0 × (1 + c)^n`, only when both gates pass.
+- **Required growth.** `g_req(N, r) = ( P (1 + r)^T / (N · E0) )^(1/n) − 1`, shown at `r = 12%` with 10% and
+  14% beside it; `gap = g_req − c` in points, withheld when the gates fail. A negative `g_req` is shown
+  with the sentence that earnings could shrink and the price would still have earned the hurdle.
+
+### 57.4 Eligibility — one named reason, never a default
+
+Gates run in order; the first failure wins and carries the failing number. A refusal is a statement about
+the **data**, never about the business, and draws as a neutral badge with the sentence at full weight —
+never as the striped "not measured" marker and never in a tooltip (Gotcha 121, 146).
+
+| Gate | Refusal code |
+|---|---|
+| In neither `multibagger_scores` nor `annual_fundamentals` under any spelling | **404** (the app does not know the stock — a different fact from a refusal) |
+| Accounts but never screened | `NEVER_SCREENED` |
+| Financial: any row with `capexVerdict = NA_FINANCIAL`, `NseDataService.isLenderIndustry`, or the `BANKING`/`FINANCIALS` sector bucket. **Fee financials are excluded too** | `UNSUPPORTED_SECTOR` |
+| Industry null, blank, `GENERAL` or `Other` with no sector-table entry | `UNCLASSIFIED` |
+| No price or market cap; price older than 14 days | `NO_PRICE_ON_FILE` / `STALE_PRICE` |
+| Fewer than 5 **consecutive** fiscal years ending at the series' last year | `INSUFFICIENT_HISTORY` |
+| Basis: the newest year's `consolidated` is null; or an older year's is; or fewer than 5 recent years share one basis; newest year older than `requiredLastFy` | `BASIS_UNKNOWN` / `BASIS_SWITCH` / `STALE_LATEST_YEAR` |
+| Net profit or share count missing in a used year | `FIELD_MISSING` |
+| VG-S1 refusals | `SHARE_COUNT_INCONSISTENT` / `UNEXPLAINED_SHARE_STEP` / `AMBIGUOUS_SHARE_STEP` |
+| `|(market cap ÷ price) ÷ share count FY0 − 1| > 2%` | `SHARE_BASIS_MISMATCH` |
+| Any adjusted EPS ≤ 0 | `LOSS_IN_RECORD` |
+| FY0 EPS vs the sum of that year's four reported quarterly EPS on the same basis, ±5% | `EPS_CROSSCHECK_FAILED` / `EPS_UNVERIFIABLE` |
+| Fewer than 180 days to 31 March 2031 (from 2030-10-03) | `HORIZON_TOO_SHORT` |
+
+`requiredLastFy` is the year in progress minus one, and one year older between April and June only,
+because annual results may not have been filed yet; the test is "at or after", so an early filer with a
+newer year is not refused as stale.
+
+**The sector gate composes the three authorities that already exist and adds no regular expression**
+(Gotcha 151: this codebase held five copies of "who is a lender"). The G9 cross-check is the only
+guard against stored net profit **including minority interest** (owners' profit is deferred); it is
+deliberately conservative — an in-year bonus fails it — and earlier years are unverified.
+
+### 57.5 Reference multiples — grid columns only (decision 6)
+
+`GRID_REFERENCE_MULTIPLES = {13, 25, 35}` are **provisional**, package-private, and exist for one purpose:
+the columns of the sensitivity grid. A source-scan test fails if any class other than `RequiredGrowthGrid`
+and `ValuationGapRules` refers to the constant, and the wire field is `referenceMultiple`, never `endPe`,
+`exitPe`, `fairPe` or `justifiedPe`.
+
+- **13×** is the multiple of profit-plus-depreciation the §12.5 terminal assumptions imply at year 10 for a
+  business growing at the 4% terminal rate (`Σ q^k + q^10 (1+g)/(r−g) = 13.000`, a test). That is a
+  **different quantity** from earnings per share at year ~4.5, so it is a low reference column and nothing
+  more. It also saturates against the stored reverse-DCF reading.
+- **25× and 35×** are roughly the lower-quartile and median price-to-earnings of the stocks this lens can
+  read, rounded to 5 (25.8 / 36.9 on the first design sample; 26.0 / 36.2 on the 97 stocks actually
+  readable on 2026-10-13). One date's cross-section in a strong market, identical for every business, and
+  they will drift. They describe what is **typical**, not what is **justified**.
+- **Not** universal valuation assumptions, not a "fair" or "justified" P/E and not an input to any range,
+  verdict, score, rank or recommendation. Recalibration is a version bump (new fingerprint, new rows beside
+  the old), never an in-place edit. The limitations text travels with the grid payload (`limits`).
+
+### 57.6 The method-validation record — `valuation_gap_snapshot` (decision 5)
+
+**What it is.** The lens's own deterministic **inputs and fit**, frozen when they were computed and before
+any outcome exists, so the method — *a log-linear earnings trend over five to ten years* — can later be
+graded against **filed** FY2027…FY2031 results by the pre-registered rule VG-V1. It grades a method, not a
+business. It steers nothing, and it is **not** a forecast store: it holds no future EPS level, no grid, no
+reference multiple, no verdict, no AI text and no analyst data.
+
+**§20 rule 5 / §25.3 decision (decision 3, recorded).** Persisting inputs and fit parameters — *never
+future EPS levels* — is sanctioned as a method-validation record in the §38.8 lineage. A future level is a
+deterministic function of the stored slope, anchor and base year, so storing one would add exposure under
+§25.3 and no evidence. This is the app's **own** arithmetic: §49's "someone else's claim" cover does not
+apply and is not claimed. No §19 text is edited. (An earlier draft said this closed the §24.4/§25.2
+trend-proxy back-test; **that claim is withdrawn** — that item grades a different method.)
+
+**Schema.** A new `@Entity`; Hibernate creates it under `ddl-auto: update`, no `SchemaMigrationRunner` row
+(precedent `shadow_composites`). 36 columns; `UNIQUE (symbol, ruleset, inputs_hash)` and three indexes;
+**no foreign key, no trigger, no CHECK constraint** (status and reason are plain strings — Gotcha 148).
+`@Immutable` makes Hibernate issue no UPDATE; the repository extends `Repository`, with no delete, no
+`saveAll` and no `@Modifying`. Verified on the live database on 2026-10-14 against `information_schema`,
+`pg_constraint` and `pg_indexes`. A later rule-set that adds columns needs a `SchemaMigrationRunner`
+`ENSURE_COLUMNS` row (Gotcha 74); that file is untouched here.
+
+**Contents.** Price date (`snapshot_date`) and **knowledge date** (`created_at`); symbol and the spelling that
+answered; `ruleset`, `fingerprint`, price-row `scoring_version`; `capture_origin`; `status`, `reason_code`,
+`reason`; price, market cap, `pe0`; base/first fiscal year, observations, basis; latest EPS, **`normalised_eps`
+(the pre-registered grading anchor)**, flags; the fit (`trend_ln_intercept`, `trend_ln_slope`, growth, standard
+error, R², cohort `GATES_PASSED | GATES_WITHHELD | NOT_FITTED`, endpoint rate); share count and face value at
+the base year; the stored reverse-DCF figure and the cross-check ratio (provenance only);
+`eps_series_json` (raw **and** adjusted per year, with `availableFrom`, `availableFromIsInferred`, source and
+row-updated time, and a provenance block tagging each value REPORTED / DERIVED / INFERRED) — **kept on
+refusal rows too**, so a stock that later turns loss-making still has its earlier years; `actions_json`;
+`inputs_hash`.
+
+**Write path.** `ValuationGapSnapshotScheduler.captureWeekdays` — **12:35 MON-FRI**, `isMarketOpen()` first,
+config-off calls `JobRunContext.skip` naming `valuation-gap.snapshot-enabled`, then the `@JobRerun` method.
+**Its own weekday DB-only job**: not a third Saturday caller (Gotcha 28), not behind the Kite-token guard, its
+own `job_run` outcome (the Saturday run already ends as completed-with-errors routinely, so an ERROR there
+would not be heard), self-healing next weekday. The same `ValuationGapService.assemble` builds the screen's
+reading and the stored one. Capture uses only the **latest complete screening date** (≥ 90% of the largest
+run in the last fortnight — the table holds dates with 86, 2 and 1 rows) and is skipped when none is within
+5 days. **A row is written only when the method's inputs change** (`inputs_hash`: status, reason, the rule
+fingerprint, the raw series and the actions — **not** price, market cap, the reverse-DCF columns or
+row-updated times, which change daily), so a stock yields about one row per fiscal-year filing plus
+revisions, not one a week. Each row is saved on its own (Gotcha 129); a failed row is counted and logged at
+ERROR, which marks this job's own run completed-with-errors. A refusal row is data, not an error.
+`POST /api/valuation-gap/snapshot` runs the same method stamped `MANUAL`, is **idempotent**, and is
+restricted to the loopback interface (§57.7).
+
+**Provenance and look-ahead.** `created_at` is the knowledge date every look-ahead check uses. `available_from`
+is stored per input year with an `availableFromIsInferred` flag so an assumption is never read as a fact
+(Gotcha 100). First capture: **0 years with a null availability date and 0 with `available_from` after
+`created_at`**. There is **no backfill**: reconstructing past rows from today's database would be a
+retro-backtest that already knows its outcomes (§33), and `annual_fundamentals` before ~March 2025 has no
+point-in-time guarantee (B-017). The evidence clock starts at first capture.
+
+**Retention: forever. No cleanup arm exists and none may be added** (precedent `multibagger_scores`); the
+evidence must outlive the reference year, since FY2031 filings land April–June 2031. A source-scan test
+fails if any cleanup class refers to the table. Growth is about 1–4 MB a year (first capture: **310 rows,
+664 kB**, rows 1.9–2.9 KB).
+
+**Rollback.** (1) Set `valuation-gap.snapshot-enabled=false`: the job records a *skipped* run with the property
+named, nothing else reads the flag. (2) To withdraw the feature, remove the scheduler class, its `JobLabels`
+entry, this section's §15 row and the new classes — `MultibaggerScheduler` and `SchemaMigrationRunner` were
+never edited, so there is nothing to revert there. (3) **Leave the table and its rows** (precedent
+`sector_reversal_signals`: delete the producer, keep the record — §25.1); an orphan table is inert, since
+nothing references it and Hibernate `update` never drops it. (4) Only if the evidence is deliberately
+abandoned: `DROP TABLE valuation_gap_snapshot;` by hand — **irreversible, destroys the validation record**.
+(5) Re-enable by setting the flag true; rule-sets separate eras by `ruleset` and `fingerprint`.
+
+**Validation protocol — rule VG-V1 (pre-registered, executable as `SnapshotGrading`).** One graded quantity
+for every row with fit parameters, **gates passed and withheld alike** (the gate is a cohort label, not a
+precondition — whether it earns its keep is itself a question the grading answers):
+`graded value(Y) = normalised_eps × (1 + c)^(Y − base FY)` from the stored slope, and
+`score = ln(actual adjusted EPS in Y ÷ graded value)`. A **non-positive actual is a counted outcome
+(`ACTUAL_NON_POSITIVE`), reported separately and never dropped**. Unit of independence =
+(symbol, base FY, graded year, ruleset), using the **earliest row written**. The actual is the **first-seen
+value frozen in the next input-change row** (`annual_fundamentals` itself keeps no revision history; the
+snapshot is what makes revisions recorded); an actual with no availability date is *unmatured*, not graded.
+Blocks are the graded years; statistics are cross-sectional within a block, never pooled.
+
+**The honest ceiling.** FY2027 results land about **9 April – early June 2027** (measured lag 22–59 days, median
+43). At most five graded years exist and adjacent years of one row share one fit, so the effective number of
+independent blocks is about one or two — **§38.10's 12 independent periods is unattainable by design**. The only
+permitted statuses are `NO_MATURED_RESULTS`, `TOO_EARLY` and `DESCRIPTIVE_ONLY`; **no p-value, no "validated" and
+no promotion language is ever produced from this record**. Collecting rows is not validation. **The
+matured-results computation is not built in this scope; it is committed here as due by 2027-03-31**, before
+the first filing can land, so the table cannot become §39.2's "generator with no reader" (its readers meanwhile
+are `GET /snapshots` and `GET /coverage`). Survivorship: stocks that stop reporting stay in the denominator as
+unresolved; never-screened stocks are outside the evidence; a ticker rename splits the unit and is reported,
+not repaired.
+
+### 57.7 Endpoints and UI
+
+All under `/api/valuation-gap`; `symbol` is a query parameter. The four GETs are DB- or classpath-only, safe on a
+page load and never reach NSE, Kite or a model.
+
+- `GET ?symbol=` — the reading. **200 always** except **404** for a stock in no table. `status` is `MEASURED`,
+  `PARTIAL` (some block withheld, with per-block reasons) or `UNAVAILABLE` (every derived figure absent,
+  never `0`, never a stub; only the raw record that explains the refusal remains).
+- `GET /rules` — the rule table, the fingerprint and the reference-multiple limitations. No I/O.
+- `GET /coverage` — the funnel by first failing gate over the latest complete screening run, the share of
+  readable stocks whose trend comparison is withheld, and the snapshot record's own counts.
+- `GET /snapshots?symbol=` — stored rows for one stock, newest first; 404 when none.
+- `POST /snapshot` — capture now. Idempotent; **403 from any non-loopback address, 409 with the reason** when
+  switched off or when no complete screening date is within 5 days. *This app has no authentication layer; §27.5
+  describes a localhost-bound server, but on 2026-10-14 the running process was listening on `0.0.0.0:8080`
+  (B-183), so the loopback check is a real control and is stated rather than implied. Adding sign-in would be a
+  scope of its own.*
+- `POST /challenge?symbol=` — the optional assumption challenger (§57.8). Never throws, never writes.
+
+UI: `static/js/valuation-gap.js`, one folded section on the stock page whose heading carries "N of 7 parts"
+(never a verdict), plus a guide section. The page-load `get()` is DB-only, verified by hand (Gotcha 39); the
+only POST the panel can make is the challenger, behind a confirmation.
+
+### 57.8 The optional assumption challenger
+
+A second reader that **questions** a computed reading. Off by default and **double-gated**:
+`valuation-gap.challenge-enabled=false` and `spring.ai.model.chat=none`. It follows the `MacroEventExtractor`
+pattern (`ObjectProvider<ChatModel>`, all-String records, Spring AI 1.1.8, no new dependency). Output is up to
+five questions, each naming a target from a closed list and a kind
+(`QUESTIONABLE_ASSUMPTION | MISSING_EVIDENCE | POSSIBLE_CONTRADICTION`). **Validation is applied after the
+fact**: a row is dropped for an unknown target or kind, for a number that is not in the input (within
+rounding) or for advice or prediction wording. It never alters a result, nothing reads it back, and **a
+snapshot never stores AI text**. The research prompt and `/api/research/*` are untouched.
+
+### 57.9 Governance (§20 rule 9, declared separately)
+
+| | Lens (screen) | Method-validation record |
+|---|---|---|
+| Pillar | Valuation; Growth (the record) | Valuation — an outside view of the **method**, not of any business |
+| Horizon | Reference year FY2031; **not judged**; retires itself from 2030-10-03 (`HORIZON_TOO_SHORT`) | Judged at **filed FY2027…FY2031 results**, not at 30/90/180/365 days (§49.2(b), §53.2 precedent) |
+| Coverage | Inline plus `GET /coverage`. **No `screening_coverage` row — substituted, not supplied** | Refusal rows (status, reason, raw inputs) are the coverage record |
+| Shadow / zero points | Zero points, no stored score | Zero points, steers nothing, no field to flip. "Shadow" in §38.8's sense: it records what the method says before any outcome, read only by the validator |
+
+§25.3's "forward DCF / price-target generation" remains a deliberate non-goal; the historical-trend comparison is
+not a forward DCF (it is the record's own fit, screen-only, gated, never stored). §39.3 rule 1 (no grading its own
+homework) holds: grading is against **filed actuals**, never the record's own numbers, and nothing is registered
+with `RecommendationTracker` because nothing is picked. Gotcha 28 / §3.4: a weekday job inside 09:15–15:30 with
+the `isMarketOpen()` first guard; §15 row added.
+
+### 57.10 Measured facts and unresolved issues (2026-10-13 run)
+
+**Funnel, 310 screened stocks: 97 readable (47 in full, 50 in part), 213 refused.** First failing gate:
+`INSUFFICIENT_HISTORY` 59, `UNSUPPORTED_SECTOR` 54, `LOSS_IN_RECORD` 30, `UNEXPLAINED_SHARE_STEP` 20,
+`EPS_CROSSCHECK_FAILED` 17, `NO_PRICE_ON_FILE` 10, `SHARE_COUNT_INCONSISTENT` 8, `AMBIGUOUS_SHARE_STEP` 4,
+`SHARE_BASIS_MISMATCH` 4, `UNCLASSIFIED` 3, `FIELD_MISSING` 3, `BASIS_SWITCH` 1 (`EPS_UNVERIFIABLE` 0). The design
+estimated ≈119 on a first simulation and a reviewer's re-simulation ≈96: **97 is the measured figure**.
+Among the 97, the trend comparison is withheld for **49 (50.5%)**. Cross-check: all 97 pass at ±5%, 95 at ±3%.
+Spread (no zero variance): trend growth median 14.3% (sd 17.4), standard error median 4.1 pp, R² median 0.68,
+`PE0` median 36.2, required growth at 13× / 25× / 35× median 35.8% / 19.2% / 11.4% (negative for 2 / 8 / 13 stocks).
+A frozen fixture of these 97 stocks' inputs is a CI zero-variance guard (`FrozenEligibleFixtureTest`).
+
+| # | Unresolved issue | State |
+|---|---|---|
+| U1 | The screen shows D's FY2031 EPS and E's reference multiples; the product is one multiplication away | Decision 2 kept D; separated into different cards with F between them; reviewer advised dropping the EPS level |
+| U2 | Stored net profit **includes minority interest**; owners' profit deferred, so G9 guards only the latest year | Stated on screen; 17 stocks fail G9 |
+| U3 | Stored figures were **not** compared with filings. Sample for a manual check: IOC FY2020 `net_profit = −1,877`, which refuses IOC as `LOSS_IN_RECORD` | Open |
+| U4 | Evidence covers only screened stocks (≈ 100 of 310); universe survivorship | Stated on screen |
+| U5 | Validation can never reach §38.10's 12-period bar | By design; descriptive claims only |
+| U6 | The matured-results computation is not built | Due by **2027-03-31** |
+| U7 | No `DataHealth` freshness key; the job's own `job_run` row is the liveness record | Accepted; a weekly-cadence check is a separate follow-up |
+| U8 | 10 screened stocks (BHARTIARTL, M&M, ETERNAL, INDIGO …) carry no market cap on their screening row | B-181; refused `NO_PRICE_ON_FILE`, not worked around |
+
+### 57.11 Files
+
+New: `valuation/{ValuationGapRules, FiscalHorizon, FinancialSectorGate, EpsSeries, NormalisedEarnings,
+RequiredGrowthGrid, ValuationReading, ValuationGapService, ValuationGapController, SnapshotMapper,
+SnapshotGrading, ValuationGapSnapshotEntity, ValuationGapSnapshotRepository, ValuationGapSnapshotService,
+ValuationGapSnapshotScheduler, ValuationAssumptionChallenger, AssumptionCritique, CritiqueBatch,
+ValuationGapConfig}`, `fundamentals/AdjustedShareSeries`, `static/js/valuation-gap.js`. Edited, additively:
+`JobLabels`, `application.yml`, `page-stock.js`, `format.js`, `glossary.js`, `page-guide.js`, this file,
+`CLAUDE.md`, `BUGS.md`. **Not touched:** `IntrinsicValuationService`, `AnalystTargetPlausibility`,
+`StockValuationService`, `StockResearchService` and its prompt, `MultibaggerScheduler`,
+`MultibaggerScreenerService`, `SchemaMigrationRunner`, `DataHealth`, `DataCleanupScheduler`, `DashboardService`.
