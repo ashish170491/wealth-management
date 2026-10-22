@@ -76,6 +76,11 @@ public class JobStatusService {
         for (Object[] row : runs.lastSucceededPerJob()) {
             lastOk.put((String) row[0], (LocalDateTime) row[1]);
         }
+        Map<String, LocalDateTime> firstRun = new HashMap<>();
+        for (Object[] row : runs.firstRunPerJob()) {
+            firstRun.put((String) row[0], (LocalDateTime) row[1]);
+        }
+        LocalDateTime currentBootStart = alive.isEmpty() ? null : alive.get(alive.size() - 1).startedAt();
 
         List<JobStatusDto.JobRow> rows = new ArrayList<>();
         List<JobStatusDto.Problem> problems = new ArrayList<>();
@@ -87,7 +92,8 @@ public class JobStatusService {
             JobSchedule schedule = scheduleCache.computeIfAbsent(def.cron(), JobCatalog::describe);
             List<JobRunEntity> jobRuns = byJob.getOrDefault(key, List.of());
 
-            List<JobExpectation.Fire> fires = classifyFires(def.cron(), from, now, alive, jobRuns, historyStart);
+            LocalDateTime judgedFrom = JobExpectation.judgedFrom(historyStart, firstRun.get(key), currentBootStart, GRACE);
+            List<JobExpectation.Fire> fires = classifyFires(def.cron(), from, now, alive, jobRuns, judgedFrom);
             JobStatusDto.Counts counts = count(jobRuns, from, fires);
             JobStats stats = JobStats.of(jobRuns.stream()
                     .filter(r -> !r.getStartedAt().isBefore(from))

@@ -93,4 +93,56 @@ class JobExpectationTest {
         var fires = JobExpectation.classify(List.of(FIRE), List.of(true), List.of(UP_ALL_DAY), List.of(), HISTORY, GRACE);
         assertThat(fires.get(0).outsideWindow()).isTrue();
     }
+
+    // ------------------------------------------------------------------ B-184: a job is judged from when it existed
+
+    private static final LocalDateTime BOOT_NOW = LocalDateTime.of(2026, 10, 22, 8, 30);
+
+    @Test
+    @DisplayName("B-184: fires before a job's first run are not judged - the live case, a job added on 14 Oct")
+    void aNewJobIsNotJudgedOnFiresBeforeItExisted() {
+        // The app was up on 12 and 13 Oct at 12:35; the job did not exist until its first (manual) run on 14 Oct 00:47.
+        LocalDateTime fire12 = LocalDateTime.of(2026, 10, 12, 12, 35);
+        LocalDateTime fire13 = LocalDateTime.of(2026, 10, 13, 12, 35);
+        LocalDateTime fire14 = LocalDateTime.of(2026, 10, 14, 12, 35);
+        var up = boot(LocalDateTime.of(2026, 10, 12, 9, 0), LocalDateTime.of(2026, 10, 14, 15, 30));
+        var run14 = new JobExpectation.RunSpan(fire14, fire14.plusSeconds(2), fire14.plusSeconds(5));
+        LocalDateTime firstRun = LocalDateTime.of(2026, 10, 14, 0, 47);
+
+        LocalDateTime from = JobExpectation.judgedFrom(HISTORY, firstRun, BOOT_NOW, GRACE);
+        var judged = JobExpectation.classify(List.of(fire12, fire13, fire14), List.of(false, false, false),
+                List.of(up), List.of(run14), from, GRACE);
+        assertThat(judged).extracting(JobExpectation.Fire::status).containsExactly(JobExpectation.Status.RAN);
+
+        // The old rule (judge from the first boot of the app) calls the same two fires MISSED. This is the case
+        // that tells the two rules apart, so reverting the fix fails here.
+        var old = JobExpectation.classify(List.of(fire12, fire13, fire14), List.of(false, false, false),
+                List.of(up), List.of(run14), HISTORY, GRACE);
+        assertThat(old).extracting(JobExpectation.Fire::status)
+                .containsExactly(JobExpectation.Status.MISSED, JobExpectation.Status.MISSED, JobExpectation.Status.RAN);
+    }
+
+    @Test
+    @DisplayName("B-184: an established job that stops running is still MISSED - the fix must not hide a real failure")
+    void anEstablishedJobStillMissesFires() {
+        LocalDateTime firstRun = HISTORY.plusDays(1); // ran long before the window
+        LocalDateTime from = JobExpectation.judgedFrom(HISTORY, firstRun, BOOT_NOW, GRACE);
+        assertThat(from).isBefore(FIRE);
+        assertThat(JobExpectation.classify(List.of(FIRE), List.of(false), List.of(UP_ALL_DAY), List.of(), from, GRACE)
+                .get(0).status()).isEqualTo(JobExpectation.Status.MISSED);
+    }
+
+    @Test
+    @DisplayName("B-184: a job that has never run is judged from the boot now serving it, not from the app's first boot")
+    void aJobWithNoRunIsJudgedFromTheCurrentBoot() {
+        assertThat(JobExpectation.judgedFrom(HISTORY, null, BOOT_NOW, GRACE)).isEqualTo(BOOT_NOW);
+    }
+
+    @Test
+    @DisplayName("B-184: the start is never earlier than the first boot on record, and unknown inputs fall back safely")
+    void judgedFromBounds() {
+        assertThat(JobExpectation.judgedFrom(HISTORY, HISTORY.minusDays(5), BOOT_NOW, GRACE)).isEqualTo(HISTORY);
+        assertThat(JobExpectation.judgedFrom(HISTORY, null, null, GRACE)).isEqualTo(HISTORY);
+        assertThat(JobExpectation.judgedFrom(null, LocalDateTime.of(2026, 10, 14, 0, 47), BOOT_NOW, GRACE)).isNull();
+    }
 }
