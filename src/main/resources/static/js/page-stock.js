@@ -29,6 +29,7 @@ import {
 import { lineChart, legend, radar, COLORS } from './charts.js';
 import { compoundingPanel } from './compounding.js';
 import { sectorStandingPanel, SECTOR_STANDING } from './sector-standing.js';
+import { valuationGapPanel, valuationGapSummary } from './valuation-gap.js';
 import { macroExposurePanel } from './macro-cells.js';
 import { resultPanel, resultHistoryRows } from './earnings-cells.js';
 import { trackRecordPanel, capitalAllocationPanel } from './long-horizon.js';
@@ -534,7 +535,7 @@ function resultHistoryTable(earnings) {
 }
 
   const [holding, series, trend, recs, coreHistory, watch, compounding, longHorizon,
-    macro, analyst, earnings, sectorStanding] = await Promise.all([
+    macro, analyst, earnings, sectorStanding, valuationGap] = await Promise.all([
     get(`/api/trading/holdings/${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
     get(`/api/dashboard/series/holding?symbol=${enc}&days=1095`, { fallback: [] }).then((r) => r.data).catch(() => []),
     getList(`/api/multibagger/trend/${enc}?days=365`).then((r) => r.data).catch(() => []),
@@ -568,6 +569,11 @@ function resultHistoryTable(earnings) {
     // is not in the latest run -> null, "never screened"; a 200 carrying NOT_RANKED means it was
     // screened but no peer group could rank it - a different fact (SPEC 54).
     get(`/api/dashboard/sector-standing?symbol=${enc}`, { fallback: null }).then((r) => r.data).catch(() => null),
+    // DB-only (multibagger_scores, annual_fundamentals, quarterly_results, the snapshot table's
+    // count), verified by hand: no NSE, Kite or model call (SPEC 57.7). 404 when the stock is in
+    // no table under any spelling -> null. A refusal is a 200 carrying status UNAVAILABLE and the
+    // reason, which is a different fact and renders differently (Gotcha 121).
+    get(`/api/valuation-gap?symbol=${enc}`, { fallback: null, cache: false }).then((r) => r.data).catch(() => null),
   ]);
 
   const score = (trend && trend.length) ? trend[trend.length - 1] : null;
@@ -716,6 +722,20 @@ function resultHistoryTable(earnings) {
     // Firms with a LIVE target, not notes on file: one house revising three times is one
     // opinion (B-041), and a stale target is not somebody's current view.
     analystPanel(analyst)), (analyst && analyst.live && analyst.live.houses) || 0));
+
+  // Sits beside the on-demand "Is the price sensible?" research button below, and answers a
+  // different question: what today's price would require of earnings, stated against the business's
+  // own record. It forecasts nothing, recommends nothing and changes no score (SPEC 57). The heading
+  // carries a count of the parts that could be read, never a verdict.
+  nodes.push(withSummary(section('What does today’s price require?',
+    'Takes today’s price and states what would have to be true about earnings for it to have earned '
+    + 'a fair return, set against what this company’s earnings have actually done. It does not say '
+    + 'what will happen and it recommends nothing. If the record is too short, too uneven or too '
+    + 'hard to check, it says so and shows nothing rather than a guess. The same reading is saved '
+    + 'in a validation record so the method itself can be checked against real results years from now.',
+    valuationGapPanel(valuationGap)
+      || empty('Not in the app’s tables', 'This stock has no screening row and no annual accounts on file under any exchange spelling, so there is nothing to read.')),
+    valuationGapSummary(valuationGap), { type: 'neutral' }));
 
   nodes.push(section('Dig deeper',
     'Fresh research pulled on demand from NSE filings and news. Each button fetches live data, so they run only when you ask.',

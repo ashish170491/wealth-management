@@ -38,6 +38,7 @@ public final class JobLabels {
             e("FundamentalsBackfillScheduler.backfillBatch", "Annual-accounts backfill", "NSE"),
             e("IpoCaptureScheduler.captureDaily", "IPO pipeline capture", "NSE, Kite"),
             e("MutualFundNavScheduler.pullDailyNav", "Mutual fund NAV pull", "AMFI"),
+            e("ValuationGapSnapshotScheduler.captureWeekdays", "Valuation-gap validation snapshot", "DB"),
             e("MacroIngestScheduler.dailyIngest", "Macro news read", "RSS, Kite"),
             e("MarketImpactNewsService.scheduledNewsCheck", "Headline capture", "RSS"),
             e("AnalystTargetScheduler.captureAndMeasure", "Analyst target capture + measurement", "Broker research feed, Kite"),

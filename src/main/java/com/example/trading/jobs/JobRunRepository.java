@@ -39,6 +39,10 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     @Query("select r.jobKey, max(r.startedAt) from JobRunEntity r where r.outcome = 'SUCCEEDED' group by r.jobKey")
     List<Object[]> lastSucceededPerJob();
 
+    /** When each job first ran, all time (retained rows only): the earliest a job can be judged from (B-184). */
+    @Query("select r.jobKey, min(r.startedAt) from JobRunEntity r group by r.jobKey")
+    List<Object[]> firstRunPerJob();
+
     Optional<JobRunEntity> findFirstByOrderByStartedAtDesc();
 
     /** The day before / after a given instant that has any run, for the timeline's arrows. */

@@ -680,6 +680,20 @@ macro:
     max-headlines: 120            # Per ingest. Bounds both the token bill and the wall clock.
     refuse-from: "14:00"          # Live-call guard: the 14:00 screening onwards is spoken for
 
+# ===== Valuation Gap & Implied Growth (SPEC 57) =====
+# What today's price would require of earnings, stated against the business's own record. A lens:
+# it forecasts nothing, recommends nothing and adds zero points to any score. The RULE constants
+# (hurdle rate, gates, reference multiples) are deliberately NOT here: they live in
+# ValuationGapRules, where a change fails a test and forces a version bump.
+valuation-gap:
+  # Writes the append-only method-validation snapshot at 12:35 MON-FRI (DB-only, no Kite token
+  # needed). On because with it off the evidence clock never starts. Off records a SKIPPED run.
+  snapshot-enabled: true
+  # The optional assumption challenger. Off by default and double-gated: it also needs
+  # spring.ai.model.chat to name a provider (it is none by default). It can only ask questions;
+  # nothing reads its output and a snapshot never stores it.
+  challenge-enabled: false
+
 # AI Service Configuration (provider-agnostic: openai, claude, or none)
 #
 # B-100: a live-looking OpenAI key used to sit here as the default of ${AI_API_KEY:...}, so it was

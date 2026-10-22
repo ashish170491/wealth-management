@@ -308,6 +308,31 @@ const LABELS = {
   REGULATORY_NBFC: 'Lending regulation',
   REGULATORY_SIN_GOODS: 'Tobacco and alcohol taxes',
   REGULATORY_PHARMA_USFDA: 'US drug regulation',
+
+  // Valuation gap (SPEC 57): every reason a reading is refused or a block withheld, character for
+  // character with ValuationReading.Reason. A refusal is a statement about the DATA, never about
+  // the business, which is why none of these reads as a judgement.
+  MEASURED: 'Read in full', PARTIAL: 'Read in part', UNAVAILABLE: 'Not read',
+  NEVER_SCREENED: 'Never screened',
+  UNSUPPORTED_SECTOR: 'Financial business',
+  UNCLASSIFIED: 'Sector not recorded',
+  STALE_PRICE: 'Price too old',
+  NO_PRICE_ON_FILE: 'No price on file',
+  INSUFFICIENT_HISTORY: 'Too few years of accounts',
+  BASIS_UNKNOWN: 'Reporting basis unknown',
+  STALE_LATEST_YEAR: 'Accounts not current',
+  BASIS_SWITCH: 'Reporting basis changed',
+  FIELD_MISSING: 'A figure is missing',
+  SHARE_COUNT_INCONSISTENT: 'Share count inconsistent',
+  UNEXPLAINED_SHARE_STEP: 'Unexplained share-count step',
+  AMBIGUOUS_SHARE_STEP: 'Ambiguous share-count step',
+  SHARE_BASIS_MISMATCH: 'Share basis differs from price',
+  LOSS_IN_RECORD: 'A loss year in the record',
+  EPS_CROSSCHECK_FAILED: 'Does not match reported quarters',
+  EPS_UNVERIFIABLE: 'Could not be checked against quarters',
+  HORIZON_TOO_SHORT: 'Too close to the reference year',
+  TREND_UNRELIABLE: 'Past trend too uncertain',
+  NO_SECTION_125: 'No reverse-DCF reading stored',
 };
 
 export function humanLabel(v) {

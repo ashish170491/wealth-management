@@ -68,6 +68,25 @@ public final class JobExpectation {
         return out;
     }
 
+    /**
+     * The first instant this job can fairly be judged from (B-184). {@code historyStart} is the first
+     * boot of the <i>app</i>, which says nothing about when a given job was added: a job introduced
+     * today was "up and not running" on every fire of the last fortnight and read PROBLEM until they
+     * aged out. A job exists from its first recorded run (a manual first run counts - it proves the
+     * code was there); a job that has never run exists from the boot now serving it, because that
+     * process is the only one known to carry it. Never earlier than {@code historyStart}.
+     *
+     * @param firstRunAt       when this job's earliest retained run started, or null if it has none
+     * @param currentBootStart when the running process started, or null if unknown
+     */
+    public static LocalDateTime judgedFrom(LocalDateTime historyStart, LocalDateTime firstRunAt,
+                                           LocalDateTime currentBootStart, Duration grace) {
+        if (historyStart == null) return null;
+        LocalDateTime candidate = firstRunAt != null ? firstRunAt.minus(grace) : currentBootStart;
+        if (candidate == null || candidate.isBefore(historyStart)) return historyStart;
+        return candidate;
+    }
+
     static Status statusOf(LocalDateTime fire, List<Boot> boots, List<RunSpan> runs, Duration grace) {
         for (RunSpan r : runs) {
             if (fire.equals(r.scheduledFor())) return Status.RAN;
